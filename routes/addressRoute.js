@@ -76,4 +76,12 @@ router.put("/enquiries/:id", enquiryController.updateEnquiry);
 router.delete("/enquiries/:id", enquiryController.deleteEnquiry);
 
 
+// Update orderStatus by ID
+router.put("/updateorders/:id", controller.updateOrderStatus);
+
+// Delete order by ID
+router.delete("/deleteorders/:id", controller.deleteOrder);
+
+
+
 module.exports = router;

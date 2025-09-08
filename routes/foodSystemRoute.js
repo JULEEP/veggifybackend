@@ -5,6 +5,8 @@ const upload = require("../utils/uploadMiddleware");
 const auth  = require("../utils/authMiddleware");
 
 router.post("/category", upload.single("image"), controller.createCategory);
+router.put("/category/:id", upload.single("image"), controller.updateCategory);
+router.delete("/category/:id", controller.deleteCategory);
 router.get("/category", controller.getAllCategories);
 
 

@@ -28,6 +28,66 @@ exports.createCategory = async (req, res) => {
   }
 };
 
+
+exports.updateCategory = async (req, res) => {
+  try {
+    const { categoryName } = req.body;
+    const file = req.file; // optional file for update
+    const categoryId = req.params.id;
+
+    // Find existing category
+    const category = await Category.findById(categoryId);
+    if (!category) {
+      return res.status(404).json({ success: false, message: "Category not found" });
+    }
+
+    // Update categoryName if provided
+    if (categoryName) category.categoryName = categoryName;
+
+    if (file) {
+      // Upload new image to Cloudinary
+      const uploaded = await cloudinary.uploader.upload(file.path, {
+        folder: "categories",
+      });
+
+      // Delete the uploaded file locally
+      fs.unlinkSync(file.path);
+
+      // Optionally: delete old image from cloudinary here if you saved the public_id (not covered in create)
+      // Update imageUrl
+      category.imageUrl = uploaded.secure_url;
+    }
+
+    await category.save();
+
+    res.status(200).json({ success: true, data: category });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+
+
+exports.deleteCategory = async (req, res) => {
+  try {
+    const categoryId = req.params.id;
+
+    // Find and delete category in one step
+    const category = await Category.findByIdAndDelete(categoryId);
+
+    if (!category) {
+      return res.status(404).json({ success: false, message: "Category not found" });
+    }
+
+    // If you have stored cloudinary public_id, delete image from cloudinary here
+    // await cloudinary.uploader.destroy(category.cloudinary_public_id);
+
+    res.status(200).json({ success: true, message: "Category deleted successfully" });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 exports.getAllCategories = async (req, res) => {
   try {
     const categories = await Category.find();
@@ -137,23 +197,57 @@ exports.deleteVegFood = async (req, res) => {
 
 exports.createRestaurant = async (req, res) => {
   try {
-    const { restaurantName, description, locationName, location, rating, startingPrice } = req.body;
+    const {
+      restaurantName,
+      description,
+      locationName,
+      location,
+      rating,
+      startingPrice,
+      email,
+      mobile
+    } = req.body;
 
-    if (!restaurantName || !location || !locationName || !startingPrice || !req.file) {
+    // ✅ Basic validation
+    if (
+      !restaurantName ||
+      !location ||
+      !locationName ||
+      !startingPrice ||
+      !req.file ||
+      !email ||
+      !mobile
+    ) {
       return res.status(400).json({
         success: false,
-        message: "restaurantName, locationName, location, startingPrice, and image are required"
+        message: "restaurantName, locationName, location, startingPrice, email, mobile, and image are required"
+      });
+    }
+
+    // ✅ Email format check
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid email format"
+      });
+    }
+
+    // ✅ Mobile number format check (simple 10-digit)
+    const mobileRegex = /^[0-9]{10}$/;
+    if (!mobileRegex.test(mobile)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid mobile number (must be 10 digits)"
       });
     }
 
     // ✅ Parse and validate location string
     let parsedLocation;
     try {
-      parsedLocation = JSON.parse(location); // Expecting { latitude: 17.6656, longitude: 78.2358 }
+      parsedLocation = JSON.parse(location); // Expected { latitude, longitude }
       if (
-        !parsedLocation.latitude || 
-        !parsedLocation.longitude || 
-        typeof parsedLocation.latitude !== "number" || 
+        typeof parsedLocation.latitude !== "number" ||
         typeof parsedLocation.longitude !== "number"
       ) {
         return res.status(400).json({
@@ -175,13 +269,15 @@ exports.createRestaurant = async (req, res) => {
       crop: "scale"
     });
 
-    // ✅ Create restaurant with proper GeoJSON location
+    // ✅ Create restaurant with GeoJSON & added fields
     const restaurant = await Restaurant.create({
       restaurantName,
       description,
       locationName,
       rating,
       startingPrice,
+      email,
+      mobile,
       location: {
         type: "Point",
         coordinates: [parsedLocation.longitude, parsedLocation.latitude]
@@ -192,7 +288,7 @@ exports.createRestaurant = async (req, res) => {
       }
     });
 
-    // ✅ Remove local image file after upload
+    // ✅ Remove local image
     if (req.file && fs.existsSync(req.file.path)) {
       fs.unlinkSync(req.file.path);
     }
@@ -214,6 +310,7 @@ exports.createRestaurant = async (req, res) => {
     });
   }
 };
+
 
 // @desc    Get all restaurants
 // @route   GET /api/restaurants

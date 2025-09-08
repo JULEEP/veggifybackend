@@ -574,13 +574,88 @@ exports.createOrder = async (req, res) => {
 // -------------------------
 
 exports.getAllOrders = async (req, res) => {
-    try {
-        const orders = await Order.find().populate("restaurantId", "restaurantName locationName");
-        return res.status(200).json({ success: true, data: orders });
-    } catch (error) {
-        console.error("getAllOrders error:", error);
-        return res.status(500).json({ success: false, message: "Server error", error: error.message });
+  try {
+    const orders = await Order.find()
+      .populate("restaurantId", "restaurantName locationName")
+      .populate("userId") // all user fields
+      .populate({
+        path: "cartId",
+        populate: [
+          { path: "userId", select: "name email phone" },  // user inside cart
+          { path: "restaurantId", select: "restaurantName locationName" }, // restaurant inside cart
+          {
+            path: "products.restaurantProductId",
+            select: "name price image",  // product details inside cart products array
+          },
+          { path: "appliedCouponId", select: "code discountPercentage" } // coupon details if needed
+        ],
+      });
+
+    return res.status(200).json({ success: true, data: orders });
+  } catch (error) {
+    console.error("getAllOrders error:", error);
+    return res.status(500).json({ success: false, message: "Server error", error: error.message });
+  }
+};
+
+
+
+// Update only orderStatus by ID
+exports.updateOrderStatus = async (req, res) => {
+  const { id } = req.params;
+  const { orderStatus } = req.body;  // extract orderStatus from request body
+
+  if (!orderStatus) {
+    return res.status(400).json({ success: false, message: "orderStatus is required" });
+  }
+
+  try {
+    const updatedOrder = await Order.findByIdAndUpdate(
+      id,
+      { orderStatus },  // update only orderStatus field
+      { new: true, runValidators: true }
+    )
+      .populate("restaurantId", "restaurantName locationName")
+      .populate("userId")
+      .populate({
+        path: "cartId",
+        populate: [
+          { path: "userId", select: "name email phone" },
+          { path: "restaurantId", select: "restaurantName locationName" },
+          { path: "products.restaurantProductId", select: "name price image" },
+          { path: "appliedCouponId", select: "code discountPercentage" },
+        ],
+      });
+
+    if (!updatedOrder) {
+      return res.status(404).json({ success: false, message: "Order not found" });
     }
+
+    res.status(200).json({ success: true, data: updatedOrder });
+  } catch (error) {
+    console.error("updateOrderStatus error:", error);
+    res.status(500).json({ success: false, message: "Server error", error: error.message });
+  }
+};
+
+
+
+// Delete order by ID
+exports.deleteOrder = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const deletedOrder = await Order.findByIdAndDelete(id);
+
+    if (!deletedOrder) {
+      return res.status(404).json({ success: false, message: "Order not found" });
+    }
+
+    res.status(200).json({ success: true, message: "Order deleted successfully" });
+  } catch (error) {
+    console.error("deleteOrder error:", error);
+    res.status(500).json({ success: false, message: "Server error", error: error.message });
+  }
 };
 
 // -------------------------

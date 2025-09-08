@@ -33,5 +33,8 @@ router.delete('/coupon/:couponId', adminController.deleteCoupon);
 
 // Toggle active/inactive
 router.patch('/coupon/:couponId/toggle', adminController.toggleCouponStatus);
+router.get('/users',adminController.getAllUsers);
+router.delete('/deleteuser/:id', adminController.deleteUser);
+
 
 module.exports = router;

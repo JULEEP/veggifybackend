@@ -2,6 +2,7 @@ const bcrypt = require('bcrypt');
 const Admin = require('../models/adminModel');
 const mongoose = require('mongoose');
 const Coupon = require('../models/couponModel');
+const User = require('../models/userModel');
 const { generateTempToken, verifyTempToken, generateAuthToken, generateCouponToken, couponAuthMiddleware } = require('../utils/adminJWT');
 
 // 1. Send OTP (hardcoded for now as 1234)
@@ -79,27 +80,32 @@ exports.setPassword = async (req, res) => {
 
 
 
-// 4. Login with password
+// 4. Login with phone number only (no password)
 exports.login = async (req, res) => {
     try {
-        const { phoneNumber, password } = req.body;
-        if (!phoneNumber || !password)
-            return res.status(400).json({ message: 'Phone number and password required' });
+        const { phoneNumber } = req.body;
+        if (!phoneNumber)
+            return res.status(400).json({ message: 'Phone number is required' });
 
         const admin = await Admin.findOne({ phoneNumber });
-        if (!admin || !admin.password)
+        if (!admin)
             return res.status(404).json({ message: 'Admin not registered' });
 
-        const isMatch = await bcrypt.compare(password, admin.password);
-        if (!isMatch) return res.status(400).json({ message: 'Invalid password' });
+        // No password check here anymore
 
         const token = generateAuthToken({ id: admin._id, phoneNumber: admin.phoneNumber });
-        return res.status(200).json({ message: 'Login successful', token });
+        return res.status(200).json({ 
+            message: 'Login successful', 
+            token, 
+            adminId: admin._id 
+        });
     } catch (err) {
         console.error('Login Error:', err);
         return res.status(500).json({ message: 'Server error', error: err.message });
     }
 };
+
+
 
 // Generate coupon token (POST /api/admin/token)
 exports.getCouponToken = async (req, res) => {
@@ -244,3 +250,57 @@ exports.toggleCouponStatus = async (req, res) => {
         return res.status(500).json({ success: false, message: "Server error", error: err.message });
     }
 };
+
+
+
+exports.getAllUsers = async (req, res) => {
+  try {
+    // Optional: pagination params
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    // Optional: add filters from query params here if needed
+    const filters = {}; // For example, { isVerified: true }
+
+    const totalUsers = await User.countDocuments(filters);
+    const users = await User.find(filters)
+      .skip(skip)
+      .limit(limit)
+      .select('-password -otp')  // exclude sensitive fields
+      .lean();
+
+    res.json({
+      success: true,
+      total: totalUsers,
+      page,
+      limit,
+      users,
+    });
+  } catch (err) {
+    console.error('Error fetching users:', err);
+    res.status(500).json({ success: false, message: 'Server error', error: err.message });
+  }
+};
+
+
+exports.deleteUser = async (req, res) => {
+  try {
+    const userId = req.params.id;
+
+    // Check if user exists
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    // Delete user
+    await User.findByIdAndDelete(userId);
+
+    res.json({ success: true, message: 'User deleted successfully' });
+  } catch (err) {
+    console.error('Error deleting user:', err);
+    res.status(500).json({ success: false, message: 'Server error', error: err.message });
+  }
+};
+
