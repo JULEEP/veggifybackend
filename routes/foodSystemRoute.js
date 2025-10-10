@@ -38,6 +38,8 @@ router.get('/top-nearby/:userId', controller.getTopRatedNearbyRestaurants); // â
 
 // GET /api/restaurants/nearby/:userId - Get nearby restaurants
 router.get('/nearby/:userId',controller.getNearbyRestaurants);
+router.get("/resturentbycat/:userId", controller.getNearbyRestaurantsByCategoryV2);
+
 
 
 module.exports = router;

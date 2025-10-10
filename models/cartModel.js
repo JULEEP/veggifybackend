@@ -4,27 +4,22 @@ const cartSchema = new mongoose.Schema({
   userId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "User",
-    required: true,
   },
   restaurantId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Restaurant",
-    required: true, // One cart tied to one restaurant
   },
   products: [
     {
       restaurantProductId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: "RestaurantProduct",
-        required: true,
       },
       recommendedId: {
         type: mongoose.Schema.Types.ObjectId,
-        required: true,
       },
       quantity: {
         type: Number,
-        required: true,
         min: 1,
       },
 

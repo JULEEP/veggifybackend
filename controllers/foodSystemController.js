@@ -427,44 +427,58 @@ exports.deleteRestaurant = async (req, res) => {
 // @access  Public
 // @query   [limit] Optional, number of restaurants to return (default: 5)
 
- exports.getTopRatedNearbyRestaurants = async (req, res) => {
+// ✅ Get Top Rated Restaurants Nearby (from already nearby)
+exports.getTopRatedNearbyRestaurants = async (req, res) => {
   try {
     const { userId } = req.params;
+    const { maxDistance = 5000 } = req.query; // Default 5km
 
-    // Step 1: Find user by ID
-    const user = await User.findById(userId);
-
-    if (!user || !user.location || !Array.isArray(user.location.coordinates)) {
-      return res.status(404).json({ success: false, message: 'User or location not found' });
+    // 1. Validate userId
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ success: false, message: "Invalid userId" });
     }
 
-    const userCoordinates = user.location.coordinates;
+    // 2. Get user with location
+    const user = await User.findById(userId);
+    if (!user || !user.location || !Array.isArray(user.location.coordinates)) {
+      return res.status(404).json({ success: false, message: "User or location not found" });
+    }
 
-    // Step 2: Find nearby restaurants within 5km with rating >= 4
+    const userCoords = user.location.coordinates;
+
+    // 3. First get all nearby restaurants (within distance)
     const nearbyRestaurants = await Restaurant.find({
       location: {
         $near: {
           $geometry: {
-            type: 'Point',
-            coordinates: userCoordinates
-          },          $maxDistance: 50000 // meters = 5km
-        }
+            type: "Point",
+            coordinates: userCoords,
+          },
+          $maxDistance: parseInt(maxDistance),
+        },
       },
-      rating: { $gte: 4} // ✅ Fix applied here
-    });
+    }).select("-__v");
+
+    // 4. From those nearby, filter top-rated (rating >= 4) and sort
+    const topRated = nearbyRestaurants
+      .filter((r) => r.rating >= 4)
+      .sort((a, b) => b.rating - a.rating); // Descending order
 
     res.status(200).json({
       success: true,
-      message: 'Nearby top-rated restaurants found',
-      count: nearbyRestaurants.length,
-      data: nearbyRestaurants
+      message: "Top-rated nearby restaurants",
+      count: topRated.length,
+      data: topRated,
     });
   } catch (error) {
-    console.error('Error fetching nearby restaurants:', error);
-    res.status(500).json({ success: false, message: 'Server error', error: error.message });
+    console.error("Error fetching top-rated nearby restaurants:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
   }
 };
-
 
 
 //**
@@ -478,56 +492,49 @@ exports.deleteRestaurant = async (req, res) => {
 // Get nearby restaurants by user ID
 
 
+// Get Nearby Restaurants
 exports.getNearbyRestaurants = async (req, res) => {
-      try {
+  try {
     const { userId } = req.params;
-    const { maxDistance = 50000 } = req.query; // Default 5km, can be overridden in query params
+    const { maxDistance = 5000 } = req.query; // Default 5km
 
-    // 1. Get user's location
-    const user = await User.findById(userId);
-    if (!user || !user.location) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found or location not set"
-      });
+    // 1. Validate userId
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ success: false, message: "Invalid userId" });
     }
 
-    // 2. Query nearby restaurants using geospatial index
+    // 2. Find user and check location
+    const user = await User.findById(userId);
+    if (!user || !user.location || !Array.isArray(user.location.coordinates)) {
+      return res.status(404).json({ success: false, message: "User not found or location missing" });
+    }
+
+    const userCoords = user.location.coordinates;
+
+    // 3. Find restaurants near the user
     const restaurants = await Restaurant.find({
       location: {
         $near: {
           $geometry: {
             type: "Point",
-            coordinates: user.location.coordinates
+            coordinates: userCoords,
           },
-          $maxDistance: parseInt(maxDistance) // Distance in meters
-        }
-      }
-    }).select('-__v'); // Exclude version key
-
-    // 3. Calculate distances for each restaurant (optional)
-    const restaurantsWithDistance = restaurants.map(restaurant => {
-      const distance = getDistance(
-        user.location.coordinates,
-        restaurant.location.coordinates
-      );
-      return {
-        ...restaurant.toObject(),
-        distance: (distance / 1000).toFixed(2) + ' km' // Convert to km
-      };
-    });
+          $maxDistance: parseInt(maxDistance), // meters
+        },
+      },
+    }).select("-__v"); // Exclude unnecessary fields
 
     res.status(200).json({
       success: true,
       count: restaurants.length,
-      data: restaurantsWithDistance
+      data: restaurants,
     });
-
-  } catch (err) {
+  } catch (error) {
+    console.error("Error fetching nearby restaurants:", error);
     res.status(500).json({
       success: false,
       message: "Server error",
-      error: err.message
+      error: error.message,
     });
   }
 };
@@ -550,3 +557,58 @@ function getDistance(coord1, coord2) {
 
   return R * c; // Distance in meters
 }
+
+
+
+// ✅ V2: Get Nearby Restaurants by Category (Optimized)
+exports.getNearbyRestaurantsByCategoryV2 = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { categoryName, maxDistance = 5000 } = req.query;
+
+    // 🔹 Validation
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ success: false, message: "Invalid userId" });
+    }
+
+    if (!categoryName || categoryName.trim() === "") {
+      return res.status(400).json({ success: false, message: "Category name is required" });
+    }
+
+    // 🔹 Fetch user and location
+    const user = await User.findById(userId);
+    if (!user || !user.location?.coordinates?.length) {
+      return res.status(404).json({ success: false, message: "User or location not found" });
+    }
+
+    const userCoords = user.location.coordinates;
+
+    // 🔹 Query: Geo + CategoryName (corrected)
+    const restaurants = await Restaurant.find({
+      location: {
+        $near: {
+          $geometry: {
+            type: "Point",
+            coordinates: userCoords,
+          },
+          $maxDistance: parseInt(maxDistance),
+        },
+      },
+      categoryName: { $regex: new RegExp(`^${categoryName}$`, "i") }, // case-insensitive exact match
+    }).select("-__v");
+
+    res.status(200).json({
+      success: true,
+      message: `Nearby restaurants in '${categoryName}' category`,
+      count: restaurants.length,
+      data: restaurants,
+    });
+  } catch (error) {
+    console.error("Error in getNearbyRestaurantsByCategoryV2:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
+  }
+};

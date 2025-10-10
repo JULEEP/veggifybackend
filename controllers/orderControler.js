@@ -5,7 +5,7 @@ const User = require("../models/userModel");
 const Cart = require("../models/cartModel");
 const Restaurant = require("../models/restaurantModel");
 const cloudinary = require('../config/cloudinary');
-const DeliveryBoy = require("../models/deliveryBoyModel");
+const {DeliveryBoy} = require("../models/deliveryBoyModel");
 const mongoose = require("mongoose");
 const fs = require("fs");
 
@@ -453,55 +453,113 @@ exports.removeFromWishlist = async (req, res) => {
 // Create Order
 exports.createOrder = async (req, res) => {
    try {
-        const { userId, cartId, restaurantId, paymentMethod, paymentStatus } = req.body;
+        const { userId, paymentMethod, addressId } = req.body;
 
+        // Basic validations
         if (!mongoose.Types.ObjectId.isValid(userId)) 
             return res.status(400).json({ success: false, message: "Valid userId is required." });
-        if (!mongoose.Types.ObjectId.isValid(cartId)) 
-            return res.status(400).json({ success: false, message: "Valid cartId is required." });
-        if (!mongoose.Types.ObjectId.isValid(restaurantId)) 
-            return res.status(400).json({ success: false, message: "Valid restaurantId is required." });
+        if (!mongoose.Types.ObjectId.isValid(addressId)) 
+            return res.status(400).json({ success: false, message: "Valid addressId is required." });
         if (!["COD", "Online"].includes(paymentMethod)) 
             return res.status(400).json({ success: false, message: "Invalid payment method." });
 
-        const cart = await Cart.findById(cartId);
-        if (!cart) return res.status(404).json({ success: false, message: "Cart not found." });
-        if (cart.userId.toString() !== userId) 
-            return res.status(400).json({ success: false, message: "Cart does not belong to user." });
+        // Get cart by userId (instead of cartId)
+        const cart = await Cart.findOne({ userId })
+            .populate('products.restaurantProductId');
 
-        const restaurant = await Restaurant.findById(restaurantId, "locationName restaurantName location");
-        if (!restaurant) return res.status(404).json({ success: false, message: "Restaurant not found." });
-
-        const user = await User.findById(userId, "address location");
-        if (!user || !user.address || user.address.length === 0 || !user.location || !user.location.coordinates) {
-            return res.status(400).json({ success: false, message: "User location or address not found." });
+        if (!cart) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Cart not found for this user." 
+            });
         }
 
-        // Coordinates
+        // Check if cart has products
+        if (!cart.products || cart.products.length === 0) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Cart is empty. Add products to create order." 
+            });
+        }
+
+        // Get user with specific address
+        const user = await User.findOne(
+            { 
+                _id: userId,
+                "address._id": addressId 
+            },
+            {
+                name: 1, 
+                email: 1,
+                location: 1,
+                address: { 
+                    $elemMatch: { _id: addressId } 
+                }
+            }
+        );
+
+        if (!user) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "User or address not found." 
+            });
+        }
+
+        const selectedAddress = user.address[0];
+        if (!selectedAddress || !user.location || !user.location.coordinates) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "User location or selected address not found." 
+            });
+        }
+
+        // Get restaurantId from cart
+        const restaurantId = cart.restaurantId;
+        if (!restaurantId) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Restaurant not found in cart." 
+            });
+        }
+
+        // Get restaurant details
+        const restaurant = await Restaurant.findById(restaurantId, "locationName restaurantName location");
+        if (!restaurant) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Restaurant not found." 
+            });
+        }
+
+        // Calculate distance using user's location coordinates
         const [userLon, userLat] = user.location.coordinates;
         const [restLon, restLat] = restaurant.location.coordinates;
-
-        // Distance in km
         const distanceKm = parseFloat(calculateDistanceKm(userLat, userLon, restLat, restLon).toFixed(3));
 
-        // Recalculate products from cart
+        // Process products from cart
+        const cleanProducts = [];
         let subTotal = 0;
         let totalItems = 0;
-        const cleanProducts = [];
 
         for (const prod of cart.products) {
-            const restaurantProduct = await RestaurantProduct.findById(prod.restaurantProductId);
-            const recommendedItem = restaurantProduct?.recommended.id(prod.recommendedId);
+            const restaurantProduct = prod.restaurantProductId;
+            const recommendedItem = restaurantProduct?.recommended?.id(prod.recommendedId);
+            
             if (!recommendedItem) continue;
 
             let unitPrice = recommendedItem.price || 0;
             const addOnClean = {};
 
+            // Handle addons and variations
             if (recommendedItem.addons && prod.addOn) {
+                // Half variation
                 if (recommendedItem.addons.variation?.type.includes("Half") && prod.addOn.variation === "Half") {
                     addOnClean.variation = "Half";
-                    unitPrice = recommendedItem.calculatedPrice?.half || Math.round(unitPrice * (recommendedItem.vendorHalfPercentage / 100));
+                    unitPrice = recommendedItem.calculatedPrice?.half || 
+                               Math.round(unitPrice * (recommendedItem.vendorHalfPercentage / 100));
                 }
+                
+                // Plates
                 if (recommendedItem.addons.plates && prod.addOn.plateitems > 0) {
                     addOnClean.plateitems = prod.addOn.plateitems;
                     const plateCost = prod.addOn.plateitems * (recommendedItem.vendor_Platecost || 0);
@@ -509,11 +567,12 @@ exports.createOrder = async (req, res) => {
                 }
             }
 
-            subTotal += unitPrice * prod.quantity;
+            const productTotal = unitPrice * prod.quantity;
+            subTotal += productTotal;
             totalItems += prod.quantity;
 
             cleanProducts.push({
-                restaurantProductId: prod.restaurantProductId,
+                restaurantProductId: prod.restaurantProductId._id,
                 recommendedId: prod.recommendedId,
                 quantity: prod.quantity,
                 name: recommendedItem.name,
@@ -523,25 +582,27 @@ exports.createOrder = async (req, res) => {
             });
         }
 
-        // Delivery charge based on distance
-        let deliveryCharge = distanceKm <= 5 ? 20 : 20 + 2 * Math.ceil(distanceKm - 5);
-        if (totalItems === 0) deliveryCharge = 0;
+        // Calculate delivery charge
+      let deliveryCharge = 0; // Delivery is free for now
+
 
         // Apply coupon from cart
-        let couponDiscount = cart.couponDiscount || 0;
-        let appliedCoupon = cart.appliedCoupon || null;
-
+        const couponDiscount = cart.couponDiscount || 0;
+        const appliedCoupon = cart.appliedCoupon || null;
         const totalPayable = subTotal + deliveryCharge - couponDiscount;
 
-        // Prepare order
-        let orderData = {
+        // Auto-set payment status based on payment method
+        const paymentStatus = paymentMethod === "COD" ? "Pending" : "Paid";
+
+        // Create order data
+        const orderData = {
             userId,
-            cartId,
+            cartId: cart._id, // Use cart's _id
             restaurantId,
             restaurantLocation: restaurant.locationName || "",
-            deliveryAddress: user.address[0],
+            deliveryAddress: selectedAddress, // Full address object
             paymentMethod,
-            paymentStatus: paymentStatus || "Pending",
+            paymentStatus,
             orderStatus: "Pending",
             totalItems,
             subTotal,
@@ -553,20 +614,39 @@ exports.createOrder = async (req, res) => {
             distanceKm
         };
 
-        let order = await Order.create(orderData);
-        order = await Order.findById(order._id).populate("restaurantId", "restaurantName locationName");
+        // Create order
+        const order = await Order.create(orderData);
+        const populatedOrder = await Order.findById(order._id)
+            .populate("restaurantId", "restaurantName locationName")
+            .populate("userId", "name email");
 
-        const message = paymentStatus === "Paid" ? "Payment is successful" : "Order created successfully";
+        // Optional: Clear cart after successful order creation
+        // await Cart.findOneAndUpdate(
+        //     { userId }, 
+        //     { 
+        //         products: [], 
+        //         subTotal: 0, 
+        //         deliveryCharge: 0, 
+        //         couponDiscount: 0, 
+        //         finalAmount: 0, 
+        //         totalItems: 0,
+        //         appliedCoupon: null 
+        //     }
+        // );
 
         return res.status(201).json({
             success: true,
-            message,
-            data: order
+            message: paymentStatus === "Paid" ? "Payment successful and order created" : "Order created successfully",
+            data: populatedOrder
         });
 
     } catch (error) {
         console.error("createOrder error:", error);
-        return res.status(500).json({ success: false, message: "Server error", error: error.message });
+        return res.status(500).json({ 
+            success: false, 
+            message: "Server error", 
+            error: error.message 
+        });
     }
 };
 // -------------------------
@@ -700,6 +780,93 @@ exports.getOrdersByUserId = async (req, res) => {
     }
 };
 
+
+
+
+
+exports.getAcceptedOrdersByUserId = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    // Validate userId
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid userId is required."
+      });
+    }
+
+    // Fetch all accepted orders for the user
+    const acceptedOrders = await Order.find({
+      userId,
+      orderStatus: "Accepted"
+    })
+      .populate("restaurantId", "restaurantName locationName")
+      .populate("deliveryBoyId", "fullName mobileNumber");
+
+    const result = acceptedOrders.map(order => {
+      const pickupTime = order.acceptedAt ? new Date(order.acceptedAt) : null;
+
+      // Estimate delivery time (e.g., +30 mins)
+      const deliveryTime = pickupTime ? new Date(pickupTime.getTime() + 30 * 60000) : null;
+
+      const pickupTimeStr = pickupTime
+        ? pickupTime.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true })
+        : "";
+
+      const deliveryTimeStr = deliveryTime
+        ? deliveryTime.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true })
+        : "";
+
+      return {
+        message: "Vendor Accepted Your Order From",
+        restaurantName: order.restaurantId?.restaurantName || "Unknown Restaurant",
+        restaurantLocation: order.restaurantId?.locationName || "Unknown Location",
+
+        orderDetails: {
+          totalItems: order.totalItems || 0,
+          subTotal: `₹${order.subTotal.toFixed(2)}`,
+          deliveryCharge: `₹${order.deliveryCharge.toFixed(2)}`,
+          totalPayable: `₹${order.totalPayable.toFixed(2)}`
+        },
+
+        deliveryFlow: {
+          restaurant: {
+            name: order.restaurantId?.restaurantName || "Restaurant",
+            time: pickupTimeStr
+          },
+          user: {
+            address: order.deliveryAddress?.street || "Your Address",
+            time: deliveryTimeStr
+          }
+        },
+
+        riderDetails:
+          order.deliveryStatus === "Picked"
+            ? {
+                name: order.deliveryBoyId?.fullName || "Delivery Boy",
+                contact: order.deliveryBoyId?.mobileNumber || "N/A"
+              }
+            : null
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: result
+    });
+  } catch (error) {
+    console.error("getAcceptedOrdersByUserId error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message
+    });
+  }
+};
+
+
+
 // -------------------------
 // UPDATE ORDER BY USER ID
 // -------------------------
@@ -778,14 +945,91 @@ exports.deleteOrderByUserId = async (req, res) => {
     }
 };
 // Vendor accept order
+const haversineDistance = (coords1, coords2) => {
+  const toRad = x => (x * Math.PI) / 180;
+  const [lon1, lat1] = coords1;
+  const [lon2, lat2] = coords2;
+
+  const R = 6371; // Earth radius in km
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+    Math.sin(dLon / 2) ** 2;
+
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+};
+
 exports.vendorAcceptOrder = async (req, res) => {
   try {
-    const updated = await Order.findByIdAndUpdate(req.params.orderId, { status: "confirmed" }, { new: true });
-    if (!updated) return res.status(404).json({ success: false, message: "Order not found" });
+    const orderId = req.params.orderId;
 
-    res.status(200).json({ success: true, message: "Order accepted by vendor", data: updated });
+    // Step 1: Find and update order status to "Accepted"
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Order not found" });
+    }
+
+    // Step 2: Get user's delivery location
+    const user = await User.findById(order.userId);
+    if (!user || !user.location || !user.location.coordinates) {
+      return res.status(400).json({ success: false, message: "User location not available" });
+    }
+
+    const userCoords = user.location.coordinates;
+
+    // Step 3: Find active delivery boys within 10 km of user
+    const nearbyDeliveryBoys = await DeliveryBoy.find({
+      isActive: true,
+      location: {
+        $nearSphere: {
+          $geometry: {
+            type: "Point",
+            coordinates: userCoords,
+          },
+          $maxDistance: 10000 // 10 km in meters
+        }
+      }
+    });
+
+    if (!nearbyDeliveryBoys.length) {
+      return res.status(404).json({ success: false, message: "No delivery boy found within 10 km" });
+    }
+
+    const assignedDeliveryBoy = nearbyDeliveryBoys[0];
+
+    // Step 4: Calculate pickup and drop distances
+    const restaurantCoords = order.restaurantLocation?.coordinates || [0, 0];
+    const pickupDistance = haversineDistance(assignedDeliveryBoy.location.coordinates, restaurantCoords);
+    const dropDistance = haversineDistance(restaurantCoords, userCoords);
+    const totalDistance = pickupDistance + dropDistance;
+
+    // Step 5: Update order with assignment and distances
+    order.orderStatus = "Accepted";
+    order.deliveryBoyId = assignedDeliveryBoy._id;
+    order.deliveryStatus = "Assigned";
+    order.acceptedAt = new Date();
+    order.distanceKm = parseFloat(totalDistance.toFixed(2)); // optional rounding
+
+    await order.save();
+
+    // Step 6: Respond to client
+    res.status(200).json({
+      success: true,
+      message: "Order accepted and delivery boy assigned",
+      order,
+      deliveryBoy: assignedDeliveryBoy
+    });
+
   } catch (err) {
-    res.status(500).json({ success: false, message: "Error confirming order", error: err.message });
+    console.error("Error accepting order:", err);
+    res.status(500).json({
+      success: false,
+      message: "Error accepting order",
+      error: err.message
+    });
   }
 };
 

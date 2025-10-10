@@ -25,14 +25,15 @@ router.delete('/wishlist/:userId/:productId', controller.removeFromWishlist);
 
 
 // ---------- ORDER ROUTES ----------
-router.post('/order', controller.createOrder);
+router.post('/createorder', controller.createOrder);
 router.get('/orders', controller.getAllOrders);
-router.get('/orders/user/:userId', controller.getOrdersByUserId);
+router.get('/userorders/:userId', controller.getOrdersByUserId);
+router.get("/acceptedorders/:userId", controller.getAcceptedOrdersByUserId);
 router.put('/orders/:orderId', controller.updateOrderByUserId);
 router.delete('/orders/user/:userId/:orderId', controller.deleteOrderByUserId);
 
 // Vendor accepts order
-router.put('/order/:orderId/accept', controller.vendorAcceptOrder);
+router.put('/acceptorder/:orderId', controller.vendorAcceptOrder);
 
 // Assign delivery partner
 router.put('/order/:orderId/assign-delivery', controller.assignDeliveryAndTrack);

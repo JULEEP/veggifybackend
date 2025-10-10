@@ -18,4 +18,13 @@ router.delete('/cart/:userId', cartController.deleteCartByUserId);
 
 // Delete cart by cart ID
 router.delete('/cart/:id', cartController.deleteCartById);
+// routes/cartRoutes.js
+router.put("/update-quantity/:userId", cartController.updateCartItemQuantity);
+router.delete('/deletecartproduct/:userId/:productId/:recommendedId', cartController.deleteProductFromCart);
+
+
+
+
+
+
 module.exports = router;

@@ -215,47 +215,41 @@ exports.getAllCarts = async (req, res) => {
 
 // Get cart by user ID
 exports.getCartByUserId = async (req, res) => {
-    try {
-        const { userId } = req.params;
+  try {
+    const { userId } = req.params;
 
-        if (!mongoose.Types.ObjectId.isValid(userId)) {
-            return res.status(400).json({
-                success: false,
-                message: "Invalid user ID"
-            });
-        }
-
-        const cart = await Cart.findOne({ userId })
-            .populate('userId', 'name email')
-            .populate({
-                path: 'products.restaurantProductId',
-                populate: {
-                    path: 'recommended',
-                    model: 'RestaurantProduct'
-                }
-            });
-
-        if (!cart) {
-            return res.status(404).json({
-                success: false,
-                message: "Cart not found for this user"
-            });
-        }
-
-        return res.status(200).json({
-            success: true,
-            data: cart
-        });
-    } catch (err) {
-        console.error("Get Cart By User Error:", err);
-        return res.status(500).json({
-            success: false,
-            message: "Server error",
-            error: err.message
-        });
+    // Validate userId
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid user ID"
+      });
     }
-};
 
+    // Just fetch the cart without any population
+    const cart = await Cart.findOne({ userId });
+
+    if (!cart) {
+      return res.status(404).json({
+        success: false,
+        message: "Cart not found for this user"
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: cart
+    });
+
+  } catch (err) {
+    console.error("Get Cart By User Error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err.message
+    });
+  }
+};
 
 
 
@@ -329,5 +323,176 @@ exports.deleteCartById = async (req, res) => {
             message: "Server error",
             error: err.message
         });
+    }
+};
+
+
+
+
+exports.updateCartItemQuantity = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { restaurantProductId, recommendedId, action } = req.body;
+
+    if (!userId || !mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ success: false, message: "Invalid userId." });
+    }
+
+    if (
+      !restaurantProductId || 
+      !mongoose.Types.ObjectId.isValid(restaurantProductId) || 
+      !recommendedId || 
+      !mongoose.Types.ObjectId.isValid(recommendedId)
+    ) {
+      return res.status(400).json({ success: false, message: "Invalid product IDs." });
+    }
+
+    if (!["inc", "dec"].includes(action)) {
+      return res.status(400).json({ success: false, message: "Action must be 'inc' or 'dec'." });
+    }
+
+    const cart = await Cart.findOne({ userId });
+    if (!cart) {
+      return res.status(404).json({ success: false, message: "Cart not found." });
+    }
+
+    const index = cart.products.findIndex(
+      (p) =>
+        p.restaurantProductId.toString() === restaurantProductId &&
+        p.recommendedId.toString() === recommendedId
+    );
+
+    if (index === -1) {
+      return res.status(404).json({ success: false, message: "Product not found in cart." });
+    }
+
+    // Update quantity
+    if (action === "inc") {
+      cart.products[index].quantity += 1;
+    } else if (action === "dec") {
+      cart.products[index].quantity -= 1;
+      if (cart.products[index].quantity <= 0) {
+        cart.products.splice(index, 1); // Remove item if quantity becomes 0
+      }
+    }
+
+    // Recalculate totals
+    let subTotal = 0;
+    let totalItems = 0;
+    for (const item of cart.products) {
+      subTotal += (item.basePrice * item.quantity) + (item.platePrice || 0);
+      totalItems += item.quantity;
+    }
+
+    cart.totalItems = totalItems;
+    cart.subTotal = subTotal;
+
+    // Recalculate delivery charge
+    cart.deliveryCharge = totalItems === 0 ? 0 : 20; // Or your distance logic
+    cart.finalAmount = cart.subTotal + cart.deliveryCharge - cart.couponDiscount;
+
+    await cart.save();
+
+    res.status(200).json({
+      success: true,
+      message: "Cart updated successfully.",
+      cart,
+    });
+  } catch (error) {
+    console.error("Error updating cart quantity:", error);
+    res.status(500).json({ success: false, message: "Server error", error: error.message });
+  }
+};
+
+
+
+
+
+// Delete product from cart
+exports.deleteProductFromCart = async (req, res) => {
+    try {
+        const { userId, productId, recommendedId } = req.params;
+
+        if (!mongoose.Types.ObjectId.isValid(userId)) {
+            return res.status(400).json({ success: false, message: "Invalid user ID" });
+        }
+        if (!mongoose.Types.ObjectId.isValid(productId) || !mongoose.Types.ObjectId.isValid(recommendedId)) {
+            return res.status(400).json({ success: false, message: "Invalid product IDs" });
+        }
+
+        // Find the cart of user
+        const cart = await Cart.findOne({ userId });
+        if (!cart) {
+            return res.status(404).json({ success: false, message: "Cart not found" });
+        }
+
+        // Find the index of product to remove
+        const productIndex = cart.products.findIndex(p =>
+            p.restaurantProductId.toString() === productId &&
+            p.recommendedId.toString() === recommendedId
+        );
+
+        if (productIndex === -1) {
+            return res.status(404).json({ success: false, message: "Product not found in cart" });
+        }
+
+        // Remove the product
+        cart.products.splice(productIndex, 1);
+
+        // Recalculate totals after removal
+        let subTotal = 0;
+        let totalItems = 0;
+        for (const prod of cart.products) {
+            subTotal += (prod.basePrice * prod.quantity) + (prod.platePrice || 0);
+            totalItems += prod.quantity;
+        }
+
+        // Reset restaurantId if cart is empty
+        if (cart.products.length === 0) {
+            cart.restaurantId = null;
+            cart.deliveryCharge = 0;
+            cart.couponDiscount = 0;
+            cart.appliedCouponId = null;
+            cart.finalAmount = 0;
+            cart.subTotal = 0;
+            cart.totalItems = 0;
+        } else {
+            // Calculate delivery charge based on restaurant location and user location
+            const user = await User.findById(userId);
+            if (!user || !user.location || !user.location.coordinates) {
+                return res.status(400).json({ success: false, message: "User location not found." });
+            }
+            const [userLon, userLat] = user.location.coordinates;
+
+            const restaurant = await Restaurant.findById(cart.restaurantId);
+            let deliveryCharge = 0;
+            let distanceKm = 0;
+
+            if (restaurant && restaurant.location && restaurant.location.coordinates) {
+                const [restLon, restLat] = restaurant.location.coordinates;
+                distanceKm = calculateDistanceKm(userLat, userLon, restLat, restLon);
+                deliveryCharge = distanceKm <= 5 ? 20 : 20 + 2 * Math.ceil(distanceKm - 5);
+            } else {
+                deliveryCharge = 20;
+            }
+
+            cart.subTotal = subTotal;
+            cart.totalItems = totalItems;
+            cart.deliveryCharge = deliveryCharge;
+            cart.finalAmount = cart.subTotal + cart.deliveryCharge - (cart.couponDiscount || 0);
+        }
+
+        await cart.save();
+
+        // Return updated cart
+        return res.status(200).json({
+            success: true,
+            message: "Product removed from cart successfully",
+            data: cart
+        });
+
+    } catch (err) {
+        console.error("Delete Product From Cart Error:", err);
+        return res.status(500).json({ success: false, message: "Server error", error: err.message });
     }
 };
