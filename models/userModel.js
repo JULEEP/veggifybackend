@@ -13,23 +13,16 @@ const userSchema = new mongoose.Schema({
   image:{type:String},
 
 
-address: [{
-  addressLine: { type: String, required: true },
-  city: { type: String },
-  state: { type: String },
-  pinCode: { type: String },
-  country: { type: String },
-  phone: { type: String },
-  houseNumber: { type: String },
-  apartment: { type: String },
-  directions: { type: String },
-  street: { type: String },
-  latitud: { type: Number },
-  longitud: { type: Number },
-  postalCode: { type: String },  // New field
-  addressType: { type: String },  // New field
-  fullAddress: { type: String }   // New field
-}],
+addresses: [
+    {
+      street: { type: String },
+      city: { type: String },
+      state: { type: String },
+      country: { type: String },
+      postalCode: { type: String },
+      addressType: { type: String, enum: ['Home', 'Office', 'Other'], default: 'Home' },
+    },
+  ],
 
   location: {
     type: {

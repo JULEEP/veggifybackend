@@ -52,7 +52,7 @@ router.delete('/users/:userId/profile-image', deleteProfileImage);
 
 
 // ➕ Add address
-router.post("/user/:userId/address", addAddress);
+router.post("/addaddress/:userId", addAddress);
 // Get all addresses for a user
 router.get('/user/:userId/addresses', getAllAddresses);
 
@@ -60,10 +60,10 @@ router.get('/user/:userId/addresses', getAllAddresses);
 router.get('/users/:userId/addresses/:addressId', getAddressById);
 
 // Update an address by addressId for a user
-router.put('/users/:userId/addresses/:addressId', updateAddressById);
+router.put('/updateaddresses/:userId/:addressId', updateAddressById);
 
 // Delete an address by addressId for a user
-router.delete('/users/:userId/addresses/:addressId', deleteAddressById);
+router.delete('/deleteaddresses/:userId/:addressId', deleteAddressById);
 
 
 // POST location (only once)

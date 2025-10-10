@@ -368,63 +368,40 @@ const deleteProfileImage = async (req, res) => {
 const addAddress = async (req, res) => {
   try {
     const { userId } = req.params;
-    const {
-      addressLine,
-      city,
-      state,
-      pinCode,
-      country,
-      phone,
-      houseNumber,
-      apartment,
-      directions,
-      street,
-      latitud,
-      longitud,
-      postalCode,
-      addressType,
-      fullAddress
-    } = req.body;
+    const { street, city, state, postalCode, country, addressType } = req.body;
 
-    // Validate required field
-    if (!addressLine) {
-      return res.status(400).json({ message: "addressLine is required ❌" });
+    // Validate required fields
+    if (!street || !city || !state || !postalCode || !country) {
+      return res.status(400).json({ message: 'All address fields are required ❌' });
     }
 
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ message: 'User not found ❌' });
 
-    // Create new address object with new fields
+    // Create the new address object
     const newAddress = {
-      addressLine,
-      city: city || "",
-      state: state || "",
-      pinCode: pinCode || "",
-      country: country || "",
-      phone: phone || "",
-      houseNumber: houseNumber || "",
-      apartment: apartment || "",
-      directions: directions || "",
-      street: street || "",
-      latitud: latitud || null,
-      longitud: longitud || null,
-      postalCode: postalCode || "", // New field
-      addressType: addressType || "", // New field
-      fullAddress: fullAddress || "" // New field
+      street,
+      city,
+      state,
+      postalCode,
+      country,
+      addressType: addressType || 'Home', // Default is 'Home' if not provided
     };
 
-    // If user already has addresses, push, else create new array
+    // If the user already has an address array, push the new address; otherwise, create a new array
     if (!Array.isArray(user.address)) {
       user.address = [];
     }
     user.address.push(newAddress);
 
+    // Save the updated user document
     await user.save();
 
     res.status(200).json({
       message: 'Address added successfully ✅',
-      address: user.address
+      address: newAddress // Return the newly added address
     });
+
   } catch (err) {
     res.status(500).json({ message: 'Failed to add address ❌', error: err.message });
   }
@@ -473,25 +450,33 @@ const getAddressById = async (req, res) => {
 const updateAddressById = async (req, res) => {
   try {
     const { userId, addressId } = req.params;
+    const { street, city, state, postalCode, country, addressType } = req.body;
 
     const user = await User.findById(userId);
-    if (!user) return res.status(404).json({ success: false, message: 'User not found ❌' });
+    if (!user) return res.status(404).json({ message: 'User not found ❌' });
 
+    // Find the address by its ID
     const address = user.address.id(addressId);
-    if (!address) return res.status(404).json({ success: false, message: 'Address not found ❌' });
+    if (!address) return res.status(404).json({ message: 'Address not found ❌' });
 
-    // Update fields dynamically (only provided fields will change)
-    Object.assign(address, req.body);
+    // Update only the fields present in the request body
+    address.street = street || address.street;
+    address.city = city || address.city;
+    address.state = state || address.state;
+    address.postalCode = postalCode || address.postalCode;
+    address.country = country || address.country;
+    address.addressType = addressType || address.addressType; // Defaults to 'Home' if not provided
 
+    // Save the updated user document
     await user.save();
 
     res.status(200).json({
-      success: true,
-      message: "Address updated successfully ✅",
-      address
+      message: 'Address updated successfully ✅',
+      address: address // Return the updated address
     });
+
   } catch (err) {
-    res.status(500).json({ success: false, message: "Failed to update address ❌", error: err.message });
+    res.status(500).json({ message: 'Failed to update address ❌', error: err.message });
   }
 };
 
