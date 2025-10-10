@@ -380,7 +380,10 @@ const addAddress = async (req, res) => {
       directions,
       street,
       latitud,
-      longitud
+      longitud,
+      postalCode,
+      addressType,
+      fullAddress
     } = req.body;
 
     // Validate required field
@@ -391,7 +394,7 @@ const addAddress = async (req, res) => {
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ message: 'User not found ❌' });
 
-    // Create new address object
+    // Create new address object with new fields
     const newAddress = {
       addressLine,
       city: city || "",
@@ -404,7 +407,10 @@ const addAddress = async (req, res) => {
       directions: directions || "",
       street: street || "",
       latitud: latitud || null,
-      longitud: longitud || null
+      longitud: longitud || null,
+      postalCode: postalCode || "", // New field
+      addressType: addressType || "", // New field
+      fullAddress: fullAddress || "" // New field
     };
 
     // If user already has addresses, push, else create new array
@@ -423,6 +429,7 @@ const addAddress = async (req, res) => {
     res.status(500).json({ message: 'Failed to add address ❌', error: err.message });
   }
 };
+
 // 📌 Get All Addresses of a User
 const getAllAddresses = async (req, res) => {
   try {

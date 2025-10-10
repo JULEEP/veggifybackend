@@ -15,17 +15,20 @@ const userSchema = new mongoose.Schema({
 
 address: [{
   addressLine: { type: String, required: true },
-  city: String,
-  state: String,
-  pinCode: String,
-  country: String,
-  phone: String,
-  houseNumber: String,
-  apartment: String,
-  directions: String,
-  street: String,
-  latitud: Number,
-  longitud: Number,
+  city: { type: String },
+  state: { type: String },
+  pinCode: { type: String },
+  country: { type: String },
+  phone: { type: String },
+  houseNumber: { type: String },
+  apartment: { type: String },
+  directions: { type: String },
+  street: { type: String },
+  latitud: { type: Number },
+  longitud: { type: Number },
+  postalCode: { type: String },  // New field
+  addressType: { type: String },  // New field
+  fullAddress: { type: String }   // New field
 }],
 
   location: {
