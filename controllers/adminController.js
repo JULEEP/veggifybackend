@@ -4,6 +4,21 @@ const mongoose = require('mongoose');
 const Coupon = require('../models/couponModel');
 const User = require('../models/userModel');
 const { generateTempToken, verifyTempToken, generateAuthToken, generateCouponToken, couponAuthMiddleware } = require('../utils/adminJWT');
+const restaurantModel = require('../models/restaurantModel');
+const userModel = require('../models/userModel');
+const {deliveryBoyModel} = require('../models/deliveryBoyModel');
+const orderModel = require('../models/orderModel');
+const restaurantProductModel = require('../models/restaurantProductModel');
+const Banner = require('../models/banner');
+const { Category } = require('../models/foodSystemModel');
+const Staff = require('../models/Staff');
+const cloudinary = require("../config/cloudinary");
+const Amount = require('../models/Amount');
+const AmbassadorPlan = require('../models/AmbassadorPlan');
+const AmbassadorPayment = require('../models/AmbassadorPayment');
+const Ambassador = require('../models/ambassadorModel');
+
+
 
 // 1. Send OTP (hardcoded for now as 1234)
 exports.sendOtp = async (req, res) => {
@@ -105,6 +120,41 @@ exports.login = async (req, res) => {
     }
 };
 
+
+
+// 5. Get Admin Details by Admin ID
+exports.getAdminByAdminId = async (req, res) => {
+    try {
+        const { adminId } = req.params;  // Get adminId from URL params
+
+        if (!adminId) {
+            return res.status(400).json({ message: 'Admin ID is required' });
+        }
+
+        const admin = await Admin.findById(adminId);  // Use findById instead of findOne for _id
+
+        if (!admin) {
+            return res.status(404).json({ message: 'Admin not found' });
+        }
+
+        // If name is missing, use 'Not Provided' as the fallback
+        const adminName = admin.name || 'Not Provided';
+
+        return res.status(200).json({
+            message: 'Admin fetched successfully',
+            admin: {
+                id: admin._id,
+                phoneNumber: admin.phoneNumber,
+                name: adminName,  // Fallback to 'Not Provided' if name is empty
+                email: admin.email,
+                createdAt: admin.createdAt,
+            },
+        });
+    } catch (err) {
+        console.error('Error fetching admin details:', err);
+        return res.status(500).json({ message: 'Server error', error: err.message });
+    }
+};
 
 
 // Generate coupon token (POST /api/admin/token)
@@ -304,3 +354,1101 @@ exports.deleteUser = async (req, res) => {
   }
 };
 
+
+
+exports.getDashboardData = async (req, res) => {
+  try {
+    // Get current date
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    const startOfWeek = new Date(today);
+    startOfWeek.setDate(today.getDate() - 7);
+    
+    const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+
+    // All database queries in parallel - CORRECTED MODEL NAMES
+    const [
+      totalUsers,
+      totalRestaurants,
+      activeRestaurants,
+      totalRiders,
+      activeRiders,
+      totalOrders,
+      todayOrders,
+      totalProducts,
+      totalBannersCount, // Changed variable name to indicate it's a count
+      totalCategoriesCount, // Changed variable name to indicate it's a count
+      todayRevenue,
+      totalRevenue,
+      orderStatusStats,
+      weeklySales,
+      monthlySales,
+      latestOrders
+    ] = await Promise.all([
+      // Users count
+      userModel.countDocuments(),
+      
+      // Restaurants count
+      restaurantModel.countDocuments(),
+      restaurantModel.countDocuments({ status: 'active' }),
+      
+      // Orders count
+      orderModel.countDocuments(),
+      orderModel.countDocuments({ createdAt: { $gte: today } }),
+      
+      // Products count
+      restaurantProductModel.countDocuments(),
+      
+      // Banners count (only count)
+      Banner.countDocuments(),
+      
+      // Categories count (only count)
+      Category.countDocuments(),
+      
+      // Today's revenue
+      orderModel.aggregate([
+        { 
+          $match: { 
+            status: 'completed',
+            createdAt: { $gte: today } 
+          } 
+        },
+        { 
+          $group: { 
+            _id: null, 
+            total: { $sum: '$totalAmount' } 
+          } 
+        }
+      ]),
+      
+      // Total revenue
+      orderModel.aggregate([
+        { 
+          $match: { 
+            status: 'completed'
+          } 
+        },
+        { 
+          $group: { 
+            _id: null, 
+            total: { $sum: '$totalAmount' } 
+          } 
+        }
+      ]),
+      
+      // Order status counts
+      orderModel.aggregate([
+        {
+          $group: {
+            _id: '$status',
+            count: { $sum: 1 }
+          }
+        }
+      ]),
+      
+      // Weekly sales data
+      orderModel.aggregate([
+        {
+          $match: {
+            createdAt: { $gte: startOfWeek },
+            status: 'completed'
+          }
+        },
+        {
+          $group: {
+            _id: {
+              $dateToString: { format: "%Y-%m-%d", date: "$createdAt" }
+            },
+            sales: { $sum: '$totalAmount' }
+          }
+        },
+        {
+          $sort: { _id: 1 }
+        }
+      ]),
+      
+      // Monthly sales data
+      orderModel.aggregate([
+        {
+          $match: {
+            createdAt: { $gte: startOfMonth },
+            status: 'completed'
+          }
+        },
+        {
+          $group: {
+            _id: {
+              $dateToString: { format: "%Y-%m-%d", date: "$createdAt" }
+            },
+            sales: { $sum: '$totalAmount' }
+          }
+        },
+        {
+          $sort: { _id: 1 }
+        }
+      ]),
+      
+      // Latest 10 orders
+      orderModel.find()
+        .sort({ createdAt: -1 })
+        .limit(10)
+        .select('orderId totalAmount status createdAt user restaurant')
+    ]);
+
+    // Process the data
+    const todayRevenueAmount = todayRevenue.length > 0 ? todayRevenue[0].total : 0;
+    const totalRevenueAmount = totalRevenue.length > 0 ? totalRevenue[0].total : 0;
+
+    // Format order status data
+    const orderStatusData = orderStatusStats.map(item => ({
+      name: item._id,
+      value: item.count
+    }));
+
+    // Format sales data for charts - FIXED: Use actual data
+    const salesData = {
+      today: [{ name: "Today", sales: todayRevenueAmount }],
+      thisWeek: formatChartData(weeklySales, "This Week"),
+      thisMonth: formatChartData(monthlySales, "This Month")
+    };
+
+    // Send response
+    res.json({
+      success: true,
+      data: {
+        stats: {
+          totalUsers,
+          totalRestaurants,
+          activeRestaurants,
+          totalRiders,
+          activeRiders,
+          totalOrders,
+          todayOrders,
+          totalProducts,
+          totalBannersCount, // Displaying banner count
+          totalCategoriesCount, // Displaying category count
+          totalIncome: totalRevenueAmount,
+          todayIncome: todayRevenueAmount
+        },
+        charts: {
+          salesData,
+          orderStatusData
+        },
+      }
+    });
+
+  } catch (error) {
+    console.error('Dashboard error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// Helper function to format chart data - FIXED: Use actual data
+function formatChartData(data, timeframe) {
+  if (!data || data.length === 0) {
+    // Return default data if no data found
+    if (timeframe === "This Week") {
+      const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+      return days.map(day => ({
+        name: day,
+        sales: 0
+      }));
+    }
+    
+    if (timeframe === "This Month") {
+      return [
+        { name: "Week 1", sales: 0 },
+        { name: "Week 2", sales: 0 },
+        { name: "Week 3", sales: 0 },
+        { name: "Week 4", sales: 0 }
+      ];
+    }
+  }
+
+  // Use actual data from database
+  return data.map(item => ({
+    name: item._id,
+    sales: item.sales
+  }));
+}
+
+// Helper function to format time ago
+function formatTimeAgo(date) {
+  const now = new Date();
+  const diffInMinutes = Math.floor((now - new Date(date)) / (1000 * 60));
+  
+  if (diffInMinutes < 60) {
+    return `${diffInMinutes} min ago`;
+  } else if (diffInMinutes < 1440) {
+    return `${Math.floor(diffInMinutes / 60)} hours ago`;
+  } else {
+    return `${Math.floor(diffInMinutes / 1440)} days ago`;
+  }
+}
+
+
+
+exports.registerStaff = async (req, res) => {
+  try {
+    const { fullName, email, mobileNumber, role, gender, age, pagesAccess } = req.body;
+
+    // ✅ express-fileupload → files are directly inside req.files
+    const aadharCard = req.files?.aadharCard;
+    const photo = req.files?.photo;
+
+    if (!aadharCard || !photo) {
+      return res.status(400).json({
+        success: false,
+        message: "Aadhar card and photo are required",
+      });
+    }
+
+    // ✅ Check if staff already exists
+    const existingStaff = await Staff.findOne({
+      $or: [{ email }, { phone: mobileNumber }],
+    });
+
+    // ✅ Upload directly from temp file path
+    const aadharUpload = await cloudinary.uploader.upload(aadharCard.tempFilePath, {
+      folder: "staff/aadhar",
+    });
+    const photoUpload = await cloudinary.uploader.upload(photo.tempFilePath, {
+      folder: "staff/photo",
+    });
+
+    // ✅ Parse pagesAccess if it's JSON string
+    let parsedPagesAccess = [];
+    if (pagesAccess) {
+      try {
+        parsedPagesAccess =
+          typeof pagesAccess === "string" ? JSON.parse(pagesAccess) : pagesAccess;
+      } catch (parseError) {
+        console.error("Error parsing pagesAccess:", parseError);
+        parsedPagesAccess = [];
+      }
+    }
+
+    // ✅ Create staff data
+    const staffData = {
+      fullName,
+      email,
+      phone: mobileNumber,
+      role,
+      gender,
+      age,
+      aadharCard: aadharUpload.secure_url,
+      photo: photoUpload.secure_url,
+      pagesAccess: parsedPagesAccess,
+      status: "pending",
+    };
+
+    const newStaff = new Staff(staffData);
+    await newStaff.save();
+
+    res.status(201).json({
+      success: true,
+      message: "Staff registered successfully!",
+      staff: newStaff,
+    });
+  } catch (error) {
+    console.error("Staff Registration Error:", error);
+    res.status(500).json({ success: false, message: "Server Error", error: error.message });
+  }
+};
+
+
+exports.addSalaryToStaff = async (req, res) => {
+  try {
+    const { staffId } = req.params; // Get staffId from URL params
+    const { amount, month, status } = req.body; // Get salary data from request body
+
+    // Find the staff member by ID
+    const staff = await Staff.findById(staffId);
+    if (!staff) {
+      return res.status(404).json({
+        message: "Staff member not found"
+      });
+    }
+
+    // Create the new salary entry with a date field
+    const newSalary = {
+      amount,
+      month,
+      status,
+      date: new Date() // Set the current date
+    };
+
+    // Add the new salary entry to the mySalary[] array
+    staff.mySalary.push(newSalary);
+
+    // Save the updated staff document
+    await staff.save();
+
+    return res.status(200).json({
+      message: "Salary added successfully",
+      staff: staff
+    });
+  } catch (error) {
+    console.error("Error adding salary:", error);
+    res.status(500).json({ message: "Server Error", error: error.message });
+  }
+};
+
+
+// Get all Staff
+exports.getAllStaff = async (req, res) => {
+  try {
+    const staff = await Staff.find().select('-__v'); // Exclude version key
+    res.status(200).json({
+      message: "Staff fetched successfully.",
+      data: staff,
+    });
+  } catch (error) {
+    console.error("Error fetching staff:", error);
+    res.status(500).json({ message: "Server Error", error: error.message });
+  }
+};
+
+// Get staff by ID
+exports.getStaffById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const staff = await Staff.findById(id);
+    
+    if (!staff) {
+      return res.status(404).json({ message: "Staff not found" });
+    }
+
+    res.status(200).json({
+      message: "Staff fetched successfully",
+      data: staff,
+    });
+  } catch (error) {
+    console.error("Error fetching staff by ID:", error);
+    res.status(500).json({ message: "Server Error", error: error.message });
+  }
+};
+
+// Update staff
+exports.updateStaff = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      fullName,
+      email,
+      mobileNumber,
+      role,
+      gender,
+      age,
+      pagesAccess,
+      status, // ✅ status included in destructuring
+    } = req.body;
+
+    // ✅ Check if staff exists
+    const staff = await Staff.findById(id);
+    if (!staff) {
+      return res.status(404).json({ success: false, message: "Staff not found" });
+    }
+
+    // ✅ Prepare update data - INCLUDING STATUS
+    let updateData = {
+      fullName,
+      email,
+      phone: mobileNumber,
+      role,
+      gender,
+      age,
+      status, // ✅ ADD THIS LINE - Status included in update data
+    };
+
+    // ✅ Parse pagesAccess if provided
+    if (pagesAccess) {
+      try {
+        updateData.pagesAccess =
+          typeof pagesAccess === "string" ? JSON.parse(pagesAccess) : pagesAccess;
+      } catch (parseError) {
+        console.error("Error parsing pagesAccess:", parseError);
+      }
+    }
+
+    // ✅ If new Aadhar card uploaded
+    if (req.files?.aadharCard) {
+      const aadharCard = req.files.aadharCard;
+      const aadharUpload = await cloudinary.uploader.upload(aadharCard.tempFilePath, {
+        folder: "staff/aadhar",
+      });
+      updateData.aadharCard = aadharUpload.secure_url;
+    }
+
+    // ✅ If new photo uploaded
+    if (req.files?.photo) {
+      const photo = req.files.photo;
+      const photoUpload = await cloudinary.uploader.upload(photo.tempFilePath, {
+        folder: "staff/photo",
+      });
+      updateData.photo = photoUpload.secure_url;
+    }
+
+    // ✅ Update staff data
+    const updatedStaff = await Staff.findByIdAndUpdate(id, updateData, {
+      new: true,
+      runValidators: true,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "Staff updated successfully",
+      data: updatedStaff,
+    });
+  } catch (error) {
+    console.error("Error updating staff:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server Error",
+      error: error.message,
+    });
+  }
+};
+
+
+// Update Staff
+// exports.updateStaff = async (req, res) => {
+//   try {
+//     const { staffId } = req.params;
+//     const { fullName, email, phone, role, gender, age, status } = req.body;
+
+//     // Find staff by ID
+//     const staff = await Staff.findById(staffId);
+//     if (!staff) {
+//       return res.status(404).json({ message: "Staff not found." });
+//     }
+
+//     // Update the fields if provided
+//     if (fullName) staff.fullName = fullName;
+//     if (email) staff.email = email;
+//     if (phone) staff.phone = phone;
+//     if (role) staff.role = role;
+//     if (gender) staff.gender = gender;
+//     if (age) staff.age = age;
+//     if (status) staff.status = status; // Allow status update
+
+//     // Update Aadhar Card & Photo if new files are uploaded
+//     if (req.files) {
+//       if (req.files.aadharCard) {
+//         const aadharUpload = await cloudinary.uploader.upload(req.files.aadharCard[0].path);
+//         staff.aadharCard = aadharUpload.secure_url;
+//       }
+//       if (req.files.photo) {
+//         const photoUpload = await cloudinary.uploader.upload(req.files.photo[0].path);
+//         staff.photo = photoUpload.secure_url;
+//       }
+//     }
+
+//     // Save the updated staff member
+//     await staff.save();
+
+//     res.status(200).json({
+//       message: "Staff updated successfully!",
+//       staff: staff,
+//     });
+
+//   } catch (error) {
+//     console.error("Error updating staff:", error);
+//     res.status(500).json({ message: "Server Error", error: error.message });
+//   }
+// };
+
+// Delete Staff
+exports.deleteStaff = async (req, res) => {
+  try {
+    const { staffId } = req.params;
+
+    // Find and delete staff
+    const staff = await Staff.findByIdAndDelete(staffId);
+    if (!staff) {
+      return res.status(404).json({ message: "Staff not found." });
+    }
+
+    res.status(200).json({
+      message: "Staff deleted successfully.",
+      staffId: staffId,
+    });
+
+  } catch (error) {
+    console.error("Error deleting staff:", error);
+    res.status(500).json({ message: "Server Error", error: error.message });
+  }
+};
+
+
+
+// Staff Login Route
+exports.staffLogin = async (req, res) => {
+  try {
+    const { phone } = req.body;
+
+    const staff = await Staff.findOne({ phone });
+    if (!staff) {
+      return res.status(400).json({ message: "Staff not found" });
+    }
+
+    if (staff.status !== 'active') {
+      return res.status(400).json({ message: "Staff account is not active" });
+    }
+
+    // ✅ Ensure pagesAccess is returned properly
+    res.status(200).json({
+      message: "Login successful",
+      staff: {
+        _id: staff._id,
+        fullName: staff.fullName,
+        email: staff.email,
+        phone: staff.phone,
+        role: staff.role,
+        pagesAccess: staff.pagesAccess || [], // ✅ Important: include pagesAccess
+        status: staff.status
+      }
+    });
+  } catch (error) {
+    console.error("Staff login error:", error);
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+
+
+
+
+exports.createAmount = async (req, res) => {
+  try {
+    const { type, amount } = req.body;
+
+    // Validation
+    if (!type || !amount) {
+      return res.status(400).json({
+        success: false,
+        message: 'Type and amount are required'
+      });
+    }
+
+    // Check if amount already exists for this type
+    const existingAmount = await Amount.findOne({ type });
+    if (existingAmount) {
+      return res.status(400).json({
+        success: false,
+        message: 'Amount for this type already exists'
+      });
+    }
+
+    // Create new amount
+    const newAmount = new Amount({
+      type,
+      amount: parseFloat(amount)
+    });
+
+    const savedAmount = await newAmount.save();
+
+    res.status(201).json({
+      success: true,
+      message: 'Amount created successfully',
+      data: savedAmount
+    });
+  } catch (error) {
+    console.error('Error creating amount:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
+
+
+exports.getAllAmounts = async (req, res) => {
+  try {
+    const amounts = await Amount.find().sort({ createdAt: -1 });
+
+    res.status(200).json({
+      success: true,
+      count: amounts.length,
+      data: amounts
+    });
+  } catch (error) {
+    console.error('Error fetching amounts:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
+
+
+exports.getAmountById = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid amount ID'
+      });
+    }
+
+    const amount = await Amount.findById(id);
+
+    if (!amount) {
+      return res.status(404).json({
+        success: false,
+        message: 'Amount not found'
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: amount
+    });
+  } catch (error) {
+    console.error('Error fetching amount:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
+
+
+exports.updateAmount = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { type, amount } = req.body;
+
+    // Validation
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid amount ID'
+      });
+    }
+
+    if (!type || !amount) {
+      return res.status(400).json({
+        success: false,
+        message: 'Type and amount are required'
+      });
+    }
+
+    // Check if amount exists
+    const existingAmount = await Amount.findById(id);
+    if (!existingAmount) {
+      return res.status(404).json({
+        success: false,
+        message: 'Amount not found'
+      });
+    }
+
+    // Check if type already exists for other amounts
+    const duplicateAmount = await Amount.findOne({ 
+      type, 
+      _id: { $ne: id } 
+    });
+    
+    if (duplicateAmount) {
+      return res.status(400).json({
+        success: false,
+        message: 'Amount for this type already exists'
+      });
+    }
+
+    // Update amount
+    const updatedAmount = await Amount.findByIdAndUpdate(
+      id,
+      {
+        type,
+        amount: parseFloat(amount)
+      },
+      { new: true, runValidators: true }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: 'Amount updated successfully',
+      data: updatedAmount
+    });
+  } catch (error) {
+    console.error('Error updating amount:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
+
+
+exports.deleteAmount = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid amount ID'
+      });
+    }
+
+    const amount = await Amount.findByIdAndDelete(id);
+
+    if (!amount) {
+      return res.status(404).json({
+        success: false,
+        message: 'Amount not found'
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Amount deleted successfully',
+      data: amount
+    });
+  } catch (error) {
+    console.error('Error deleting amount:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
+
+
+
+// Create a new plan
+exports.createPlan = async (req, res) => {
+  try {
+    const { name, price, validity, benefits } = req.body;
+
+    const newPlan = new AmbassadorPlan({
+      name,
+      price,
+      validity,
+      benefits,
+    });
+
+    await newPlan.save();
+
+    res.status(201).json({
+      success: true,
+      message: "Ambassador Plan created successfully",
+      data: newPlan,
+    });
+  } catch (err) {
+    console.error("❌ Error creating plan:", err);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err.message,
+    });
+  }
+};
+
+// Get all plans
+exports.getAllPlans = async (req, res) => {
+  try {
+    const plans = await AmbassadorPlan.find();
+    res.status(200).json({
+      success: true,
+      data: plans,
+    });
+  } catch (err) {
+    console.error("❌ Error fetching plans:", err);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err.message,
+    });
+  }
+};
+
+// Get a single plan by ID
+exports.getPlanById = async (req, res) => {
+  try {
+    const plan = await AmbassadorPlan.findById(req.params.id);
+    if (!plan) {
+      return res.status(404).json({ success: false, message: "Plan not found" });
+    }
+    res.status(200).json({ success: true, data: plan });
+  } catch (err) {
+    console.error("❌ Error fetching plan:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// Update a plan
+exports.updatePlan = async (req, res) => {
+  try {
+    const updatedPlan = await AmbassadorPlan.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    if (!updatedPlan) {
+      return res.status(404).json({ success: false, message: "Plan not found" });
+    }
+    res.status(200).json({ success: true, message: "Plan updated", data: updatedPlan });
+  } catch (err) {
+    console.error("❌ Error updating plan:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// Delete a plan
+exports.deletePlan = async (req, res) => {
+  try {
+    const deletedPlan = await AmbassadorPlan.findByIdAndDelete(req.params.id);
+    if (!deletedPlan) {
+      return res.status(404).json({ success: false, message: "Plan not found" });
+    }
+    res.status(200).json({ success: true, message: "Plan deleted successfully" });
+  } catch (err) {
+    console.error("❌ Error deleting plan:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+
+exports.getAllAmbassadorPaymnet = async (req, res) => {
+  try {
+    // Fetch all payments and populate both plan and ambassador details
+    const payments = await AmbassadorPayment.find()
+      .populate('planId')        // Populate plan details
+      .populate('ambassadorId'); // Populate ambassador details
+
+    if (!payments || payments.length === 0) {
+      return res.status(404).json({ message: "No plans found" });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "All ambassador plans fetched successfully",
+      data: payments,
+    });
+
+  } catch (err) {
+    console.error('❌ Error fetching all ambassador plans:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: err.message,
+    });
+  }
+};
+
+
+
+
+
+// Controller to fetch all stats
+// Controller to fetch all stats
+exports.getDashboardStats = async (req, res) => {
+  try {
+    // Total Users
+    const totalUsers = await userModel.countDocuments();
+
+    // Total Restaurants (Vendors)
+    const totalVendors = await restaurantModel.countDocuments();
+
+    // Total Products
+    const totalProducts = await restaurantProductModel.countDocuments();
+
+    // Total Orders
+    const totalOrders = await orderModel.countDocuments();
+
+    // Active Users: Assuming we have an `isVerified` flag or similar
+    const activeUsers = await userModel.countDocuments({ isVerified: true });
+
+    // Total Revenue: Summing order totalPayable amounts (assuming each order has this field)
+    const totalRevenue = await orderModel.aggregate([
+      { $match: { orderStatus: 'Delivered' } },  // Filter for completed orders
+      { $group: { _id: null, totalRevenue: { $sum: '$totalPayable' } } }, // Sum totalPayable for revenue
+    ]);
+
+    // Get Counts and Revenue for each Order Status (Completed, Pending, Cancelled)
+    const orderStatusCountsAndRevenue = await orderModel.aggregate([
+      {
+        $group: {
+          _id: "$orderStatus",   // Grouping by orderStatus
+          count: { $sum: 1 },     // Count of orders by status
+          totalSales: { $sum: '$totalPayable' } // Sum of totalPayable for each status
+        }
+      }
+    ]);
+
+    // Initialize order stats with default values
+    const orderStats = {
+      completed: { count: 0, sales: 0 },
+      pending: { count: 0, sales: 0 },
+      cancelled: { count: 0, sales: 0 }
+    };
+
+    // Loop through the aggregation result and assign counts and sales
+    orderStatusCountsAndRevenue.forEach(status => {
+      if (status._id === 'Completed') {
+        orderStats.completed.count = status.count;
+        orderStats.completed.sales = status.totalSales;
+      }
+      if (status._id === 'Pending') {
+        orderStats.pending.count = status.count;
+        orderStats.pending.sales = status.totalSales;
+      }
+      if (status._id === 'Cancelled') {
+        orderStats.cancelled.count = status.count;
+        orderStats.cancelled.sales = status.totalSales;
+      }
+    });
+
+    // Sales Overview (simplified)
+    const salesOverview = {
+      completedOrders: orderStats.completed.count,
+      completedSales: orderStats.completed.sales,
+      pendingOrders: orderStats.pending.count,
+      pendingSales: orderStats.pending.sales,
+      cancelledOrders: orderStats.cancelled.count,
+      cancelledSales: orderStats.cancelled.sales,
+      totalRevenue: totalRevenue[0]?.totalRevenue || 0
+    };
+
+    // Total Banners
+    const totalBanners = await Banner.countDocuments();
+
+    // Fetch Latest Orders (let's assume we want the latest 5 orders)
+    const latestOrders = await orderModel.aggregate([
+      { $sort: { createdAt: -1 } }, // Sort by creation date (newest first)
+      { $limit: 5 }, // Limit to the latest 5 orders
+      {
+        $lookup: {
+          from: 'users', // Assuming users are stored in the 'users' collection
+          localField: 'userId',
+          foreignField: '_id',
+          as: 'customer'
+        }
+      },
+      {
+        $unwind: { path: "$customer", preserveNullAndEmptyArrays: true } // Unwind the customer array
+      },
+      {
+        $lookup: {
+          from: 'restaurantproducts', // Assuming restaurant products are in 'restaurantproducts'
+          localField: 'products.restaurantProductId',
+          foreignField: '_id',
+          as: 'productDetails'
+        }
+      },
+      {
+        $unwind: { path: "$productDetails", preserveNullAndEmptyArrays: true } // Unwind product details
+      },
+      {
+        $project: {
+          orderId: 1,
+          customerName: { $concat: ["$customer.firstName", " ", "$customer.lastName"] },
+          productName: { $arrayElemAt: ["$productDetails.name", 0] },
+          category: { $arrayElemAt: ["$productDetails.category", 0] },
+          price: { $arrayElemAt: ["$productDetails.basePrice", 0] },
+          status: 1,
+          createdAt: 1
+        }
+      },
+      {
+        $project: {
+          orderId: 1,
+          customerName: 1,
+          productName: 1,
+          category: 1,
+          price: 1,
+          status: 1,
+          timeAgo: {
+            $dateToString: { format: "%H:%M:%S", date: "$createdAt" }
+          }
+        }
+      }
+    ]);
+
+    // Additional Metrics
+    // 1. Orders Today
+    const ordersToday = await orderModel.countDocuments({
+      createdAt: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) }
+    });
+
+    // 2. Revenue Today
+    const revenueToday = await orderModel.aggregate([
+      { $match: { orderStatus: 'Delivered', createdAt: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) } } },
+      { $group: { _id: null, totalRevenue: { $sum: '$totalPayable' } } }
+    ]);
+
+    // 3. Success Rate (Completed Orders / Total Orders)
+    const successRate = totalOrders > 0 ? (orderStats.completed.count / totalOrders) * 100 : 0;
+
+    // 4. Pending Actions (Pending Orders + Cancelled Orders)
+    const pendingActions = orderStats.pending.count + orderStats.cancelled.count;
+
+    // Constructing the response
+    res.status(200).json({
+      success: true,
+      data: {
+        totalUsers,
+        totalVendors,
+        totalProducts,
+        totalOrders,
+        activeUsers,
+        totalRevenue: totalRevenue[0]?.totalRevenue || 0, // Default to 0 if no revenue found
+        totalBanners,
+        orderStats,  // Separate order stats (completed, pending, cancelled)
+        salesOverview, // Separate sales overview (order count and sales)
+        latestOrders, // Latest 5 orders with details
+        ordersToday, // Orders Today
+        revenueToday: revenueToday[0]?.totalRevenue || 0, // Revenue Today
+        successRate, // Success Rate (Percentage)
+        pendingActions // Pending Actions (Pending + Cancelled)
+      },
+    });
+  } catch (err) {
+    console.error('❌ Error fetching stats:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: err.message,
+    });
+  }
+};
+
+
+
+exports.getReferredStats = async (req, res) => {
+  try {
+    // Get the count of referred users (users who have 'referredBy' field)
+    const referredUsersCount = await userModel.countDocuments({ referredBy: { $ne: null } });
+
+    // Get the count of referred restaurants (restaurants who have 'referredBy' field)
+    const referredRestaurantsCount = await restaurantModel.countDocuments({ referredBy: { $ne: null } });
+
+    // Get the count of referred ambassadors (ambassadors who have 'referredBy' field)
+    const referredAmbassadorsCount = await Ambassador.countDocuments({ referredBy: { $ne: null } });
+
+    // Respond with the counts of referred users, restaurants, and ambassadors
+    res.status(200).json({
+      success: true,
+      data: {
+        referredUsersCount,       // Total referred users
+        referredRestaurantsCount, // Total referred restaurants
+        referredAmbassadorsCount, // Total referred ambassadors
+      },
+    });
+  } catch (err) {
+    console.error('❌ Error fetching referred stats:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: err.message,
+    });
+  }
+};

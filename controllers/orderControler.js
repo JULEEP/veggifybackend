@@ -5,9 +5,11 @@ const User = require("../models/userModel");
 const Cart = require("../models/cartModel");
 const Restaurant = require("../models/restaurantModel");
 const cloudinary = require('../config/cloudinary');
-const {DeliveryBoy} = require("../models/deliveryBoyModel");
+const { DeliveryBoy } = require("../models/deliveryBoyModel");
 const mongoose = require("mongoose");
 const fs = require("fs");
+const Ambassador = require("../models/ambassadorModel");
+const QRCode = require('qrcode');
 
 // Haversine formula to calculate distance in km
 function calculateDistanceKm(lat1, lon1, lat2, lon2) {
@@ -23,19 +25,18 @@ function calculateDistanceKm(lat1, lon1, lat2, lon2) {
 };
 
 // Haversine formula for distance
-const calculateDistance = (coord1, coord2) => {
-  const toRad = (deg) => (deg * Math.PI) / 180;
-  const [lng1, lat1] = coord1;
-  const [lng2, lat2] = coord2;
-  const R = 6371;
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lng2 - lng1);
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+function calculateDistance(lon1, lat1, lon2, lat2) {
+  const R = 6371; // Radius of the Earth in km
+  const dLat = (lat2 - lat1) * (Math.PI / 180);  // Degrees to radians
+  const dLon = (lon2 - lon1) * (Math.PI / 180);  // Degrees to radians
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
-};
+  const distance = R * c; // Distance in km
+  return distance;
+}
+
 
 // Helper to upload images to Cloudinary
 async function uploadFilesToCloudinary(files) {
@@ -50,7 +51,7 @@ async function uploadFilesToCloudinary(files) {
 }
 
 exports.createProduct = async (req, res) => {
-   try {
+  try {
     const {
       description,
       contentname,
@@ -360,7 +361,7 @@ exports.updateProductById = async (req, res) => {
 };
 // ✅ DELETE product
 exports.deleteProductById = async (req, res) => {
-   try {
+  try {
     const { productId } = req.params;
     if (!mongoose.Types.ObjectId.isValid(productId)) {
       return res.status(400).json({ success: false, message: "Invalid productId" });
@@ -415,21 +416,43 @@ exports.addToWishlist = async (req, res) => {
   }
 };
 
-// 2. Get Wishlist
+// 2. Get Wishlist with full product details
+// 2. Get Wishlist with full recommended product details
 exports.getWishlist = async (req, res) => {
   const { userId } = req.params;
 
   try {
-    const user = await User.findById(userId).populate("myWishlist");
+    // 1. Get the user's wishlist (array of recommended._id)
+    const user = await User.findById(userId);
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    res.status(200).json({ wishlist: user.myWishlist });
+    const myWishlist = user.myWishlist; // array of recommended._id
+    if (!myWishlist || myWishlist.length === 0) {
+      return res.status(404).json({ message: "Wishlist is empty" });
+    }
+
+    // 2. Find only the recommended items
+    const wishlistItems = await Promise.all(
+      myWishlist.map(async (recId) => {
+        const product = await RestaurantProduct.findOne(
+          { "recommended._id": recId },
+          { recommended: { $elemMatch: { _id: recId } } } // only the matched recommended
+        ).populate("recommended.category"); // populate category if needed
+
+        // Return only the recommended object
+        return product?.recommended[0] || null;
+      })
+    );
+
+    // Filter out nulls if any recommended._id was not found
+    const filteredWishlist = wishlistItems.filter(item => item !== null);
+
+    res.status(200).json({ wishlist: filteredWishlist });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Server error" });
   }
 };
-
 // 3. Remove Specific Product
 exports.removeFromWishlist = async (req, res) => {
   const { userId, productId } = req.params;
@@ -450,205 +473,209 @@ exports.removeFromWishlist = async (req, res) => {
 
 // -------------------- ORDER CONTROLLERS --------------------
 
-// Create Order
+
+
+
 exports.createOrder = async (req, res) => {
-   try {
-        const { userId, paymentMethod, addressId } = req.body;
+  try {
+    const { userId, paymentMethod, addressId } = req.body;
 
-        // Basic validations
-        if (!mongoose.Types.ObjectId.isValid(userId)) 
-            return res.status(400).json({ success: false, message: "Valid userId is required." });
-        if (!mongoose.Types.ObjectId.isValid(addressId)) 
-            return res.status(400).json({ success: false, message: "Valid addressId is required." });
-        if (!["COD", "Online"].includes(paymentMethod)) 
-            return res.status(400).json({ success: false, message: "Invalid payment method." });
+    // Basic validations
+    if (!mongoose.Types.ObjectId.isValid(userId))
+      return res.status(400).json({ success: false, message: "Valid userId is required." });
+    if (!mongoose.Types.ObjectId.isValid(addressId))
+      return res.status(400).json({ success: false, message: "Valid addressId is required." });
+    if (!["COD", "Online"].includes(paymentMethod))
+      return res.status(400).json({ success: false, message: "Invalid payment method." });
 
-        // Get cart by userId (instead of cartId)
-        const cart = await Cart.findOne({ userId })
-            .populate('products.restaurantProductId');
-
-        if (!cart) {
-            return res.status(404).json({ 
-                success: false, 
-                message: "Cart not found for this user." 
-            });
-        }
-
-        // Check if cart has products
-        if (!cart.products || cart.products.length === 0) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Cart is empty. Add products to create order." 
-            });
-        }
-
-        // Get user with specific address
-        const user = await User.findOne(
-            { 
-                _id: userId,
-                "address._id": addressId 
-            },
-            {
-                name: 1, 
-                email: 1,
-                location: 1,
-                address: { 
-                    $elemMatch: { _id: addressId } 
-                }
-            }
-        );
-
-        if (!user) {
-            return res.status(404).json({ 
-                success: false, 
-                message: "User or address not found." 
-            });
-        }
-
-        const selectedAddress = user.address[0];
-        if (!selectedAddress || !user.location || !user.location.coordinates) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "User location or selected address not found." 
-            });
-        }
-
-        // Get restaurantId from cart
-        const restaurantId = cart.restaurantId;
-        if (!restaurantId) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Restaurant not found in cart." 
-            });
-        }
-
-        // Get restaurant details
-        const restaurant = await Restaurant.findById(restaurantId, "locationName restaurantName location");
-        if (!restaurant) {
-            return res.status(404).json({ 
-                success: false, 
-                message: "Restaurant not found." 
-            });
-        }
-
-        // Calculate distance using user's location coordinates
-        const [userLon, userLat] = user.location.coordinates;
-        const [restLon, restLat] = restaurant.location.coordinates;
-        const distanceKm = parseFloat(calculateDistanceKm(userLat, userLon, restLat, restLon).toFixed(3));
-
-        // Process products from cart
-        const cleanProducts = [];
-        let subTotal = 0;
-        let totalItems = 0;
-
-        for (const prod of cart.products) {
-            const restaurantProduct = prod.restaurantProductId;
-            const recommendedItem = restaurantProduct?.recommended?.id(prod.recommendedId);
-            
-            if (!recommendedItem) continue;
-
-            let unitPrice = recommendedItem.price || 0;
-            const addOnClean = {};
-
-            // Handle addons and variations
-            if (recommendedItem.addons && prod.addOn) {
-                // Half variation
-                if (recommendedItem.addons.variation?.type.includes("Half") && prod.addOn.variation === "Half") {
-                    addOnClean.variation = "Half";
-                    unitPrice = recommendedItem.calculatedPrice?.half || 
-                               Math.round(unitPrice * (recommendedItem.vendorHalfPercentage / 100));
-                }
-                
-                // Plates
-                if (recommendedItem.addons.plates && prod.addOn.plateitems > 0) {
-                    addOnClean.plateitems = prod.addOn.plateitems;
-                    const plateCost = prod.addOn.plateitems * (recommendedItem.vendor_Platecost || 0);
-                    unitPrice += plateCost;
-                }
-            }
-
-            const productTotal = unitPrice * prod.quantity;
-            subTotal += productTotal;
-            totalItems += prod.quantity;
-
-            cleanProducts.push({
-                restaurantProductId: prod.restaurantProductId._id,
-                recommendedId: prod.recommendedId,
-                quantity: prod.quantity,
-                name: recommendedItem.name,
-                basePrice: unitPrice,
-                image: recommendedItem.image || "",
-                ...(Object.keys(addOnClean).length > 0 ? { addOn: addOnClean } : {})
-            });
-        }
-
-        // Calculate delivery charge
-      let deliveryCharge = 0; // Delivery is free for now
-
-
-        // Apply coupon from cart
-        const couponDiscount = cart.couponDiscount || 0;
-        const appliedCoupon = cart.appliedCoupon || null;
-        const totalPayable = subTotal + deliveryCharge - couponDiscount;
-
-        // Auto-set payment status based on payment method
-        const paymentStatus = paymentMethod === "COD" ? "Pending" : "Paid";
-
-        // Create order data
-        const orderData = {
-            userId,
-            cartId: cart._id, // Use cart's _id
-            restaurantId,
-            restaurantLocation: restaurant.locationName || "",
-            deliveryAddress: selectedAddress, // Full address object
-            paymentMethod,
-            paymentStatus,
-            orderStatus: "Pending",
-            totalItems,
-            subTotal,
-            deliveryCharge,
-            couponDiscount,
-            appliedCoupon,
-            totalPayable,
-            products: cleanProducts,
-            distanceKm
-        };
-
-        // Create order
-        const order = await Order.create(orderData);
-        const populatedOrder = await Order.findById(order._id)
-            .populate("restaurantId", "restaurantName locationName")
-            .populate("userId", "name email");
-
-        // Optional: Clear cart after successful order creation
-        // await Cart.findOneAndUpdate(
-        //     { userId }, 
-        //     { 
-        //         products: [], 
-        //         subTotal: 0, 
-        //         deliveryCharge: 0, 
-        //         couponDiscount: 0, 
-        //         finalAmount: 0, 
-        //         totalItems: 0,
-        //         appliedCoupon: null 
-        //     }
-        // );
-
-        return res.status(201).json({
-            success: true,
-            message: paymentStatus === "Paid" ? "Payment successful and order created" : "Order created successfully",
-            data: populatedOrder
-        });
-
-    } catch (error) {
-        console.error("createOrder error:", error);
-        return res.status(500).json({ 
-            success: false, 
-            message: "Server error", 
-            error: error.message 
-        });
+    // Get cart by userId
+    const cart = await Cart.findOne({ userId }).populate('products.restaurantProductId');
+    if (!cart) {
+      return res.status(404).json({
+        success: false,
+        message: "Cart not found for this user."
+      });
     }
+
+    // Check if cart has products
+    if (!cart.products || cart.products.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Cart is empty. Add products to create order."
+      });
+    }
+
+    // Get user with specific address
+    const user = await User.findOne(
+      { _id: userId, "addresses._id": addressId },
+      {
+        name: 1,
+        email: 1,
+        location: 1,
+        referredBy: 1, // Get the referral code if available
+        addresses: { $elemMatch: { _id: addressId } }
+      }
+    );
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User or address not found."
+      });
+    }
+
+    const selectedAddress = user.addresses[0];
+    if (!selectedAddress || !user.location || !user.location.coordinates) {
+      return res.status(400).json({
+        success: false,
+        message: "User location or selected address not found."
+      });
+    }
+
+    // Get restaurant details from cart
+    const restaurantId = cart.restaurantId;
+    if (!restaurantId) {
+      return res.status(400).json({
+        success: false,
+        message: "Restaurant not found in cart."
+      });
+    }
+
+    const restaurant = await Restaurant.findById(restaurantId, "restaurantName location");
+    if (!restaurant) {
+      return res.status(404).json({
+        success: false,
+        message: "Restaurant not found."
+      });
+    }
+
+    // Process products from cart
+    const cleanProducts = [];
+    let subTotal = 0;
+    let totalItems = 0;
+
+    for (const prod of cart.products) {
+      const restaurantProduct = prod.restaurantProductId;
+      const recommendedItem = restaurantProduct?.recommended?.id(prod.recommendedId);
+
+      if (!recommendedItem) continue;
+
+      let unitPrice = recommendedItem.price || 0;
+      const addOnClean = {};
+
+      // Handle addons and variations
+      if (recommendedItem.addons && prod.addOn) {
+        if (recommendedItem.addons.variation?.type.includes("Half") && prod.addOn.variation === "Half") {
+          addOnClean.variation = "Half";
+          unitPrice = recommendedItem.calculatedPrice?.half ||
+            Math.round(unitPrice * (recommendedItem.vendorHalfPercentage / 100));
+        }
+
+        if (recommendedItem.addons.plates && prod.addOn.plateitems > 0) {
+          addOnClean.plateitems = prod.addOn.plateitems;
+          const plateCost = prod.addOn.plateitems * (recommendedItem.vendor_Platecost || 0);
+          unitPrice += plateCost;
+        }
+      }
+
+      const productTotal = unitPrice * prod.quantity;
+      subTotal += productTotal;
+      totalItems += prod.quantity;
+
+      cleanProducts.push({
+        restaurantProductId: prod.restaurantProductId._id,
+        recommendedId: prod.recommendedId,
+        quantity: prod.quantity,
+        name: recommendedItem.name,
+        basePrice: unitPrice,
+        image: recommendedItem.image || "",
+        ...(Object.keys(addOnClean).length > 0 ? { addOn: addOnClean } : {}), // Add addons if any
+      });
+    }
+
+    // **Calculate distanceKm** (using Haversine formula)
+    const userCoords = user.location.coordinates; // Assuming [longitude, latitude]
+    const restaurantCoords = restaurant.location.coordinates; // Assuming [longitude, latitude]
+
+    const distanceKm = haversineDistance(
+      [userCoords[0], userCoords[1]],
+      [restaurantCoords[0], restaurantCoords[1]]
+    );
+
+    // **Get the DeliveryBoy's baseDeliveryCharge** (Assuming we can fetch the nearest available delivery boy)
+    const nearestDeliveryBoy = await DeliveryBoy.findOne({ status: 'Available' }).sort({ createdAt: 1 });
+    const baseDeliveryCharge = nearestDeliveryBoy ? nearestDeliveryBoy.baseDeliveryCharge : 5; // Default base charge if no delivery boy found
+
+    // Calculate the actual delivery charge and round to nearest whole number
+    const calculatedDeliveryCharge = Math.round(baseDeliveryCharge * distanceKm); // Round to nearest integer
+
+    // Apply coupon from cart
+    const couponDiscount = cart.couponDiscount || 0;
+    const appliedCoupon = cart.appliedCoupon || null;
+    const totalPayable = subTotal + calculatedDeliveryCharge - couponDiscount;
+
+    // Round the total payable value to 2 decimal places
+    const roundedTotalPayable = totalPayable.toFixed(2); // Ensure 2 decimals
+
+    // Auto-set payment status based on payment method
+    const paymentStatus = paymentMethod === "COD" ? "Pending" : "Paid";
+
+    // Create order data with restaurant location directly
+    const orderData = {
+      userId,
+      cartId: cart._id, // Use cart's _id
+      restaurantId,
+      restaurantLocation: restaurant.location, // Save the restaurant's location here (directly from restaurant)
+      deliveryAddress: selectedAddress, // Full address object
+      paymentMethod,
+      paymentStatus,
+      orderStatus: "Pending",
+      totalItems,
+      subTotal,
+      deliveryCharge: calculatedDeliveryCharge,
+      couponDiscount,
+      appliedCoupon,
+      totalPayable: roundedTotalPayable,  // Use the rounded totalPayable here
+      products: cleanProducts,
+      distanceKm,
+    };
+
+    // Create order
+    const order = await Order.create(orderData);
+    const populatedOrder = await Order.findById(order._id)
+      .populate("restaurantId", "restaurantName") // Just populate restaurantName if needed
+      .populate("userId", "name email");
+
+    // Optional: Clear cart after successful order creation
+    await Cart.findOneAndUpdate(
+      { userId },
+      {
+        products: [],
+        subTotal: 0,
+        deliveryCharge: 0,
+        couponDiscount: 0,
+        finalAmount: 0,
+        totalItems: 0,
+        appliedCoupon: null,
+      }
+    );
+
+    return res.status(201).json({
+      success: true,
+      message: paymentStatus === "Paid" ? "Payment successful and order created" : "Order created successfully",
+      data: populatedOrder,
+    });
+
+  } catch (error) {
+    console.error("createOrder error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
+  }
 };
+
+
 // -------------------------
 // GET ALL ORDERS
 // -------------------------
@@ -657,24 +684,34 @@ exports.getAllOrders = async (req, res) => {
   try {
     const orders = await Order.find()
       .populate("restaurantId", "restaurantName locationName")
-      .populate("userId") // all user fields
+      .populate("userId") // populate all user fields
       .populate({
         path: "cartId",
         populate: [
-          { path: "userId", select: "name email phone" },  // user inside cart
+          { path: "userId", select: "name email phone" }, // user inside cart
           { path: "restaurantId", select: "restaurantName locationName" }, // restaurant inside cart
           {
             path: "products.restaurantProductId",
-            select: "name price image",  // product details inside cart products array
+            select: "name price image", // product details inside cart products array
           },
-          { path: "appliedCouponId", select: "code discountPercentage" } // coupon details if needed
+          { path: "appliedCouponId", select: "code discountPercentage" }, // coupon details if any
         ],
-      });
+      })
+      // 🆕 Populate deliveryBoyId with selected fields
+      .populate("deliveryBoyId", "fullName mobileNumber vehicleType email deliveryBoyStatus");
 
-    return res.status(200).json({ success: true, data: orders });
+    return res.status(200).json({
+      success: true,
+      message: "All orders fetched successfully.",
+      data: orders,
+    });
   } catch (error) {
     console.error("getAllOrders error:", error);
-    return res.status(500).json({ success: false, message: "Server error", error: error.message });
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
   }
 };
 
@@ -743,44 +780,101 @@ exports.deleteOrder = async (req, res) => {
 // -------------------------
 exports.getOrderById = async (req, res) => {
   try {
-        const { orderId } = req.params;
+    const { orderId } = req.params;
 
-        if (!mongoose.Types.ObjectId.isValid(orderId))
-            return res.status(400).json({ success: false, message: "Valid orderId is required." });
+    if (!mongoose.Types.ObjectId.isValid(orderId))
+      return res.status(400).json({ success: false, message: "Valid orderId is required." });
 
-        let order = await Order.findById(orderId)
-            .populate("restaurantId", "restaurantName locationName")
-            .populate("userId", "fullName mobileNumber"); // optional user info
+    let order = await Order.findById(orderId)
+      .populate("restaurantId", "restaurantName locationName")
+      .populate("userId", "fullName mobileNumber"); // optional user info
 
-        if (!order)
-            return res.status(404).json({ success: false, message: "Order not found." });
+    if (!order)
+      return res.status(404).json({ success: false, message: "Order not found." });
 
-        return res.status(200).json({
-            success: true,
-            message: "Order fetched successfully",
-            data: order
-        });
+    return res.status(200).json({
+      success: true,
+      message: "Order fetched successfully",
+      data: order
+    });
 
-    } catch (error) {
-        console.error("getOrderById error:", error);
-        return res.status(500).json({ success: false, message: "Server error", error: error.message });
-    }
+  } catch (error) {
+    console.error("getOrderById error:", error);
+    return res.status(500).json({ success: false, message: "Server error", error: error.message });
+  }
 };
 
 exports.getOrdersByUserId = async (req, res) => {
-     try {
-        const { userId } = req.params;
-        if (!mongoose.Types.ObjectId.isValid(userId)) return res.status(400).json({ success: false, message: "Valid userId is required." });
-
-        const orders = await Order.find({ userId }).populate("restaurantId", "restaurantName locationName");
-        return res.status(200).json({ success: true, data: orders });
-    } catch (error) {
-        console.error("getOrderByUserId error:", error);
-        return res.status(500).json({ success: false, message: "Server error", error: error.message });
+  try {
+    const { userId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Valid userId is required." });
     }
+
+    // Build filter object dynamically
+    const filter = { userId };
+
+    // If orderStatus is passed in query, add that
+    if (req.query.orderStatus) {
+      filter.orderStatus = req.query.orderStatus;
+    }
+
+    // If “today” filter is requested (say via `today=true`), add date filter
+    if (req.query.today === "true") {
+      const startOfDay = new Date();
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date();
+      endOfDay.setHours(23, 59, 59, 999);
+      filter.createdAt = { $gte: startOfDay, $lte: endOfDay };
+    }
+
+    const orders = await Order.find(filter)
+      .populate("restaurantId", "restaurantName locationName");
+
+    return res.status(200).json({ success: true, data: orders });
+  } catch (error) {
+    console.error("getOrdersByUserId error:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Server error", error: error.message });
+  }
 };
 
 
+
+
+exports.getPreviousOrdersByUserId = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    // Validate userId
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Valid userId is required." });
+    }
+
+    // Find orders for that user with status "Completed"
+    const orders = await Order.find({
+      userId,
+      orderStatus: "Completed"
+    }).populate("restaurantId", "restaurantName locationName");
+
+    return res.status(200).json({
+      success: true,
+      data: orders
+    });
+  } catch (error) {
+    console.error("getCompletedOrdersByUserId error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message
+    });
+  }
+};
 
 
 
@@ -844,9 +938,9 @@ exports.getAcceptedOrdersByUserId = async (req, res) => {
         riderDetails:
           order.deliveryStatus === "Picked"
             ? {
-                name: order.deliveryBoyId?.fullName || "Delivery Boy",
-                contact: order.deliveryBoyId?.mobileNumber || "N/A"
-              }
+              name: order.deliveryBoyId?.fullName || "Delivery Boy",
+              contact: order.deliveryBoyId?.mobileNumber || "N/A"
+            }
             : null
       };
     });
@@ -872,81 +966,86 @@ exports.getAcceptedOrdersByUserId = async (req, res) => {
 // -------------------------
 exports.updateOrderByUserId = async (req, res) => {
   try {
-        const { userId } = req.body;
-        const { orderId } = req.params;
-        const updateFields = req.body.update || {}; // fields to update
+    const { userId } = req.body;
+    const { orderId } = req.params;
+    const updateFields = req.body.update || {}; // fields to update
 
-        if (!mongoose.Types.ObjectId.isValid(userId))
-            return res.status(400).json({ success: false, message: "Valid userId is required." });
+    if (!mongoose.Types.ObjectId.isValid(userId))
+      return res.status(400).json({ success: false, message: "Valid userId is required." });
 
-        if (!mongoose.Types.ObjectId.isValid(orderId))
-            return res.status(400).json({ success: false, message: "Valid orderId is required." });
+    if (!mongoose.Types.ObjectId.isValid(orderId))
+      return res.status(400).json({ success: false, message: "Valid orderId is required." });
 
-        let order = await Order.findById(orderId);
-        if (!order) return res.status(404).json({ success: false, message: "Order not found." });
+    let order = await Order.findById(orderId);
+    if (!order) return res.status(404).json({ success: false, message: "Order not found." });
 
-        if (order.userId.toString() !== userId)
-            return res.status(403).json({ success: false, message: "You are not authorized to update this order." });
+    if (order.userId.toString() !== userId)
+      return res.status(403).json({ success: false, message: "You are not authorized to update this order." });
 
-        // Allowed fields to update (optional: add more fields if needed)
-        const allowedFields = ["paymentStatus", "orderStatus", "paymentMethod"];
-        for (const key of allowedFields) {
-            if (updateFields[key] !== undefined) {
-                order[key] = updateFields[key];
-            }
-        }
-
-        await order.save();
-
-        order = await Order.findById(order._id)
-            .populate("restaurantId", "restaurantName locationName");
-
-        return res.status(200).json({
-            success: true,
-            message: "Order updated successfully",
-            data: order
-        });
-
-    } catch (error) {
-        console.error("updateOrderByUserId error:", error);
-        return res.status(500).json({ success: false, message: "Server error", error: error.message });
+    // Allowed fields to update (optional: add more fields if needed)
+    const allowedFields = ["paymentStatus", "orderStatus", "paymentMethod"];
+    for (const key of allowedFields) {
+      if (updateFields[key] !== undefined) {
+        order[key] = updateFields[key];
+      }
     }
+
+    await order.save();
+
+    order = await Order.findById(order._id)
+      .populate("restaurantId", "restaurantName locationName");
+
+    return res.status(200).json({
+      success: true,
+      message: "Order updated successfully",
+      data: order
+    });
+
+  } catch (error) {
+    console.error("updateOrderByUserId error:", error);
+    return res.status(500).json({ success: false, message: "Server error", error: error.message });
+  }
 };
 // -------------------------
 // DELETE ORDER BY USER ID
 // -------------------------
 exports.deleteOrderByUserId = async (req, res) => {
   try {
-        const { userId } = req.body;
-        const { orderId } = req.params;
+    const { userId } = req.body;
+    const { orderId } = req.params;
 
-        if (!mongoose.Types.ObjectId.isValid(userId))
-            return res.status(400).json({ success: false, message: "Valid userId is required." });
+    if (!mongoose.Types.ObjectId.isValid(userId))
+      return res.status(400).json({ success: false, message: "Valid userId is required." });
 
-        if (!mongoose.Types.ObjectId.isValid(orderId))
-            return res.status(400).json({ success: false, message: "Valid orderId is required." });
+    if (!mongoose.Types.ObjectId.isValid(orderId))
+      return res.status(400).json({ success: false, message: "Valid orderId is required." });
 
-        const order = await Order.findById(orderId);
-        if (!order) return res.status(404).json({ success: false, message: "Order not found." });
+    const order = await Order.findById(orderId);
+    if (!order) return res.status(404).json({ success: false, message: "Order not found." });
 
-        if (order.userId.toString() !== userId)
-            return res.status(403).json({ success: false, message: "You are not authorized to delete this order." });
+    if (order.userId.toString() !== userId)
+      return res.status(403).json({ success: false, message: "You are not authorized to delete this order." });
 
-        await order.deleteOne();
+    await order.deleteOne();
 
-        return res.status(200).json({
-            success: true,
-            message: "Order deleted successfully"
-        });
+    return res.status(200).json({
+      success: true,
+      message: "Order deleted successfully"
+    });
 
-    } catch (error) {
-        console.error("deleteOrderByUserId error:", error);
-        return res.status(500).json({ success: false, message: "Server error", error: error.message });
-    }
+  } catch (error) {
+    console.error("deleteOrderByUserId error:", error);
+    return res.status(500).json({ success: false, message: "Server error", error: error.message });
+  }
 };
-// Vendor accept order
 const haversineDistance = (coords1, coords2) => {
   const toRad = x => (x * Math.PI) / 180;
+
+  // Ensure coords1 and coords2 are arrays with 2 elements (longitude, latitude)
+  if (!Array.isArray(coords1) || !Array.isArray(coords2)) {
+    throw new Error('Both coords1 and coords2 should be arrays containing longitude and latitude.');
+  }
+
   const [lon1, lat1] = coords1;
   const [lon2, lat2] = coords2;
 
@@ -959,68 +1058,90 @@ const haversineDistance = (coords1, coords2) => {
     Math.sin(dLon / 2) ** 2;
 
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
+  return R * c; // Distance in kilometers
 };
+
 
 exports.vendorAcceptOrder = async (req, res) => {
   try {
-    const orderId = req.params.orderId;
+    const { orderId, vendorId } = req.params;  // Extract orderId and vendorId from the URL parameters
+    const { orderStatus } = req.body;  // Extract orderStatus from the request body
 
-    // Step 1: Find and update order status to "Accepted"
+    // Step 1: Find the order by orderId
     const order = await Order.findById(orderId);
     if (!order) {
       return res.status(404).json({ success: false, message: "Order not found" });
     }
 
-    // Step 2: Get user's delivery location
-    const user = await User.findById(order.userId);
-    if (!user || !user.location || !user.location.coordinates) {
-      return res.status(400).json({ success: false, message: "User location not available" });
+    // Step 2: Verify if the restaurantId in the order matches the provided vendorId
+    if (order.restaurantId.toString() !== vendorId) {
+      return res.status(403).json({ success: false, message: "Unauthorized action: Vendor ID does not match the order's restaurant" });
     }
 
-    const userCoords = user.location.coordinates;
+    // Step 3: Get the restaurant location from the order
+    const restaurantCoords = order.restaurantLocation?.coordinates || [0, 0];
+    if (restaurantCoords.length === 0) {
+      return res.status(400).json({ success: false, message: "Restaurant location not available" });
+    }
 
-    // Step 3: Find active delivery boys within 10 km of user
-    const nearbyDeliveryBoys = await DeliveryBoy.find({
-      isActive: true,
-      location: {
-        $nearSphere: {
-          $geometry: {
-            type: "Point",
-            coordinates: userCoords,
-          },
-          $maxDistance: 10000 // 10 km in meters
-        }
-      }
-    });
+  // Step 4: Find active delivery boys within 10 km of the restaurant's location
+const nearbyDeliveryBoys = await DeliveryBoy.find({
+  location: {
+    $nearSphere: {
+      $geometry: {
+        type: "Point",
+        coordinates: restaurantCoords,  // restaurant coordinates
+      },
+      $maxDistance: 10000 // 10 km in meters
+    }
+  },
+  //isActive: true,        // Ensure delivery boy is active
+  //currentOrder: false    // Ensure delivery boy does not have an active order
+});
+
 
     if (!nearbyDeliveryBoys.length) {
-      return res.status(404).json({ success: false, message: "No delivery boy found within 10 km" });
+      return res.status(404).json({ success: false, message: "No delivery boys found within 10 km or all are busy" });
     }
 
-    const assignedDeliveryBoy = nearbyDeliveryBoys[0];
+    // Step 5: Collect the available delivery boys' information (No need to calculate distance for charge)
+    let deliveryBoysInfo = [];
 
-    // Step 4: Calculate pickup and drop distances
-    const restaurantCoords = order.restaurantLocation?.coordinates || [0, 0];
-    const pickupDistance = haversineDistance(assignedDeliveryBoy.location.coordinates, restaurantCoords);
-    const dropDistance = haversineDistance(restaurantCoords, userCoords);
-    const totalDistance = pickupDistance + dropDistance;
+    for (let i = 0; i < nearbyDeliveryBoys.length; i++) {
+      const deliveryBoy = nearbyDeliveryBoys[i];
+      deliveryBoysInfo.push({
+        deliveryBoyId: deliveryBoy._id,
+        fullName: deliveryBoy.fullName,
+        mobileNumber: deliveryBoy.mobileNumber,
+        vehicleType: deliveryBoy.vehicleType,
+        walletBalance: deliveryBoy.walletBalance,
+        status: deliveryBoy.deliveryBoyStatus,
+      });
+    }
 
-    // Step 5: Update order with assignment and distances
-    order.orderStatus = "Accepted";
-    order.deliveryBoyId = assignedDeliveryBoy._id;
-    order.deliveryStatus = "Assigned";
+    // Step 6: Update order status with the provided value from the request body
+    order.orderStatus = orderStatus || "Pending";  // Default to "Pending" if no orderStatus is provided
+    order.deliveryStatus = "Pending"; // Always set deliveryStatus to "Pending"
     order.acceptedAt = new Date();
-    order.distanceKm = parseFloat(totalDistance.toFixed(2)); // optional rounding
+    order.distanceKm = 0;  // Distance calculation could be added here if necessary
 
+    // Step 7: Add the available delivery boys to the order
+    order.availableDeliveryBoys = deliveryBoysInfo;  // Store available delivery boys in the order
+
+    // Step 8: Return the delivery charge from the order directly
+    const deliveryCharge = order.deliveryCharge || 0;  // Assuming deliveryCharge is stored in the order
+
+    // Save the order with updated availableDeliveryBoys
     await order.save();
 
-    // Step 6: Respond to client
+    // Step 9: Respond with available delivery boys, the updated order status, and the delivery charge
     res.status(200).json({
       success: true,
-      message: "Order accepted and delivery boy assigned",
+      message: "Order accepted, delivery boys available for this order",
       order,
-      deliveryBoy: assignedDeliveryBoy
+      availableDeliveryBoys: deliveryBoysInfo, // List of available delivery boys with details
+      deliveryCharge,  // Show the delivery charge directly from the order
+      count: deliveryBoysInfo.length, // Number of delivery boys available
     });
 
   } catch (err) {
@@ -1032,6 +1153,7 @@ exports.vendorAcceptOrder = async (req, res) => {
     });
   }
 };
+
 
 // Assign delivery partner
 exports.assignDeliveryAndTrack = async (req, res) => {
@@ -1161,5 +1283,637 @@ exports.getOrdersByStatus = async (req, res) => {
   } catch (error) {
     console.error("getOrdersByStatus error:", error);
     return res.status(500).json({ success: false, message: "Server error", error: error.message });
+  }
+};
+
+
+
+exports.acceptOrderByRestaurant = async (req, res) => {
+  try {
+    const { restaurantId, orderId, orderStatus } = req.body;
+
+    // Validate required fields
+    if (!restaurantId || !orderId || !orderStatus) {
+      return res.status(400).json({
+        success: false,
+        message: "restaurantId, orderId, and orderStatus are required.",
+      });
+    }
+
+    // Validate orderStatus value (optional: you can add allowed statuses)
+
+    // Find the order
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found.",
+      });
+    }
+
+    // Check if the order belongs to the restaurant
+    if (order.restaurantId.toString() !== restaurantId) {
+      return res.status(400).json({
+        success: false,
+        message: "This order doesn't belong to your restaurant.",
+      });
+    }
+
+    // Update order status dynamically
+    order.orderStatus = orderStatus;
+    await order.save();
+
+    return res.status(200).json({
+      success: true,
+      message: `Order status has been updated to '${orderStatus}'.`,
+      data: order,
+    });
+  } catch (error) {
+    console.error("Error updating order status by restaurant:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error.",
+      error: error.message,
+    });
+  }
+};
+
+
+
+
+exports.getAcceptedOrdersForRider = async (req, res) => {
+  try {
+    const { deliveryBoyId } = req.params;  // Extract deliveryBoyId from params
+
+    // Step 1: Find the orders where deliveryBoyId is in availableDeliveryBoys and deliveryStatus is 'Pending'
+    const orders = await Order.find({
+      "availableDeliveryBoys.deliveryBoyId": deliveryBoyId,  // Check if deliveryBoyId is in availableDeliveryBoys array
+      deliveryStatus: "Pending"  // Only consider orders with deliveryStatus 'Pending'
+    })
+      .populate("restaurantId")  // Optionally, populate restaurantId to get full restaurant data
+      .select('-availableDeliveryBoys');  // Exclude availableDeliveryBoys from the response
+
+    // Step 2: If no orders are found
+    if (orders.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "No orders found for this delivery boy with 'Pending' status."
+      });
+    }
+
+    // Step 3: Return the full order data where the deliveryBoyId is present and deliveryStatus is 'Pending'
+    return res.status(200).json({
+      success: true,
+      message: "Orders found for the delivery boy.",
+      orders: orders,  // Returning the full order data
+    });
+
+  } catch (err) {
+    console.error("Error fetching orders:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err.message
+    });
+  }
+};
+
+
+
+exports.acceptOrderForRider = async (req, res) => {
+  try {
+    const { orderStatus } = req.body;
+    const { orderId, deliveryBoyId } = req.params;
+
+    // Step 1: Validate the delivery boy
+    const deliveryBoy = await DeliveryBoy.findById(deliveryBoyId);
+    if (!deliveryBoy) {
+      return res.status(404).json({
+        success: false,
+        message: "Delivery boy not found.",
+      });
+    }
+
+    // Step 2: Check if the rider already has a current order
+    if (deliveryBoy.currentOrder) {
+      return res.status(400).json({
+        success: false,
+        message: "This rider already has an active order. Complete it before accepting a new one.",
+      });
+    }
+
+    // Step 3: Validate the order
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found.",
+      });
+    }
+
+    // Step 4: Check if the order has already been accepted by another rider
+    if (order.deliveryStatus === "Rider Accepted") {
+      return res.status(400).json({
+        success: false,
+        message: "This order has already been accepted by another rider.",
+      });
+    }
+
+    // Step 5: Handle Rider Acceptance
+    if (orderStatus === "Rider Accepted" && order.orderStatus === "Accepted") {
+      // Update order status and delivery status
+      order.orderStatus = "Rider Accepted";
+      order.deliveryStatus = "Rider Accepted";
+
+      // Assign the current delivery boy to this order
+      order.deliveryBoyId = deliveryBoy._id;
+
+      // Mark delivery boy as having a current order
+      deliveryBoy.currentOrder = true;
+      
+      // **Update the currentOrderStatus with the order's status**
+      deliveryBoy.currentOrderStatus = orderStatus;  // Add the orderStatus to currentOrderStatus
+
+      // Save both order and delivery boy
+      await order.save();
+      await deliveryBoy.save();
+
+      console.log(`Order ${orderId} accepted by delivery boy ${deliveryBoyId}`);
+
+      return res.status(200).json({
+        success: true,
+        message: "Order accepted by rider.",
+        data: [order],  // Wrapping the order in an array
+      });
+    }
+
+    // Step 6: Handle Rider Rejection
+    if (orderStatus === "Rider Rejected") {
+      order.deliveryStatus = "Rider Rejected";
+      await order.save();
+
+      console.log(`Order ${orderId} rejected by delivery boy ${deliveryBoyId}`);
+
+      // Assign to another delivery boy after 30 seconds
+      setTimeout(async () => {
+        const newDeliveryBoy = await DeliveryBoy.findOne({ status: "Available" });
+
+        if (newDeliveryBoy) {
+          order.deliveryStatus = "Assigned";
+          await order.save();
+          console.log("New delivery boy assigned:", newDeliveryBoy._id);
+        } else {
+          console.log("No available delivery boy found.");
+        }
+      }, 30000);
+
+      return res.status(200).json({
+        success: true,
+        message: "Order status updated to 'Rider Rejected'. New delivery boy will be assigned shortly.",
+        data: [order],  // Wrapping the order in an array
+      });
+    }
+
+    return res.status(400).json({
+      success: false,
+      message: "Invalid order status or request.",
+    });
+  } catch (error) {
+    console.error("Error accepting/rejecting order for rider:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error.",
+      error: error.message,
+    });
+  }
+};
+
+
+
+exports.getOrdersForRider = async (req, res) => {
+  try {
+    const { deliveryBoyId } = req.params;
+
+    // Fetch orders where both the orderStatus and deliveryStatus are "Rider Accepted" and deliveryBoyId is present (assigned to a delivery boy)
+    const riderAcceptedOrders = await Order.find({
+      orderStatus: "Rider Accepted",  // Order status is "Rider Accepted"
+      deliveryStatus: "Rider Accepted",  // Delivery status is "Rider Accepted"
+      deliveryBoyId: deliveryBoyId  // Order is assigned to the specific delivery boy
+    })
+      .populate("restaurantId", "restaurantName locationName")
+      .populate("userId", "name email")
+      .populate("deliveryBoyId", "fullName mobileNumber")
+      .select('-availableDeliveryBoys');  // Exclude availableDeliveryBoys from the response
+
+    // If no orders found
+    if (!riderAcceptedOrders || riderAcceptedOrders.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "No rider accepted orders found for this delivery boy."
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Rider accepted orders fetched successfully.",
+      data: riderAcceptedOrders,
+    });
+  } catch (error) {
+    console.error("Error fetching rider accepted orders:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error.",
+      error: error.message,
+    });
+  }
+};
+
+
+
+exports.getDeliveredOrdersForRider = async (req, res) => {
+  try {
+    const { deliveryBoyId } = req.params; // Extract the deliveryBoyId from params
+
+    // Fetch orders where both the orderStatus and deliveryStatus are "Delivered" and the order is assigned to the specific delivery boy
+    const deliveredOrders = await Order.find({
+      orderStatus: "Delivered",  // Order status is "Delivered"
+      deliveryStatus: "Delivered",  // Delivery status is "Delivered"
+      deliveryBoyId: deliveryBoyId  // Order is assigned to the specific delivery boy
+    })
+      .populate("restaurantId", "restaurantName locationName") // Populate restaurant details
+      .populate("userId", "name email") // Populate user details
+      .populate("deliveryBoyId", "fullName mobileNumber") // Populate delivery boy details
+      .select('-availableDeliveryBoys');  // Exclude the availableDeliveryBoys field from the response
+
+    // If no delivered orders found
+    if (!deliveredOrders || deliveredOrders.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "No delivered orders found for this delivery boy."
+      });
+    }
+
+    // Return the list of delivered orders
+    return res.status(200).json({
+      success: true,
+      message: "Delivered orders fetched successfully.",
+      data: deliveredOrders,
+    });
+  } catch (error) {
+    console.error("Error fetching delivered orders:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error.",
+      error: error.message,
+    });
+  }
+};
+
+
+
+
+exports.acceptPickupForRider = async (req, res) => {
+  try {
+    const { orderStatus } = req.body; // Get orderStatus from the body
+    const { orderId, deliveryBoyId } = req.params; // Get orderId and deliveryBoyId from params
+
+    // Validate the delivery boy
+    const deliveryBoy = await DeliveryBoy.findById(deliveryBoyId);
+    if (!deliveryBoy) {
+      return res.status(404).json({
+        success: false,
+        message: "Delivery boy not found.",
+      });
+    }
+
+    // Validate the order
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found.",
+      });
+    }
+
+    // Ensure the order is in "Rider Accepted" status before proceeding to "Picked"
+    if (orderStatus !== "Picked" || order.orderStatus !== "Rider Accepted" || order.deliveryStatus !== "Rider Accepted") {
+      return res.status(400).json({
+        success: false,
+        message: "Order is not in 'Rider Accepted' status or invalid order status.",
+      });
+    }
+
+    // Change order status and delivery status to "Picked"
+    order.orderStatus = "Picked";  // Change order status to "Picked"
+    order.deliveryStatus = "Picked";  // Update delivery status to "Picked"
+
+    // **Update the currentOrderStatus in DeliveryBoy schema**
+    deliveryBoy.currentOrderStatus = "Picked";  // Set the delivery boy's current order status
+
+    // Save both order and delivery boy
+    await order.save();
+    await deliveryBoy.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Order status updated to 'Picked'.",
+      data: order,
+    });
+  } catch (error) {
+    console.error("Error accepting pickup for rider:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error.",
+      error: error.message,
+    });
+  }
+};
+
+
+
+
+exports.getRiderPickedOrders = async (req, res) => {
+  try {
+    const { deliveryBoyId } = req.params;
+
+    // Fetch orders where both the orderStatus and deliveryStatus are "Picked" and deliveryBoyId is assigned
+    const pickedOrders = await Order.find({
+      orderStatus: "Picked",  // Order status is "Picked"
+      deliveryStatus: "Picked",  // Delivery status is "Picked"
+      deliveryBoyId: deliveryBoyId  // Assigned to the specific delivery boy
+    }).populate("restaurantId", "restaurantName locationName")
+      .populate("userId", "name email")
+      .populate("deliveryBoyId", "fullName mobileNumber");
+
+    // If no orders found
+    if (!pickedOrders || pickedOrders.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "No picked orders found for this delivery boy."
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Picked orders fetched successfully.",
+      data: pickedOrders,
+    });
+  } catch (error) {
+    console.error("Error fetching picked orders:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error.",
+      error: error.message,
+    });
+  }
+};
+
+
+
+
+exports.markOrderAsDelivered = async (req, res) => {
+  try {
+    const { deliveryBoyId, orderId, paymentType } = req.body;
+
+    // Validate the delivery boy
+    const deliveryBoy = await DeliveryBoy.findById(deliveryBoyId);
+    if (!deliveryBoy) {
+      return res.status(404).json({
+        success: false,
+        message: "Delivery boy not found.",
+      });
+    }
+
+    // Validate the order
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found.",
+      });
+    }
+
+    // Ensure the order is in "Picked" status before proceeding to "Delivered"
+    if (order.orderStatus !== "Picked" || order.deliveryStatus !== "Picked") {
+      return res.status(400).json({
+        success: false,
+        message: "Order is not in 'Picked' status.",
+      });
+    }
+
+    // Mark order as delivered and update statuses
+    order.orderStatus = "Delivered";
+    order.deliveryStatus = "Delivered";
+
+    // Store the paymentType in the order
+    if (paymentType) {
+      order.paymentType = paymentType;  // Store payment type in order
+    }
+
+    // Handle payment for COD orders (without UPI ID)
+    if (order.paymentMethod === "COD") {
+      order.paymentStatus = "Paid";  // Update payment status to Paid
+    } else {
+      // For other payment methods, mark as completed
+      order.paymentStatus = "Completed";
+    }
+
+    // Update the delivery boy's wallet
+    const deliveryCharge = order.deliveryCharge || 0;
+    const today = new Date();
+    const dateAdded = today.toISOString();
+
+    deliveryBoy.walletBalance = (deliveryBoy.walletBalance || 0) + deliveryCharge;
+
+    // Add transaction history
+    deliveryBoy.walletTransactions.push({
+      amount: deliveryCharge,
+      dateAdded: dateAdded,
+      type: "delivery",
+      orderId: orderId,
+    });
+
+    // **Update the delivery boy's currentOrderStatus to 'Delivered'**
+    deliveryBoy.currentOrderStatus = "Delivered";  // Set the delivery boy's current order status
+
+    // Set the delivery boy's currentOrder to false (mark as available again)
+    deliveryBoy.currentOrder = false;
+
+    // Save the updated order and delivery boy
+    await order.save();
+    await deliveryBoy.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Order marked as 'Delivered', payment status updated, and delivery charge added to rider's wallet.",
+      data: order,
+    });
+  } catch (error) {
+    console.error("Error marking order as delivered:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error.",
+      error: error.message,
+    });
+  }
+};
+
+
+
+// Controller to generate UPI QR code
+exports.generateUPIQRCode = async (req, res) => {
+   try {
+    const upiId = "juleeperween@ybl"; // Hardcoded UPI ID
+
+    // Generate UPI URL for QR code
+    const upiUrl = `upi://pay?pa=${upiId}&pn=Receiver&tn=Payment&cu=INR`;
+
+    // Generate QR code as a Data URL (base64-encoded image)
+    const qrCodeDataUrl = await QRCode.toDataURL(upiUrl);
+
+    // Send the link with the data URL of the QR code image
+    res.status(200).json({
+      success: true,
+      message: "QR code generated successfully!",
+      qrCodeLink: qrCodeDataUrl,  // Return the base64 QR code data URL
+    });
+  } catch (error) {
+    console.error("Error generating UPI QR code:", error);
+    res.status(500).send("Failed to generate QR code");
+  }
+};
+
+
+exports.getWalletBalanceForDeliveryBoy = async (req, res) => {
+  try {
+    const { deliveryBoyId } = req.params;
+
+    // Validate if the delivery boy exists
+    const deliveryBoy = await DeliveryBoy.findById(deliveryBoyId);
+    if (!deliveryBoy) {
+      return res.status(404).json({
+        success: false,
+        message: "Delivery boy not found.",
+      });
+    }
+
+    // Ensure walletTransactions exists
+    const walletTransactions = deliveryBoy.walletTransactions || [];
+
+    const today = new Date();
+
+    // Helper function to filter transactions based on date range
+    const filterTransactionsByDate = (startDate, endDate) => {
+      return walletTransactions.filter(transaction => {
+        const transactionDate = new Date(transaction.dateAdded);
+        return transactionDate >= startDate && transactionDate <= endDate;
+      });
+    };
+
+    // Get today's date (start of the day)
+    const startOfToday = new Date(today.setHours(0, 0, 0, 0));
+    const endOfToday = new Date(today.setHours(23, 59, 59, 999));
+
+    // Get this week's start and end dates (assuming Monday as start of the week)
+    const startOfWeek = new Date(today.setDate(today.getDate() - today.getDay() + 1));  // Monday
+    const endOfWeek = new Date(today.setDate(today.getDate() - today.getDay() + 7));    // Sunday
+
+    // Get this month's start and end dates
+    const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1); // First day of the current month
+    const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);  // Last day of the current month
+
+    // Calculate today's earnings
+    const todayEarnings = filterTransactionsByDate(startOfToday, endOfToday)
+      .reduce((total, transaction) => total + transaction.amount, 0);
+
+    // Calculate this week's earnings
+    const weekEarnings = filterTransactionsByDate(startOfWeek, endOfWeek)
+      .reduce((total, transaction) => total + transaction.amount, 0);
+
+    // Calculate this month's earnings
+    const monthEarnings = filterTransactionsByDate(startOfMonth, endOfMonth)
+      .reduce((total, transaction) => total + transaction.amount, 0);
+
+    // Helper function to get day of the week
+    const getDayOfWeek = (date) => {
+      const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      return daysOfWeek[date.getDay()];
+    };
+
+    // Calculate daily earnings for the last 7 days
+    const dailyEarnings = [];
+    for (let i = 0; i < 7; i++) {
+      const day = new Date();
+      day.setDate(today.getDate() - i);
+
+      const startOfDay = new Date(day.setHours(0, 0, 0, 0));
+      const endOfDay = new Date(day.setHours(23, 59, 59, 999));
+
+      const earningsForDay = filterTransactionsByDate(startOfDay, endOfDay)
+        .reduce((total, transaction) => total + transaction.amount, 0);
+
+      dailyEarnings.push({
+        date: startOfDay.toISOString().split('T')[0],  // Format date as YYYY-MM-DD
+        day: getDayOfWeek(startOfDay),  // Get the day of the week (e.g., Monday, Tuesday)
+        earnings: earningsForDay,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Wallet balance and filtered earnings fetched successfully.",
+      data: {
+        walletBalance: deliveryBoy.walletBalance || 0,
+        todayEarnings: todayEarnings,
+        weekEarnings: weekEarnings,
+        monthEarnings: monthEarnings,
+        dailyEarnings: dailyEarnings.reverse(),  // Reverse to show from day 1 to day 7
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching wallet balance:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error.",
+      error: error.message,
+    });
+  }
+};
+
+
+
+exports.getAllDeliveredOrders = async (req, res) => {
+  try {
+    const { deliveryBoyId } = req.params;  // Extract deliveryBoyId from request parameters
+
+    // Fetch orders where both the orderStatus and deliveryStatus are "Delivered" and deliveryBoyId is assigned
+    const deliveredOrders = await Order.find({
+      orderStatus: "Delivered",  // Order status is "Delivered"
+      deliveryStatus: "Delivered",  // Delivery status is "Delivered"
+      deliveryBoyId: deliveryBoyId  // Assigned to the specific delivery boy
+    }).populate("restaurantId", "restaurantName locationName")
+      .populate("userId", "name email")
+      .populate("deliveryBoyId", "fullName mobileNumber");
+
+    // If no orders found
+    if (!deliveredOrders || deliveredOrders.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "No delivered orders found for this delivery boy."
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Delivered orders fetched successfully.",
+      data: deliveredOrders,
+    });
+  } catch (error) {
+    console.error("Error fetching delivered orders:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error.",
+      error: error.message,
+    });
   }
 };

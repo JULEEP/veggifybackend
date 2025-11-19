@@ -3,20 +3,30 @@ const HelpUs = require('../models/helpUsModel');
 // POST: Submit issue
 const submitHelpUs = async (req, res) => {
   try {
+    const { userId } = req.params; // <-- yahan se userId liya
     const { name, email, issueType, description } = req.body;
+    
+    const issue = await HelpUs.create({
+      userId,
+      name,
+      email,
+      issueType,
+      description
+    });
 
-    // Validate input
-    if (!name || !email || !issueType || !description) {
-      return res.status(400).json({ message: "All fields are required" });
-    }
+    res.status(201).json({
+      message: "Issue submitted successfully",
+      data: issue
+    });
 
-    const issue = await HelpUs.create({ name, email, issueType, description });
-
-    res.status(201).json({ message: "Issue submitted successfully", data: issue });
   } catch (error) {
-    res.status(500).json({ message: "Server Error", error: error.message });
+    res.status(500).json({
+      message: "Server Error",
+      error: error.message
+    });
   }
 };
+
 
 // GET: Fetch all help requests (optional)
 const getAllHelpUs = async (req, res) => {

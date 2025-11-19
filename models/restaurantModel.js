@@ -1,10 +1,10 @@
 const mongoose = require('mongoose');
+const Schema = mongoose.Schema;
 
 const restaurantSchema = new mongoose.Schema(
   {
     restaurantName: {
       type: String,
-      required: [true, 'Restaurant name is required'],
       trim: true
     },
     description: {
@@ -17,25 +17,30 @@ const restaurantSchema = new mongoose.Schema(
       max: [5, 'Rating cannot exceed 5'],
       default: 0
     },
+   categories: [
+      {
+        type: Schema.Types.ObjectId,
+        ref: 'Category' // Reference to the Category model
+      }
+    ],
     startingPrice: {
       type: Number,
-      required: [true, 'Starting price is required']
     },
     locationName: {
       type: String,
       trim: true,
-      required: [true, 'Location name is required']
+    },
+      status: {
+      type: String,
     },
     location: {
       type: {
         type: String,
         enum: ['Point'],
-        required: true,
         default: 'Point'
       },
       coordinates: {
         type: [Number], // [longitude, latitude]
-        required: true
       }
     },
     email: {
@@ -46,6 +51,23 @@ const restaurantSchema = new mongoose.Schema(
         /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
         'Please enter a valid email address'
       ]
+    },
+     walletBalance: {
+    type: Number,
+    default: 0
+  },
+    // ✅ New field: referral code generated automatically
+    referralCode: {
+      type: String,
+      unique: true, // ensures no duplicate referral codes
+      trim: true,
+    },
+
+    // ✅ New field: optional referral (if someone referred them)
+    referredBy: {
+      type: String,
+      default: null,
+      trim: true,
     },
     mobile: {
       type: String,
@@ -58,11 +80,9 @@ const restaurantSchema = new mongoose.Schema(
     image: {
       public_id: {
         type: String,
-        required: true
       },
       url: {
         type: String,
-        required: true
       }
     }
   },

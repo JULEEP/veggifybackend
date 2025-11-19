@@ -7,13 +7,29 @@ const notificationSchema = new mongoose.Schema({
   },
   type: {
     type: String,
-    enum: ['order', 'update', 'info'],
-    default: 'info'
   },
   read: {
     type: Boolean,
     default: false
-  }
+  },
+   deliveryBoyId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'DeliveryBoy',  // Reference to the DeliveryBoy model
+    },
+      restaurantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Restaurant', },
+    message: {
+      type: String,
+    },
+    notificationType: {
+      type: String,
+    },
+    status: {
+      type: String,
+    },
+    createdAt: {
+      type: Date,
+      default: Date.now
+    },
 }, { timestamps: true });
 
 module.exports = mongoose.model('Notification', notificationSchema);                  

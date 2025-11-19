@@ -18,181 +18,341 @@ function calculateDistanceKm(lat1, lon1, lat2, lon2) {
     return R * c;
 }
 // Add or update cart
+// exports.addToCart = async (req, res) => {
+//     try {
+//         const { userId } = req.params;
+//         const { products, couponId } = req.body;
+
+//         if (!userId || !mongoose.Types.ObjectId.isValid(userId))
+//             return res.status(400).json({ success: false, message: "Valid userId is required." });
+//         if (!products || !Array.isArray(products))
+//             return res.status(400).json({ success: false, message: "Products array is required." });
+
+//         const user = await User.findById(userId);
+//         if (!user || !user.location || !user.location.coordinates)
+//             return res.status(400).json({ success: false, message: "User location not found." });
+//         const [userLon, userLat] = user.location.coordinates;
+
+//         // Load or create cart
+//         let cart = await Cart.findOne({ userId });
+//         if (!cart) {
+//             cart = new Cart({
+//                 userId,
+//                 products: [],
+//                 subTotal: 0,
+//                 deliveryCharge: 0,
+//                 finalAmount: 0,
+//                 totalItems: 0,
+//                 couponDiscount: 0,
+//                 appliedCouponId: null
+//             });
+//         }
+
+//         let restaurantId = cart.restaurantId;
+
+//         for (const item of products) {
+//             const { restaurantProductId, recommendedId, addOn, quantity = 1 } = item;
+
+//             if (!mongoose.Types.ObjectId.isValid(restaurantProductId) || !mongoose.Types.ObjectId.isValid(recommendedId))
+//                 return res.status(400).json({ success: false, message: "Invalid product IDs." });
+
+//             const restaurantProduct = await RestaurantProduct.findById(restaurantProductId);
+//             if (!restaurantProduct) return res.status(404).json({ success: false, message: "Restaurant product not found." });
+
+//             const recommendedItem = restaurantProduct.recommended.id(recommendedId);
+//             if (!recommendedItem) return res.status(404).json({ success: false, message: "Recommended item not found." });
+
+//             if (!restaurantId) restaurantId = restaurantProduct.restaurantId;
+
+//             // Base price
+//             let unitPrice = recommendedItem.price || 0;
+//             let platePrice = 0;
+//             const addOnClean = {};
+//             const hasAddons = recommendedItem.addons && (recommendedItem.addons.variation || recommendedItem.addons.plates);
+
+//             if (hasAddons && addOn) {
+//                 if (recommendedItem.addons.variation && recommendedItem.addons.variation.type.includes("Half") && addOn.variation === "Half") {
+//                     addOnClean.variation = "Half";
+//                     unitPrice = recommendedItem.calculatedPrice?.half || Math.round(unitPrice * (recommendedItem.vendorHalfPercentage / 100));
+//                 }
+//                 if (recommendedItem.addons.plates && addOn.plateitems > 0) {
+//                     addOnClean.plateitems = addOn.plateitems;
+//                     platePrice = addOn.plateitems * (recommendedItem.vendor_Platecost || 0);
+//                 }
+//             }
+
+//             const productData = {
+//                 restaurantProductId,
+//                 recommendedId,
+//                 quantity: Math.abs(quantity),
+//                 name: recommendedItem.name,
+//                 basePrice: unitPrice,
+//                 platePrice: platePrice,
+//                 image: recommendedItem.image || ""
+//             };
+//             if (hasAddons && Object.keys(addOnClean).length > 0) productData.addOn = addOnClean;
+
+//             const existingIndex = cart.products.findIndex(
+//                 p => p.restaurantProductId.toString() === restaurantProductId &&
+//                      p.recommendedId.toString() === recommendedId
+//             );
+
+//             if (existingIndex !== -1) {
+//                 const newQuantity = cart.products[existingIndex].quantity + quantity;
+//                 if (newQuantity <= 0) {
+//                     cart.products.splice(existingIndex, 1);
+//                 } else {
+//                     cart.products[existingIndex].quantity = newQuantity;
+//                     cart.products[existingIndex].basePrice = unitPrice;
+//                     cart.products[existingIndex].platePrice = platePrice;
+//                     if (productData.addOn) cart.products[existingIndex].addOn = productData.addOn;
+//                 }
+//             } else if (quantity > 0) {
+//                 cart.products.push(productData);
+//             }
+//         }
+
+//         cart.restaurantId = restaurantId;
+
+//         // Recalculate totals
+//         let subTotal = 0;
+//         let totalItems = 0;
+//         let distanceKm = 0;
+
+//         for (const prod of cart.products) {
+//             subTotal += (prod.basePrice * prod.quantity) + (prod.platePrice || 0);
+//             totalItems += prod.quantity;
+//         }
+
+//         let deliveryCharge = 0;
+//         if (restaurantId && totalItems > 0) {
+//             const restaurant = await Restaurant.findById(restaurantId);
+//             if (restaurant && restaurant.location && restaurant.location.coordinates) {
+//                 const [restLon, restLat] = restaurant.location.coordinates;
+//                 distanceKm = calculateDistanceKm(userLat, userLon, restLat, restLon);
+//                 deliveryCharge = distanceKm <= 5 ? 20 : 20 + 2 * Math.ceil(distanceKm - 5);
+//             } else {
+//                 deliveryCharge = 20;
+//             }
+//         }
+
+//         // Apply coupon
+// let couponDiscount = 0;
+// let appliedCoupon = null;
+
+// if (couponId && mongoose.Types.ObjectId.isValid(couponId)) {
+//     const coupon = await Coupon.findById(couponId);
+
+//     if (coupon && coupon.isActive) {
+//         // Check if subtotal meets coupon minimum
+//         if (subTotal >= (coupon.minCartAmount || 0)) {
+//             couponDiscount = Math.floor((subTotal * coupon.discountPercentage) / 100);
+//             if (coupon.maxDiscountAmount) {
+//                 couponDiscount = Math.min(couponDiscount, coupon.maxDiscountAmount);
+//             }
+//             appliedCoupon = coupon;
+//         } else {
+//             // Cart does not meet minimum for coupon, so discount = 0
+//             couponDiscount = 0;
+//             appliedCoupon = null;
+//         }
+//     }
+// }
+
+// // Update cart totals
+// cart.subTotal = subTotal;
+// cart.totalItems = totalItems;
+// cart.deliveryCharge = totalItems === 0 ? 0 : deliveryCharge;
+// cart.couponDiscount = couponDiscount;
+// cart.appliedCouponId = appliedCoupon?._id || null;
+// cart.finalAmount = cart.subTotal + cart.deliveryCharge - couponDiscount;
+
+// await cart.save();
+
+// // Response
+// return res.status(200).json({
+//     success: true,
+//     message: "Cart updated successfully",
+//     distanceKm: parseFloat(distanceKm.toFixed(3)),
+//     cart,
+//     appliedCoupon: appliedCoupon
+//         ? {
+//               _id: appliedCoupon._id,
+//               code: appliedCoupon.code,
+//               discountPercentage: appliedCoupon.discountPercentage,
+//               maxDiscountAmount: appliedCoupon.maxDiscountAmount,
+//               minCartAmount: appliedCoupon.minCartAmount,
+//               expiresAt: appliedCoupon.expiresAt,
+//           }
+//         : null,
+//     couponDiscount
+// });
+
+//     } catch (err) {
+//         console.error("Cart Operation Error:", err);
+//         return res.status(500).json({ success: false, message: "Server error", error: err.message });
+//     }
+// };
+
+
+
+
+// Add or update cart
 exports.addToCart = async (req, res) => {
-    try {
-        const { userId } = req.params;
-        const { products, couponId } = req.body;
+  try {
+    const { userId } = req.params;
+    const { products } = req.body;
 
-        if (!userId || !mongoose.Types.ObjectId.isValid(userId))
-            return res.status(400).json({ success: false, message: "Valid userId is required." });
-        if (!products || !Array.isArray(products))
-            return res.status(400).json({ success: false, message: "Products array is required." });
+    if (!userId || !mongoose.Types.ObjectId.isValid(userId))
+      return res.status(400).json({ success: false, message: "Valid userId is required." });
 
-        const user = await User.findById(userId);
-        if (!user || !user.location || !user.location.coordinates)
-            return res.status(400).json({ success: false, message: "User location not found." });
-        const [userLon, userLat] = user.location.coordinates;
+    if (!products || !Array.isArray(products))
+      return res.status(400).json({ success: false, message: "Products array is required." });
 
-        // Load or create cart
-        let cart = await Cart.findOne({ userId });
-        if (!cart) {
-            cart = new Cart({
-                userId,
-                products: [],
-                subTotal: 0,
-                deliveryCharge: 0,
-                finalAmount: 0,
-                totalItems: 0,
-                couponDiscount: 0,
-                appliedCouponId: null
-            });
+    const user = await User.findById(userId);
+    if (!user || !user.location || !user.location.coordinates)
+      return res.status(400).json({ success: false, message: "User location not found." });
+
+    const [userLon, userLat] = user.location.coordinates;
+
+    // Load or create cart
+    let cart = await Cart.findOne({ userId });
+    if (!cart) {
+      cart = new Cart({
+        userId,
+        products: [],
+        subTotal: 0,
+        deliveryCharge: 0,
+        finalAmount: 0,
+        totalItems: 0,
+        couponDiscount: 0,
+        appliedCouponId: null
+      });
+    }
+
+    let restaurantId = cart.restaurantId;
+
+    for (const item of products) {
+      const { restaurantProductId, recommendedId, addOn, quantity = 1 } = item;
+
+      if (!mongoose.Types.ObjectId.isValid(restaurantProductId) || !mongoose.Types.ObjectId.isValid(recommendedId))
+        return res.status(400).json({ success: false, message: "Invalid product IDs." });
+
+      const restaurantProduct = await RestaurantProduct.findById(restaurantProductId);
+      if (!restaurantProduct) return res.status(404).json({ success: false, message: "Restaurant product not found." });
+
+      const recommendedItem = restaurantProduct.recommended.id(recommendedId);
+      if (!recommendedItem) return res.status(404).json({ success: false, message: "Recommended item not found." });
+
+      if (!restaurantId) restaurantId = restaurantProduct.restaurantId;
+
+      // Base price calculation
+      let unitPrice = recommendedItem.price || 0;
+      let platePrice = 0;
+      const addOnClean = {};
+      const hasAddons = recommendedItem.addons && (recommendedItem.addons.variation || recommendedItem.addons.plates);
+
+      if (hasAddons && addOn) {
+        if (
+          recommendedItem.addons.variation &&
+          recommendedItem.addons.variation.type.includes("Half") &&
+          addOn.variation === "Half"
+        ) {
+          addOnClean.variation = "Half";
+          unitPrice =
+            recommendedItem.calculatedPrice?.half ||
+            Math.round(unitPrice * (recommendedItem.vendorHalfPercentage / 100));
         }
-
-        let restaurantId = cart.restaurantId;
-
-        for (const item of products) {
-            const { restaurantProductId, recommendedId, addOn, quantity = 1 } = item;
-
-            if (!mongoose.Types.ObjectId.isValid(restaurantProductId) || !mongoose.Types.ObjectId.isValid(recommendedId))
-                return res.status(400).json({ success: false, message: "Invalid product IDs." });
-
-            const restaurantProduct = await RestaurantProduct.findById(restaurantProductId);
-            if (!restaurantProduct) return res.status(404).json({ success: false, message: "Restaurant product not found." });
-
-            const recommendedItem = restaurantProduct.recommended.id(recommendedId);
-            if (!recommendedItem) return res.status(404).json({ success: false, message: "Recommended item not found." });
-
-            if (!restaurantId) restaurantId = restaurantProduct.restaurantId;
-
-            // Base price
-            let unitPrice = recommendedItem.price || 0;
-            let platePrice = 0;
-            const addOnClean = {};
-            const hasAddons = recommendedItem.addons && (recommendedItem.addons.variation || recommendedItem.addons.plates);
-
-            if (hasAddons && addOn) {
-                if (recommendedItem.addons.variation && recommendedItem.addons.variation.type.includes("Half") && addOn.variation === "Half") {
-                    addOnClean.variation = "Half";
-                    unitPrice = recommendedItem.calculatedPrice?.half || Math.round(unitPrice * (recommendedItem.vendorHalfPercentage / 100));
-                }
-                if (recommendedItem.addons.plates && addOn.plateitems > 0) {
-                    addOnClean.plateitems = addOn.plateitems;
-                    platePrice = addOn.plateitems * (recommendedItem.vendor_Platecost || 0);
-                }
-            }
-
-            const productData = {
-                restaurantProductId,
-                recommendedId,
-                quantity: Math.abs(quantity),
-                name: recommendedItem.name,
-                basePrice: unitPrice,
-                platePrice: platePrice,
-                image: recommendedItem.image || ""
-            };
-            if (hasAddons && Object.keys(addOnClean).length > 0) productData.addOn = addOnClean;
-
-            const existingIndex = cart.products.findIndex(
-                p => p.restaurantProductId.toString() === restaurantProductId &&
-                     p.recommendedId.toString() === recommendedId
-            );
-
-            if (existingIndex !== -1) {
-                const newQuantity = cart.products[existingIndex].quantity + quantity;
-                if (newQuantity <= 0) {
-                    cart.products.splice(existingIndex, 1);
-                } else {
-                    cart.products[existingIndex].quantity = newQuantity;
-                    cart.products[existingIndex].basePrice = unitPrice;
-                    cart.products[existingIndex].platePrice = platePrice;
-                    if (productData.addOn) cart.products[existingIndex].addOn = productData.addOn;
-                }
-            } else if (quantity > 0) {
-                cart.products.push(productData);
-            }
+        if (recommendedItem.addons.plates && addOn.plateitems > 0) {
+          addOnClean.plateitems = addOn.plateitems;
+          platePrice = addOn.plateitems * (recommendedItem.vendor_Platecost || 0);
         }
+      }
 
-        cart.restaurantId = restaurantId;
+      const productData = {
+        restaurantProductId,
+        recommendedId,
+        quantity: Math.abs(quantity),
+        name: recommendedItem.name,
+        basePrice: unitPrice,
+        platePrice: platePrice,
+        image: recommendedItem.image || ""
+      };
+      if (hasAddons && Object.keys(addOnClean).length > 0) productData.addOn = addOnClean;
 
-        // Recalculate totals
-        let subTotal = 0;
-        let totalItems = 0;
-        let distanceKm = 0;
+      const existingIndex = cart.products.findIndex(
+        p =>
+          p.restaurantProductId.toString() === restaurantProductId &&
+          p.recommendedId.toString() === recommendedId
+      );
 
-        for (const prod of cart.products) {
-            subTotal += (prod.basePrice * prod.quantity) + (prod.platePrice || 0);
-            totalItems += prod.quantity;
-        }
-
-        let deliveryCharge = 0;
-        if (restaurantId && totalItems > 0) {
-            const restaurant = await Restaurant.findById(restaurantId);
-            if (restaurant && restaurant.location && restaurant.location.coordinates) {
-                const [restLon, restLat] = restaurant.location.coordinates;
-                distanceKm = calculateDistanceKm(userLat, userLon, restLat, restLon);
-                deliveryCharge = distanceKm <= 5 ? 20 : 20 + 2 * Math.ceil(distanceKm - 5);
-            } else {
-                deliveryCharge = 20;
-            }
-        }
-
-        // Apply coupon
-let couponDiscount = 0;
-let appliedCoupon = null;
-
-if (couponId && mongoose.Types.ObjectId.isValid(couponId)) {
-    const coupon = await Coupon.findById(couponId);
-
-    if (coupon && coupon.isActive) {
-        // Check if subtotal meets coupon minimum
-        if (subTotal >= (coupon.minCartAmount || 0)) {
-            couponDiscount = Math.floor((subTotal * coupon.discountPercentage) / 100);
-            if (coupon.maxDiscountAmount) {
-                couponDiscount = Math.min(couponDiscount, coupon.maxDiscountAmount);
-            }
-            appliedCoupon = coupon;
+      if (existingIndex !== -1) {
+        const newQuantity = cart.products[existingIndex].quantity + quantity;
+        if (newQuantity <= 0) {
+          cart.products.splice(existingIndex, 1);
         } else {
-            // Cart does not meet minimum for coupon, so discount = 0
-            couponDiscount = 0;
-            appliedCoupon = null;
+          cart.products[existingIndex].quantity = newQuantity;
+          cart.products[existingIndex].basePrice = unitPrice;
+          cart.products[existingIndex].platePrice = platePrice;
+          if (productData.addOn) cart.products[existingIndex].addOn = productData.addOn;
         }
+      } else if (quantity > 0) {
+        cart.products.push(productData);
+      }
     }
-}
 
-// Update cart totals
-cart.subTotal = subTotal;
-cart.totalItems = totalItems;
-cart.deliveryCharge = totalItems === 0 ? 0 : deliveryCharge;
-cart.couponDiscount = couponDiscount;
-cart.appliedCouponId = appliedCoupon?._id || null;
-cart.finalAmount = cart.subTotal + cart.deliveryCharge - couponDiscount;
+    cart.restaurantId = restaurantId;
 
-await cart.save();
+    // Recalculate totals
+    let subTotal = 0;
+    let totalItems = 0;
+    let distanceKm = 0;
 
-// Response
-return res.status(200).json({
-    success: true,
-    message: "Cart updated successfully",
-    distanceKm: parseFloat(distanceKm.toFixed(3)),
-    cart,
-    appliedCoupon: appliedCoupon
-        ? {
-              _id: appliedCoupon._id,
-              code: appliedCoupon.code,
-              discountPercentage: appliedCoupon.discountPercentage,
-              maxDiscountAmount: appliedCoupon.maxDiscountAmount,
-              minCartAmount: appliedCoupon.minCartAmount,
-              expiresAt: appliedCoupon.expiresAt,
-          }
-        : null,
-    couponDiscount
-});
-
-    } catch (err) {
-        console.error("Cart Operation Error:", err);
-        return res.status(500).json({ success: false, message: "Server error", error: err.message });
+    for (const prod of cart.products) {
+      subTotal += (prod.basePrice * prod.quantity) + (prod.platePrice || 0);
+      totalItems += prod.quantity;
     }
+
+    let deliveryCharge = 0;
+    if (restaurantId && totalItems > 0) {
+      const restaurant = await Restaurant.findById(restaurantId);
+      if (restaurant && restaurant.location && restaurant.location.coordinates) {
+        const [restLon, restLat] = restaurant.location.coordinates;
+        distanceKm = calculateDistanceKm(userLat, userLon, restLat, restLon);
+        deliveryCharge = distanceKm <= 5 ? 20 : 20 + 2 * Math.ceil(distanceKm - 5);
+      } else {
+        deliveryCharge = 20;
+      }
+    }
+
+    // Update totals
+    cart.subTotal = subTotal;
+    cart.totalItems = totalItems;
+    cart.deliveryCharge = totalItems === 0 ? 0 : deliveryCharge;
+
+    // Reset coupon if subtotal changes
+    cart.couponDiscount = 0;
+    cart.appliedCouponId = null;
+    cart.finalAmount = cart.subTotal + cart.deliveryCharge;
+
+    await cart.save();
+
+    // Response
+    return res.status(200).json({
+      success: true,
+      message: "Cart updated successfully",
+      distanceKm: parseFloat(distanceKm.toFixed(3)),
+      cart
+    });
+
+  } catch (err) {
+    console.error("Cart Operation Error:", err);
+    return res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
 };
+
+
+
 // Get all carts
 exports.getAllCarts = async (req, res) => {
     try {
@@ -495,4 +655,73 @@ exports.deleteProductFromCart = async (req, res) => {
         console.error("Delete Product From Cart Error:", err);
         return res.status(500).json({ success: false, message: "Server error", error: err.message });
     }
+};
+
+
+
+
+// Apply coupon on existing cart
+exports.applyCouponToCart = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { couponCode } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ success: false, message: "Invalid user ID" });
+    }
+
+    const cart = await Cart.findOne({ userId });
+    if (!cart || cart.products.length === 0) {
+      return res.status(404).json({ success: false, message: "Cart is empty" });
+    }
+
+    const coupon = await Coupon.findOne({ code: couponCode, isActive: true });
+    if (!coupon) {
+      return res.status(400).json({ success: false, message: "Invalid or inactive coupon" });
+    }
+
+    // Check minimum cart amount
+    if (cart.subTotal < (coupon.minCartAmount || 0)) {
+      return res.status(400).json({
+        success: false,
+        message: `Minimum cart value of ₹${coupon.minCartAmount} required to apply this coupon.`,
+      });
+    }
+
+    // Calculate discount
+    let couponDiscount = Math.floor((cart.subTotal * coupon.discountPercentage) / 100);
+    if (coupon.maxDiscountAmount) {
+      couponDiscount = Math.min(couponDiscount, coupon.maxDiscountAmount);
+    }
+
+    // Update cart totals
+    cart.couponDiscount = couponDiscount;
+    cart.appliedCouponId = coupon._id;
+    cart.finalAmount = cart.subTotal + cart.deliveryCharge - couponDiscount;
+
+    await cart.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Coupon applied successfully",
+      data: {
+        cart,
+        coupon: {
+          code: coupon.code,
+          discountPercentage: coupon.discountPercentage,
+          maxDiscountAmount: coupon.maxDiscountAmount,
+          minCartAmount: coupon.minCartAmount,
+          expiresAt: coupon.expiresAt,
+        },
+        couponDiscount,
+      },
+    });
+  } catch (err) {
+    console.error("Apply Coupon Error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err.message,
+    });
+  }
 };

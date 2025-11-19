@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const { Category } = require("./foodSystemModel");
 
+
 const RestaurantProductSchema = new mongoose.Schema({
   restaurantName: { type: String },
   locationName: { type: String },
@@ -36,10 +37,14 @@ const RestaurantProductSchema = new mongoose.Schema({
     }
   }],
 
+     categoryId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Category',  // Reference to the Category model
+      },
   user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   restaurantId: { type: mongoose.Schema.Types.ObjectId, ref: "Restaurant" },
   timeAndKm: { time: String, distance: String },
-  status: { type: String, enum: ["active", "inactive"], default: "active" }
+  status: { type: String, enum: ["active", "inactive"], default: "pending" }
 }, {
   timestamps: true,
   toJSON: { virtuals: true },

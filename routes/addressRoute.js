@@ -19,7 +19,7 @@ router.delete('/product/:id', controller.deleteProductById);
 
 
 // Wishlist
-router.post('/wishlist/toggle/:userId', controller.addToWishlist);
+router.post('/wishlist/:userId', controller.addToWishlist);
 router.get('/wishlist/:userId', controller.getWishlist);
 router.delete('/wishlist/:userId/:productId', controller.removeFromWishlist);
 
@@ -28,13 +28,29 @@ router.delete('/wishlist/:userId/:productId', controller.removeFromWishlist);
 router.post('/createorder', controller.createOrder);
 router.get('/orders', controller.getAllOrders);
 router.get('/userorders/:userId', controller.getOrdersByUserId);
+router.get('/userpreviousorders/:userId', controller.getPreviousOrdersByUserId);
 router.get("/acceptedorders/:userId", controller.getAcceptedOrdersByUserId);
 router.put('/orders/:orderId', controller.updateOrderByUserId);
 router.delete('/orders/user/:userId/:orderId', controller.deleteOrderByUserId);
 
 // Vendor accepts order
-router.put('/acceptorder/:orderId', controller.vendorAcceptOrder);
+router.put('/acceptorder/:orderId/:vendorId', controller.vendorAcceptOrder);
 
+// For Restaurant to accept an order
+router.put("/restaurantaccept-order", controller.acceptOrderByRestaurant);
+
+// For Rider to get accepted orders
+router.get("/myorders/:deliveryBoyId", controller.getAcceptedOrdersForRider);
+
+// For Rider to accept an order
+router.put("/accept-order/:orderId/:deliveryBoyId", controller.acceptOrderForRider);
+router.get("/myacceptedorders/:deliveryBoyId", controller.getOrdersForRider);
+router.get("/mydeliveredorders/:deliveryBoyId", controller.getDeliveredOrdersForRider);
+router.put('/accept-pickup/:orderId/:deliveryBoyId', controller.acceptPickupForRider);
+router.get('/riderpicked-orders/:deliveryBoyId', controller.getRiderPickedOrders);
+router.put('/markorder-delivered', controller.markOrderAsDelivered);
+router.get('/generateupiqr', controller.generateUPIQRCode);
+router.get('/mywallet/:deliveryBoyId', controller.getWalletBalanceForDeliveryBoy);
 // Assign delivery partner
 router.put('/order/:orderId/assign-delivery', controller.assignDeliveryAndTrack);
 
@@ -43,9 +59,11 @@ router.get('/orders/today/:userId', controller.getTodaysBookingsByUserId);
 
 // Get orders by status
 router.get('/orders/:userId/:status', controller.getOrdersByStatus);
+router.get('/delivered-orders/:deliveryBoyId', controller.getAllDeliveredOrders);
 
 
-router.post('/help', submitHelpUs);
+
+router.post('/help/:userId', submitHelpUs);
 router.get('/help', getAllHelpUs); // Optional: only if admin needs to see the list
 
 

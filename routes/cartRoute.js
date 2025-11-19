@@ -21,6 +21,7 @@ router.delete('/cart/:id', cartController.deleteCartById);
 // routes/cartRoutes.js
 router.put("/update-quantity/:userId", cartController.updateCartItemQuantity);
 router.delete('/deletecartproduct/:userId/:productId/:recommendedId', cartController.deleteProductFromCart);
+router.post("/apply-coupon/:userId", cartController.applyCouponToCart);
 
 
 

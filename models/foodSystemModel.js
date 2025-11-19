@@ -4,12 +4,21 @@ const mongoose = require("mongoose");
 const categorySchema = new mongoose.Schema({
   categoryName: {
     type: String,
-    required: true
   },
   imageUrl: {
     type: String,
-    required: true
-  }
+  },
+  subcategories: [{
+    subcategoryName: {
+      type: String,
+    },
+    subcategoryImageUrl: {
+      type: String,
+    },
+  }],
+  status: {
+    type: String,
+  },
 }, { timestamps: true });
 
 // ✅ VegFood Schema

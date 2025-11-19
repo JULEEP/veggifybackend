@@ -3,6 +3,7 @@ const Restaurant = require("../models/restaurantModel");
 const Order = require("../models/orderModel");
 const RestaurantProduct = require("../models/restaurantModel");
 const moment = require("moment");
+const mongoose = require("mongoose");
 
 
 
@@ -75,6 +76,7 @@ exports.getOrdersByVendorId = async (req, res) => {
     const orders = await Order.find({ restaurantId: vendor._id })
       .populate("restaurantId", "restaurantName locationName")
       .populate("userId", "firstName lastName email phoneNumber")
+      .populate("deliveryBoyId", "fullName email mobileNumber") // <-- yahan populate kiya delivery boy ka
       .populate({
         path: "cartId",
         populate: {
@@ -96,6 +98,7 @@ exports.getOrdersByVendorId = async (req, res) => {
     });
   }
 };
+
 
 
 exports.updateOrderById = async (req, res) => {
@@ -238,9 +241,14 @@ const getWeekSales = async (vendorId, startDate, endDate) => {
 };
 
 // Controller
+
+
 exports.getDashboardData = async (req, res) => {
   const { vendorId } = req.params;
-  if (!vendorId) return res.status(400).json({ success: false, message: "Vendor ID is required" });
+  if (!vendorId)
+    return res
+      .status(400)
+      .json({ success: false, message: "Vendor ID is required" });
 
   try {
     const today = moment();
@@ -255,49 +263,73 @@ exports.getDashboardData = async (req, res) => {
       lastMonthEnd: today.clone().subtract(1, "month").endOf("month").toDate(),
     };
 
-    // Fetch data
-    const todayOrders = await Order.find({ restaurantId: vendorId, createdAt: { $gte: ranges.todayStart, $lte: ranges.todayEnd } });
-    console.log("Today Orders:", todayOrders);
+    // 🔹 Orders
+    const todayOrders = await Order.find({
+      restaurantId: new mongoose.Types.ObjectId(vendorId),
+      createdAt: { $gte: ranges.todayStart, $lte: ranges.todayEnd },
+    });
 
-    const totalOrders = await Order.countDocuments({ restaurantId: vendorId });
-    console.log("Total Orders Count:", totalOrders);
+    const totalOrders = await Order.countDocuments({
+      restaurantId: new mongoose.Types.ObjectId(vendorId),
+    });
 
-    const completedOrders = await Order.countDocuments({ restaurantId: vendorId, orderStatus: "Completed" });
-    console.log("Completed Orders Count:", completedOrders);
+    const completedOrders = await Order.countDocuments({
+      restaurantId: new mongoose.Types.ObjectId(vendorId),
+      orderStatus: "Delivered",
+    });
 
     const agg = await Order.aggregate([
-      { $match: { restaurantId: vendorId } },
+      { $match: { restaurantId: new mongoose.Types.ObjectId(vendorId) } },
       { $group: { _id: null, total: { $sum: "$subTotal" } } },
     ]);
     const orderAmount = agg[0]?.total || 0;
-    console.log("Total Order Amount (Sum of subTotals):", orderAmount);
 
-    const productsList = await RestaurantProduct.find({ restaurantId: vendorId });
-    console.log("Fetched Restaurant Products:", productsList);
+    // 🔹 Restaurant Products
+    const productsList = await RestaurantProduct.find({
+      restaurantId: new mongoose.Types.ObjectId(vendorId),
+    });
 
-    const totalProducts = productsList.reduce((sum, rp) => sum + (rp.recommended?.length ?? 0), 0);
-    console.log("Total Products (count from recommended array):", totalProducts);
+    const totalProducts = productsList.reduce(
+      (sum, rp) => sum + (rp.recommended?.length ?? 0),
+      0
+    );
 
-    const recentOrders = await Order.find({ restaurantId: vendorId }).sort({ createdAt: -1 }).limit(10);
-    console.log("Recent Orders:", recentOrders);
+    // 🔹 Recent & Pending Orders
+    const recentOrders = await Order.find({
+      restaurantId: new mongoose.Types.ObjectId(vendorId),
+    })
+      .sort({ createdAt: -1 })
+      .limit(10);
 
-    const pendingOrders = await Order.find({ restaurantId: vendorId, orderStatus: "Pending" }).limit(10);
-    console.log("Pending Orders:", pendingOrders);
+    const pendingOrders = await Order.find({
+      restaurantId: new mongoose.Types.ObjectId(vendorId),
+      orderStatus: "Pending",
+    }).limit(10);
 
-    // Sales data
+    // 🔹 Sales Data
     const salesData = {
-      Today: [{ name: "Today", sales: todayOrders.reduce((s, o) => s + o.subTotal, 0) }],
+      Today: [
+        { name: "Today", sales: todayOrders.reduce((s, o) => s + o.subTotal, 0) },
+      ],
       "This Week": await getWeekSales(vendorId, ranges.weekStart, ranges.weekEnd),
-      "Last Week": await getWeekSales(vendorId, ranges.lastWeekStart, ranges.lastWeekEnd),
+      "Last Week": await getWeekSales(
+        vendorId,
+        ranges.lastWeekStart,
+        ranges.lastWeekEnd
+      ),
       "Last Month": (
         await Order.aggregate([
-          { $match: { restaurantId: vendorId, createdAt: { $gte: ranges.lastMonthStart, $lte: ranges.lastMonthEnd } } },
+          {
+            $match: {
+              restaurantId: new mongoose.Types.ObjectId(vendorId),
+              createdAt: { $gte: ranges.lastMonthStart, $lte: ranges.lastMonthEnd },
+            },
+          },
           { $group: { _id: { $week: "$createdAt" }, sales: { $sum: "$subTotal" } } },
           { $sort: { _id: 1 } },
         ])
       ).map((w, i) => ({ name: `Week ${i + 1}`, sales: w.sales })),
     };
-    console.log("Sales Data:", salesData);
 
     return res.json({
       success: true,
@@ -305,9 +337,12 @@ exports.getDashboardData = async (req, res) => {
       salesData,
       orders: recentOrders,
       pendingOrders,
+      products: productsList, // full product data included
     });
   } catch (err) {
     console.error("Error in getDashboardData:", err);
-    return res.status(500).json({ success: false, message: "Server error", error: err.message });
+    return res
+      .status(500)
+      .json({ success: false, message: "Server error", error: err.message });
   }
 };

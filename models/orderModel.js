@@ -1,5 +1,4 @@
-const mongoose = require("mongoose");
-
+const mongoose = require('mongoose');  // Import mongoose
 const orderSchema = new mongoose.Schema(
   {
     userId: {
@@ -37,15 +36,32 @@ const orderSchema = new mongoose.Schema(
 
   paymentStatus: {
     type: String,
-    enum: ["Pending", "Paid", "Failed"],
+    enum: ["Pending", "Paid", "Failed", "Completed"],
     default: "Pending"
   },
 
   orderStatus: {
     type: String,
-    enum: ["Pending", "Accepted", "Rejected", "Picked", "Delivered", "Cancelled"],
+    enum: ["Pending", "Accepted", "Rejected", "Picked", "Rider Accepted", "Rider Rejected", "Delivered", "Cancelled", "Rider Accepted"],
     default: "Pending"
   },
+
+
+   paymentType: {
+    type: String,
+  },
+
+
+    // Add new field for available delivery boys
+  availableDeliveryBoys: [{
+    deliveryBoyId: { type: mongoose.Schema.Types.ObjectId, ref: 'DeliveryBoy' },
+    fullName: { type: String,},
+    mobileNumber: { type: String,  },
+    vehicleType: { type: String,  },
+    pickupDistance: { type: Number,  },
+    walletBalance: { type: Number, },
+    status: { type: String, enum: ['active', 'pending', 'inactive'], }
+  }],
 
   // ✅ Location of the restaurant (for pickup)
   restaurantLocation: {
@@ -61,17 +77,17 @@ const orderSchema = new mongoose.Schema(
   },
 
   // ✅ Location of the user (optional redundancy)
-  deliveryLocation: {
-    type: {
-      type: String,
-      enum: ["Point"],
-      default: "Point"
-    },
-    coordinates: {
-      type: [Number], // [longitude, latitude]
-      default: [0, 0]
-    }
-  },
+  // deliveryLocation: {
+  //   type: {
+  //     type: String,
+  //     enum: ["Point"],
+  //     default: "Point"
+  //   },
+  //   coordinates: {
+  //     type: [Number], // [longitude, latitude]
+  //     default: [0, 0]
+  //   }
+  // },
 
   // ✅ Assigned DeliveryBoy (if any)
   deliveryBoyId: {
@@ -83,9 +99,23 @@ const orderSchema = new mongoose.Schema(
   // ✅ Track delivery status (Optional)
   deliveryStatus: {
     type: String,
-    enum: ["Pending", "Assigned", "Picked", "Delivered", "Failed"],
+    enum: ["Pending", "Assigned", "Picked", "Rider Accepted", "Rider Rejected", "Delivered", "Failed", "Rider Accepted"],
     default: "Pending"
   },
+
+
+   products: [{
+    restaurantProductId: { type: mongoose.Schema.Types.ObjectId, ref: 'RestaurantProduct', },
+    recommendedId: { type: mongoose.Schema.Types.ObjectId, ref: 'RecommendedItem' },
+    quantity: { type: Number, default: 1 },
+    name: { type: String,  },
+    basePrice: { type: Number, },
+    image: { type: String },
+    addOn: { // storing add-ons if present
+      variation: { type: String },
+      plateitems: { type: Number },
+    },
+  }],
 
   // ✅ Optional timestamps
   acceptedAt: Date,

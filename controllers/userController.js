@@ -7,6 +7,12 @@ const jwt = require('jsonwebtoken');
 const { generateReferralCode } = require('../utils/refeeral');
 const { generateTempToken, verifyTempToken } = require('../utils/jws');
 const cloudinary = require('../config/cloudinary');
+const {DeliveryBoy} = require('../models/deliveryBoyModel');
+const Chat = require('../models/Chat');
+const fs = require('fs'); 
+const Ambassador = require('../models/ambassadorModel');
+
+
 
 let latestToken = null;
 let tempForgotToken = null;
@@ -18,86 +24,203 @@ const register = async (req, res) => {
   try {
     const { firstName, lastName, email, phoneNumber, referralCode } = req.body;
 
-    // Validate required fields (referralCode is optional)
     if (!firstName || !lastName || !email || !phoneNumber) {
-      return res.status(400).json({
-        message: 'firstName, lastName, email, and phoneNumber are required'
-      });
+      return res.status(400).json({ message: "All fields are required" });
     }
 
-    // Check if user already exists
+    // Check if user already exists in DB
     const existingUser = await User.findOne({
       $or: [{ email }, { phoneNumber }]
     });
     if (existingUser) {
-      return res.status(400).json({ message: 'User already exists' });
+      return res.status(400).json({ message: "User already exists" });
     }
 
-    // Generate new referral code for the user
-    const generatedReferralCode = generateReferralCode();
+    // Generate referral code
+    const generatedReferralCode = `VEGGYFYUSER${generateReferralCode()}`;
 
-    // Hardcoded OTP for now
-    const otp = '1234';
+    // Hardcoded OTP
+    const otp = "1234";
 
-    // Create payload for temp token
+    // Payload to put in token
     const payload = {
       firstName,
       lastName,
       email,
       phoneNumber,
-      referralCode: generatedReferralCode,       // this user's referral code
-      referredBy: referralCode || null,          // who referred this user, if any
+      referralCode: generatedReferralCode,
+      referredBy: referralCode || null,
       otp,
       createdAt: new Date().toISOString()
     };
 
-    // Generate temporary token
-    latestToken = generateTempToken(payload);
+    // Generate temp token (JWT or your custom)
+    const tempToken = generateTempToken(payload);
 
-    // Success response
     res.status(200).json({
-      message: 'OTP sent successfully',
-      otp,
-      token: latestToken,
+      message: "OTP sent ✅",
+      otp, // for testing
+      token: tempToken,
       referralCode: generatedReferralCode
     });
+
   } catch (err) {
+    console.error(err);
     res.status(500).json({
-      message: 'Registration failed',
+      message: "Registration failed",
       error: err.message
     });
   }
 };
 
 
+const updateUserSimply = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { firstName, lastName, email, phoneNumber } = req.body;
+
+    // Validate userId
+    if (!userId || !mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ success: false, message: "Valid userId is required" });
+    }
+
+    // Build dynamic update object
+    const updateData = {};
+    if (firstName) updateData.firstName = firstName;
+    if (lastName) updateData.lastName = lastName;
+    if (email) updateData.email = email;
+    if (phoneNumber) updateData.phoneNumber = phoneNumber;
+
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({ success: false, message: "No valid fields provided to update" });
+    }
+
+    // Update user
+    const updatedUser = await User.findByIdAndUpdate(userId, updateData, {
+      new: true,
+      runValidators: true
+    });
+
+    if (!updatedUser) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "User updated successfully ✅",
+      user: updatedUser
+    });
+
+  } catch (error) {
+    console.error("Update User Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server Error",
+      error: error.message
+    });
+  }
+};
+
+
+
 const verifyOtp = async (req, res) => {
   try {
     const { otp, token } = req.body;
-    if (!otp || !token) return res.status(400).json({ message: 'OTP and token are required' });
+    if (!otp || !token)
+      return res.status(400).json({ message: "OTP and token are required" });
 
+    // Decode token to get user info
     const decoded = verifyTempToken(token);
-    if (otp !== decoded.otp) return res.status(400).json({ message: 'Invalid OTP' });
 
+    if (decoded.otp !== otp) {
+      return res.status(400).json({ message: "Invalid OTP ❌" });
+    }
 
-    const user = await User.create({
-      _id: new mongoose.Types.ObjectId(),
+    // Create user in DB after OTP verification
+    const newUser = new User({
       firstName: decoded.firstName,
       lastName: decoded.lastName,
       email: decoded.email,
       phoneNumber: decoded.phoneNumber,
       referralCode: decoded.referralCode,
       referredBy: decoded.referredBy,
+      otp: null, // clear OTP
       isVerified: true
     });
 
+    await newUser.save();
+
+    // Add to ambassador if referred
+    if (decoded.referredBy && decoded.referredBy.startsWith("VEGGYFYAMB")) {
+      const ambassador = await Ambassador.findOne({ referralCode: decoded.referredBy });
+      if (ambassador) {
+        ambassador.users.push(newUser._id);
+        await ambassador.save();
+      }
+    }
+
     res.status(200).json({
-      message: 'OTP verified ✅',
-      userId: user._id, referralCode: user.referralCode // return immediately too
+      message: "OTP verified ✅ User created",
+      userId: newUser._id,
+      referralCode: newUser.referralCode
     });
+
   } catch (err) {
-    res.status(400).json({ message: 'OTP verification failed ❌', error: err.message });
+    res.status(400).json({
+      message: "OTP verification failed ❌",
+      error: err.message
+    });
   }
 };
+
+
+const resendOtp = async (req, res) => {
+  try {
+    const { token } = req.body;
+    if (!token) {
+      return res.status(400).json({ message: "Token is required" });
+    }
+
+    // 🔐 Decode existing token to get user info
+    const decoded = verifyTempToken(token);
+    if (!decoded) {
+      return res.status(400).json({ message: "Invalid or expired token ❌" });
+    }
+
+    // 🔁 Generate same static OTP again
+    const newOtp = "1234";
+
+    // 🧩 Prepare new payload (same user info + updated OTP + new timestamp)
+    const newPayload = {
+      firstName: decoded.firstName,
+      lastName: decoded.lastName,
+      email: decoded.email,
+      phoneNumber: decoded.phoneNumber,
+      referralCode: decoded.referralCode,
+      referredBy: decoded.referredBy || null,
+      otp: newOtp,
+      createdAt: new Date().toISOString(),
+    };
+
+    // 🪙 Generate new temp token
+    const newToken = generateTempToken(newPayload);
+
+    // 📩 Response
+    return res.status(200).json({
+      message: "OTP resent successfully ✅",
+      otp: newOtp, // static OTP (for testing)
+      token: newToken,
+    });
+
+  } catch (err) {
+    console.error("Resend OTP Error:", err);
+    return res.status(500).json({
+      message: "Failed to resend OTP ❌",
+      error: err.message,
+    });
+  }
+};
+
 
 // ✅ Get Referral Code by User ID
 // ✅ Get Referral Code by User ID
@@ -141,143 +264,164 @@ const setPassword = async (req, res) => {
     const { userId } = req.params;
     const { password } = req.body;
 
-    // Validate input
     if (!userId || !password) {
       return res.status(400).json({ message: 'UserId and password are required' });
     }
 
-    // Validate ObjectId format
     if (!mongoose.Types.ObjectId.isValid(userId)) {
       return res.status(400).json({ message: 'Invalid userId format' });
     }
 
     const user = await User.findById(userId);
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
-    }
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    if (user.password) return res.status(400).json({ message: 'Password already set' });
 
-    if (user.password) {
-      return res.status(400).json({ message: 'Password already set' });
-    }
-
-    // Hash and set password
     user.password = await bcrypt.hash(password, 10);
     await user.save();
 
     res.status(200).json({ message: 'Password set successfully ✅' });
   } catch (err) {
-    res.status(500).json({
-      message: 'Failed to set password',
-      error: err.message
-    });
+    res.status(500).json({ message: 'Failed to set password', error: err.message });
   }
 };
 
-const login = async (req, res) => {
+
+ const login = async (req, res) => {
   const { phoneNumber, password } = req.body;
   if (!phoneNumber || !password)
-    return res.status(400).json({ message: 'All fields required' });
+    return res.status(400).json({ message: "All fields required" });
 
   try {
     const user = await User.findOne({ phoneNumber });
-    if (!user || !user.password) return res.status(400).json({ message: 'Invalid credentials' });
+    if (!user || !user.password)
+      return res.status(400).json({ message: "Invalid credentials" });
 
     const match = await bcrypt.compare(password, user.password);
-    if (!match) return res.status(401).json({ message: 'Incorrect password' });
+    if (!match)
+      return res.status(401).json({ message: "Incorrect password" });
+
+    const payload = {
+      userId: user._id,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email,
+      phoneNumber: user.phoneNumber,
+      referralCode: user.referralCode,
+      createdAt: new Date().toISOString(),
+    };
+
+    const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: "7d" });
 
     res.status(200).json({
-      message: 'Login successful ✅',
+      message: "Login successful ✅",
+      token,
       user: {
         userId: user._id,
         fullName: `${user.firstName} ${user.lastName}`,
         email: user.email,
-        phoneNumber: user.phoneNumber
-      }
+        phoneNumber: user.phoneNumber,
+      },
     });
   } catch (err) {
-    res.status(500).json({ message: 'Login failed', error: err.message });
+    res.status(500).json({ message: "Login failed", error: err.message });
   }
 };
+
 const sendForgotOtp = async (req, res) => {
   try {
     const { phoneNumber } = req.body;
+
+    if (!phoneNumber) {
+      return res.status(400).json({ status: false, message: "Phone number required ❌" });
+    }
+
     const user = await User.findOne({ phoneNumber });
-    if (!user) return res.status(404).json({ message: "User not found" });
-    const otp = '1234';
-    tempForgotToken = generateTempToken({ phoneNumber, otp });
-    return res.status(200).json({ message: "OTP sent ✅", otp });
+    if (!user) return res.status(404).json({ status: false, message: "User not found ❌" });
+
+    // ✅ Static OTP for testing
+    const otp = '1234'; 
+
+    // ✅ Create a short-lived token for OTP verification
+    const tempToken = jwt.sign(
+      { userId: user._id, phoneNumber: user.phoneNumber, otp },
+      process.env.JWT_SECRET,
+      { expiresIn: '10m' } // token valid for 10 minutes
+    );
+
+    // Optional: send OTP via SMS here
+
+    return res.status(200).json({
+      status: true,
+      message: "OTP sent successfully ✅",
+      otp,        // static OTP
+      token: tempToken // user will use this token to verify OTP
+    });
+
   } catch (err) {
-    return res.status(500).json({ message: "OTP send failed ❌", error: err.message });
+    console.error(err);
+    return res.status(500).json({ status: false, message: "OTP send failed ❌", error: err.message });
   }
 };
 
 const verifyForgotOtp = async (req, res) => {
   try {
-    const { otp } = req.body;
+    const { otp, token } = req.body;
 
-    // Check for required conditions
-    if (!otp || otp !== '1234' || !tempForgotToken) {
-      return res.status(400).json({ message: "Invalid OTP" });
+    if (!otp || !token) {
+      return res.status(400).json({ status: false, message: "OTP or token missing ❌" });
     }
 
-    // Decode the temp token
-    const decoded = verifyTempToken(tempForgotToken);
+    // ✅ Decode the token
+    let decoded;
+    try {
+      decoded = jwt.verify(token, process.env.JWT_SECRET);
+    } catch (err) {
+      return res.status(400).json({ status: false, message: "Invalid or expired token ❌" });
+    }
 
-    // Extract phone and userId
-    verifiedForgotPhone = decoded.phoneNumber;
-    const userId = decoded.userId;
+    // ✅ Compare OTP
+    if (decoded.otp !== otp) {
+      return res.status(400).json({ status: false, message: "Invalid OTP ❌" });
+    }
 
-    // Clear the token after use
-    tempForgotToken = null;
-
-    // Send response with userId and success message
+    // ✅ OTP verified
     return res.status(200).json({
-      userId: userId,
-      message: "OTP verified ✅"
+      status: true,
+      message: "OTP verified successfully ✅",
+      userId: decoded.userId,
+      phoneNumber: decoded.phoneNumber
     });
 
   } catch (err) {
-    return res.status(400).json({
+    console.error(err);
+    return res.status(500).json({
+      status: false,
       message: "OTP verification failed ❌",
       error: err.message
     });
   }
 };
 
+
+
 const resetForgotPassword = async (req, res) => {
   try {
     const { userId } = req.params;
     const { newPassword, confirmPassword } = req.body;
 
-    if (!verifiedForgotPhone) {
-      return res.status(400).json({ message: "OTP verification required" });
-    }
+    if (!newPassword || !confirmPassword) return res.status(400).json({ status: false, message: "Passwords required ❌" });
+    if (newPassword !== confirmPassword) return res.status(400).json({ status: false, message: "Passwords do not match ❌" });
 
-    if (newPassword !== confirmPassword) {
-      return res.status(400).json({ message: "Passwords do not match" });
-    }
-
-    // Find user by userId and check if phone matches verified one
     const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ status: false, message: "User not found ❌" });
 
-    if (!user || user.phoneNumber !== verifiedForgotPhone) {
-      return res.status(404).json({ message: "User not found or phone mismatch" });
-    }
-
-    // Hash and save the new password
     user.password = await bcrypt.hash(newPassword, 10);
     await user.save();
 
-    // Clear temp variable
-    verifiedForgotPhone = null;
-
-    return res.status(200).json({ message: "Password reset successful ✅" });
+    return res.status(200).json({ status: true, message: "Password reset successful ✅" });
 
   } catch (err) {
-    return res.status(500).json({
-      message: "Password reset failed ❌",
-      error: err.message
-    });
+    return res.status(500).json({ status: false, message: "Password reset failed ❌", error: err.message });
   }
 };
 
@@ -297,7 +441,8 @@ const getProfile = async (req, res) => {
         email: user.email,
         phoneNumber: user.phoneNumber,
         referralCode: user.referralCode,
-        coins: user.coins || 0
+        coins: user.coins || 0,
+        profileImg: user.profileImg
       }
     });
   } catch (err) {
@@ -308,23 +453,28 @@ const getProfile = async (req, res) => {
 const uploadProfileImage = async (req, res) => {
   try {
     const { userId } = req.params;
-    if (!req.file) {
+
+    // ✅ express-fileupload gives files in req.files
+    if (!req.files || !req.files.image) {
       return res.status(400).json({ message: 'Image file is required' });
     }
 
+    const file = req.files.image; // key must be "image" in Postman
+
     // Upload to Cloudinary
-    const result = await cloudinary.uploader.upload(req.file.path, {
+    const result = await cloudinary.uploader.upload(file.tempFilePath, {
       folder: 'profile_images',
       width: 400,
       height: 400,
       crop: 'fill'
     });
 
+    const profileImgUrl = result.secure_url;
 
-    // Update user image field with Cloudinary public_id
+    // Update user
     const user = await User.findByIdAndUpdate(
       userId,
-      { image: result.public_id },
+      { profileImg: profileImgUrl },
       { new: true }
     );
 
@@ -332,13 +482,15 @@ const uploadProfileImage = async (req, res) => {
 
     res.status(200).json({
       message: 'Profile image uploaded successfully ✅',
-      imageUrl: cloudinary.url(result.public_id, { width: 200, height: 200, crop: 'fill' }),
+      profileImg: profileImgUrl,
       user
     });
   } catch (error) {
+    console.error("Upload profile image error:", error);
     res.status(500).json({ message: 'Upload failed', error: error.message });
   }
 };
+
 
 const deleteProfileImage = async (req, res) => {
   try {
@@ -368,7 +520,7 @@ const deleteProfileImage = async (req, res) => {
 const addAddress = async (req, res) => {
   try {
     const { userId } = req.params;
-    const { street, city, state, postalCode, country, addressType } = req.body;
+    const { street, city, state, postalCode, country, addressType, latitude, longitude } = req.body;
 
     // Validate required fields
     if (!street || !city || !state || !postalCode || !country) {
@@ -386,20 +538,27 @@ const addAddress = async (req, res) => {
       postalCode,
       country,
       addressType: addressType || 'Home', // Default is 'Home' if not provided
+      location: {
+        type: "Point",
+        coordinates: [
+          longitude || 0, // longitude first in GeoJSON
+          latitude || 0   // latitude second
+        ]
+      }
     };
 
     // If the user already has an address array, push the new address; otherwise, create a new array
-    if (!Array.isArray(user.address)) {
-      user.address = [];
+    if (!Array.isArray(user.addresses)) {
+      user.addresses = [];
     }
-    user.address.push(newAddress);
+    user.addresses.push(newAddress);
 
     // Save the updated user document
     await user.save();
 
     res.status(200).json({
       message: 'Address added successfully ✅',
-      address: newAddress // Return the newly added address
+      addresses: newAddress // Return the newly added address
     });
 
   } catch (err) {
@@ -418,7 +577,7 @@ const getAllAddresses = async (req, res) => {
     res.status(200).json({
       success: true,
       message: "All addresses fetched ✅",
-      addresses: user.address || []
+      addresses: user.addresses || []
     });
   } catch (err) {
     res.status(500).json({ success: false, message: "Failed to fetch addresses ❌", error: err.message });
@@ -450,13 +609,13 @@ const getAddressById = async (req, res) => {
 const updateAddressById = async (req, res) => {
   try {
     const { userId, addressId } = req.params;
-    const { street, city, state, postalCode, country, addressType } = req.body;
+    const { street, city, state, postalCode, country, addressType, latitude, longitude } = req.body;
 
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ message: 'User not found ❌' });
 
     // Find the address by its ID
-    const address = user.address.id(addressId);
+    const address = user.addresses.id(addressId);
     if (!address) return res.status(404).json({ message: 'Address not found ❌' });
 
     // Update only the fields present in the request body
@@ -465,7 +624,18 @@ const updateAddressById = async (req, res) => {
     address.state = state || address.state;
     address.postalCode = postalCode || address.postalCode;
     address.country = country || address.country;
-    address.addressType = addressType || address.addressType; // Defaults to 'Home' if not provided
+    address.addressType = addressType || address.addressType;
+
+    // Update location if latitude or longitude provided
+    if (latitude !== undefined || longitude !== undefined) {
+      address.location = {
+        type: "Point",
+        coordinates: [
+          longitude !== undefined ? longitude : (address.location?.coordinates[0] || 0),
+          latitude !== undefined ? latitude : (address.location?.coordinates[1] || 0)
+        ]
+      };
+    }
 
     // Save the updated user document
     await user.save();
@@ -488,16 +658,26 @@ const deleteAddressById = async (req, res) => {
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ success: false, message: 'User not found ❌' });
 
-    const address = user.address.id(addressId);
-    if (!address) return res.status(404).json({ success: false, message: 'Address not found ❌' });
+    // Check if user has addresses
+    if (!user.addresses || user.addresses.length === 0) {
+      return res.status(404).json({ success: false, message: 'No addresses found ❌' });
+    }
 
-    address.remove();
+    // Find index of the address
+    const addressIndex = user.addresses.findIndex(addr => addr._id.toString() === addressId);
+    if (addressIndex === -1) {
+      return res.status(404).json({ success: false, message: 'Address not found ❌' });
+    }
+
+    // Remove the address
+    user.addresses.splice(addressIndex, 1);
     await user.save();
 
     res.status(200).json({
       success: true,
       message: "Address deleted successfully ✅"
     });
+
   } catch (err) {
     res.status(500).json({ success: false, message: "Failed to delete address ❌", error: err.message });
   }
@@ -624,23 +804,30 @@ const getReferralByUserId = async (req, res) => {
 
 
 /// ✅ CREATE
+// Controller
 const createBanner = async (req, res) => {
   try {
-    if (!req.file) {
+    if (!req.files || !req.files.image) {
       return res.status(400).json({ message: 'Image is required' });
     }
 
-    const result = await cloudinary.uploader.upload(req.file.path);
-    const newBanner = await Banner.create({ image: result.secure_url });
+    const imageFile = req.files.image;
 
-    fs.unlinkSync(req.file.path); // remove local file
+    // Upload to Cloudinary
+    const result = await cloudinary.uploader.upload(imageFile.tempFilePath, {
+      folder: "banners"
+    });
+
+    const newBanner = await Banner.create({
+      image: result.secure_url,
+      status: 'pending'
+    });
 
     return res.status(201).json({ message: 'Banner created ✅', data: newBanner });
   } catch (err) {
     return res.status(500).json({ message: 'Create failed ❌', error: err.message });
   }
 };
-
 // ✅ READ ALL
 const getAllBanners = async (req, res) => {
   try {
@@ -666,24 +853,45 @@ const getBannerById = async (req, res) => {
 const updateBanner = async (req, res) => {
   try {
     const banner = await Banner.findById(req.params.id);
-    if (!banner) return res.status(404).json({ message: 'Banner not found' });
+    if (!banner) {
+      return res.status(404).json({ success: false, message: 'Banner not found' });
+    }
 
     let imageUrl = banner.image;
 
-    if (req.file) {
-      const result = await cloudinary.uploader.upload(req.file.path);
+    // ✅ If a new file is uploaded, upload to Cloudinary
+    if (req.files && req.files.image) {
+      const result = await cloudinary.uploader.upload(req.files.image.tempFilePath, {
+        folder: "banners",
+      });
       imageUrl = result.secure_url;
-      fs.unlinkSync(req.file.path);
     }
 
+    // ✅ Update status if provided
+    if (req.body.status) {
+      banner.status = req.body.status;
+    }
+
+    // ✅ Update image URL
     banner.image = imageUrl;
+
     await banner.save();
 
-    return res.status(200).json({ message: 'Banner updated ✅', data: banner });
+    return res.status(200).json({
+      success: true,
+      message: 'Banner updated successfully ✅',
+      data: banner,
+    });
   } catch (err) {
-    return res.status(500).json({ message: 'Update failed ❌', error: err.message });
+    console.error('Banner update error:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Update failed ❌',
+      error: err.message,
+    });
   }
 };
+
 
 // ✅ DELETE
 const deleteBanner = async (req, res) => {
@@ -696,6 +904,203 @@ const deleteBanner = async (req, res) => {
     return res.status(500).json({ message: 'Delete failed ❌', error: err.message });
   }
 };
+
+
+
+ const getNotificationsForUser = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    // Validate userId
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Valid userId is required." });
+    }
+
+    // Find user and get notifications
+    const user = await User.findById(userId, "notifications");
+    if (!user) {
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found." });
+    }
+
+    // Return notifications
+    return res.status(200).json({
+      success: true,
+      notifications: user.notifications || []
+    });
+  } catch (error) {
+    console.error("getNotificationsForUser error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message
+    });
+  }
+};
+
+
+
+ // Send message
+// Send message
+const sendMessage = async (req, res) => {
+  try {
+    const { userId, deliveryBoyId } = req.params;
+    const { message, senderType } = req.body;
+
+    console.log('💬 Send Message Function Called');
+    console.log('📝 Params:', { userId, deliveryBoyId });
+    console.log('📦 Body:', { message, senderType });
+
+    if (!message || message.trim().length === 0) {
+      return res.status(400).json({ success: false, message: "Message must be provided." });
+    }
+
+    // Validation of IDs
+    if (
+      !mongoose.Types.ObjectId.isValid(userId) ||
+      !mongoose.Types.ObjectId.isValid(deliveryBoyId)
+    ) {
+      return res.status(400).json({ success: false, message: "Invalid userId or deliveryBoyId." });
+    }
+
+    // Check if the user and delivery boy exist
+    const dboyExists = await DeliveryBoy.exists({ _id: deliveryBoyId });
+    const userExists = await User.exists({ _id: userId });
+    if (!dboyExists || !userExists) {
+      return res.status(404).json({ success: false, message: "User or DeliveryBoy not found." });
+    }
+
+    // Create new chat message
+    const newChat = new Chat({
+      deliveryBoyId,
+      userId,
+      senderType,
+      message: message.trim(),
+      timestamp: new Date(),
+    });
+
+    const savedMessage = await newChat.save();
+    console.log('💾 Message saved to DB:', savedMessage._id);
+
+    // Emit message via Socket.IO to the relevant room
+    const roomId = `${deliveryBoyId}_${userId}`;
+    console.log(`🎯 Attempting to emit to room: ${roomId}`);
+    
+    // Get io from global
+    const io = global.io;
+    
+    if (io) {
+      console.log('✅ Socket.io instance found');
+      console.log('🔍 Checking rooms...');
+      
+      // Log all rooms and their sockets
+      const rooms = io.sockets.adapter.rooms;
+      console.log('🏠 All rooms:', Array.from(rooms.keys()));
+      
+      const targetRoom = rooms.get(roomId);
+      if (targetRoom) {
+        console.log(`👥 Room ${roomId} has ${targetRoom.size} members`);
+      } else {
+        console.log(`❌ Room ${roomId} not found or empty`);
+      }
+      
+      // Emit the message
+      io.to(roomId).emit('receiveMessage', savedMessage);
+      console.log(`📤 Message emitted to room: ${roomId}`);
+      
+      // Also emit to a test event to verify
+      io.to(roomId).emit('testEvent', { 
+        message: 'Test from server', 
+        roomId,
+        timestamp: new Date() 
+      });
+    } else {
+      console.log('❌ Socket.io instance NOT found');
+      console.log('global.io:', global.io);
+    }
+
+    return res.status(201).json({ success: true, message: savedMessage });
+  } catch (error) {
+    console.error("❌ Error sending message:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error sending message",
+      error: error.message,
+    });
+  }
+};
+
+// Get chat history
+const getChatHistory = async (req, res) => {
+  try {
+    const { userId, deliveryBoyId } = req.params;
+
+    console.log('📚 Get Chat History Function Called');
+    console.log('📝 Params:', { userId, deliveryBoyId });
+
+    if (
+      !mongoose.Types.ObjectId.isValid(userId) ||
+      !mongoose.Types.ObjectId.isValid(deliveryBoyId)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid userId and deliveryBoyId required."
+      });
+    }
+
+    // Check if the user and delivery boy exist
+    const dboyExists = await DeliveryBoy.exists({ _id: deliveryBoyId });
+    const userExists = await User.exists({ _id: userId });
+    if (!dboyExists || !userExists) {
+      return res.status(404).json({
+        success: false,
+        message: "DeliveryBoy or User not found."
+      });
+    }
+
+    // Fetch chat history
+    const messages = await Chat.find({
+      deliveryBoyId,
+      userId,
+    }).sort({ timestamp: 1 });
+
+    console.log(`📨 Found ${messages.length} messages`);
+
+    // Format and send chat history
+    const formattedMessages = messages.map(msg => ({
+      _id: msg._id,
+      deliveryBoyId: msg.deliveryBoyId,
+      userId: msg.userId,
+      senderType: msg.senderType,
+      message: msg.message,
+      timestamp: msg.timestamp.toISOString(),
+    }));
+
+    // Emit chat history to the room
+    const roomId = `${deliveryBoyId}_${userId}`;
+    const io = global.io;
+    
+    if (io) {
+      io.to(roomId).emit('chatHistory', formattedMessages);
+      console.log(`📤 Chat history emitted to room: ${roomId}`);
+    }
+
+    return res.status(200).json({
+      success: true,
+      messages: formattedMessages,
+    });
+  } catch (error) {
+    console.error("❌ Error fetching chat history:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error fetching chat history",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   register,
   verifyOtp,
@@ -721,5 +1126,10 @@ module.exports = {
   getAllBanners,
   getBannerById,
   updateBanner,
-  deleteBanner
+  deleteBanner,
+  getNotificationsForUser,
+  sendMessage,
+  getChatHistory,
+  resendOtp,
+  updateUserSimply
 };

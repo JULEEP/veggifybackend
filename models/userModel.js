@@ -10,7 +10,9 @@ const userSchema = new mongoose.Schema({
   otp: { type: String },
   isVerified: { type: Boolean, default: false },
   password: { type: String },
-  image:{type:String},
+  profileImg: { type: String, default: "" },  // renamed field
+  referralCode: {type: String},
+  referredBy: { type: String, default: null },  // Add this field
 
 
 addresses: [
@@ -20,9 +22,20 @@ addresses: [
       state: { type: String },
       country: { type: String },
       postalCode: { type: String },
-      addressType: { type: String, enum: ['Home', 'Office', 'Other'], default: 'Home' },
+      addressType: { type: String, default: 'Home' },
     },
   ],
+
+
+  notifications: [
+  {
+    type: { type: String },
+    title: String,
+    message: String,
+    timestamp: Date,
+    status: { type: String, default: "unread" }
+  }
+],
 
   location: {
     type: {
