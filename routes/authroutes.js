@@ -31,10 +31,13 @@ const {
   sendMessage,
   getChatHistory,
   resendOtp,
-  updateUserSimply
+  updateUserSimply,
+  deleteAccount,
+  confirmDeleteAccount
   
 } = require('../controllers/userController');
 const upload = require('../utils/multer');
+const { deleteUser } = require('../controllers/adminController');
 
 
 // 🔐 Authentication Flow
@@ -112,6 +115,16 @@ router.delete('/banners/:id', deleteBanner);
 router.post("/sendchat/:deliveryBoyId/:userId", sendMessage);
 
 router.get("/getchat/:deliveryBoyId/:userId", getChatHistory);
+
+
+// Route: Request account deletion (user triggers)
+router.post('/deleteaccount', deleteAccount);
+
+// Route: Confirm account deletion (via email link)
+router.get('/confirm-delete-account/:token', confirmDeleteAccount);
+
+// Route: Delete user by ID (admin)
+router.delete('/delete-user/:userId', deleteUser);
 
 
 

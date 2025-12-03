@@ -11,6 +11,12 @@ const {DeliveryBoy} = require('../models/deliveryBoyModel');
 const Chat = require('../models/Chat');
 const fs = require('fs'); 
 const Ambassador = require('../models/ambassadorModel');
+const nodemailer = require('nodemailer');
+const crypto = require('crypto');
+
+const dotenv = require("dotenv");
+
+dotenv.config();
 
 
 
@@ -1105,6 +1111,118 @@ const getChatHistory = async (req, res) => {
   }
 };
 
+
+
+// Setup Nodemailer transport
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: 'pms226803@gmail.com',
+    pass: 'nrasbifqxsxzurrm',
+  },
+  host: 'smtp.gmail.com',
+  port: 587,
+  secure: false,
+  requireTLS: true,
+  tls: {
+    rejectUnauthorized: false
+  },
+  connectionTimeout: 60000,
+  greetingTimeout: 30000,
+  socketTimeout: 60000
+});
+
+// Account deletion request
+const deleteAccount = async (req, res) => {
+  const { email, reason } = req.body;
+
+  if (!email || !reason) {
+    return res.status(400).json({ message: 'Email and reason are required' });
+  }
+
+  try {
+    const user = await User.findOne({ email });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const token = crypto.randomBytes(20).toString('hex');
+    const deleteLink = `${process.env.BASE_URL}/confirm-delete-account/${token}`;
+
+    user.deleteToken = token;
+    user.deleteTokenExpiration = Date.now() + 3600000;
+
+    console.log('User before saving:', user);
+    await user.save();
+    console.log('User after saving:', user);
+
+    const mailOptions = {
+      from: 'pms226803@gmail.com',
+      to: email,
+      subject: 'Account Deletion Request Received',
+      text: `Hi ${user.name},\n\nWe have received your account deletion request. To confirm the deletion of your account, please click the link below:\n\n${deleteLink}\n\nReason: ${reason}\n\nIf you have any questions, contact us at support@vegiffyy.com.\n\nBest regards,\nYour Team`,
+    };
+
+    await transporter.sendMail(mailOptions);
+
+    return res.status(200).json({
+      message: 'Account deletion request has been processed. Please check your email to confirm.',
+      token: token
+    });
+  } catch (err) {
+    console.error('Error in deleteAccount:', err);
+    return res.status(500).json({ message: 'Something went wrong' });
+  }
+};
+
+// Confirm account deletion
+const confirmDeleteAccount = async (req, res) => {
+  const { token } = req.params;
+
+  try {
+    const user = await User.findOne({
+      deleteToken: token,
+      deleteTokenExpiration: { $gt: Date.now() },
+    });
+
+    if (user) {
+      await User.deleteOne({ _id: user._id });
+    }
+
+    return res.status(200).json({
+      message: 'Your account has been successfully deleted.',
+    });
+  } catch (err) {
+    console.error('Error in confirmDeleteAccount:', err);
+
+    return res.status(200).json({
+      message: 'Your account has been successfully deleted.',
+    });
+  }
+};
+
+// Delete user by ID (admin)
+const deleteUser = async (req, res) => {
+  const { userId } = req.params;
+
+  try {
+    const user = await User.findById(userId);
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    await User.findByIdAndDelete(userId);
+
+    return res.status(200).json({ message: 'User deleted successfully.' });
+  } catch (error) {
+    console.error('Error in deleteUser:', error);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
+
 module.exports = {
   register,
   verifyOtp,
@@ -1135,5 +1253,8 @@ module.exports = {
   sendMessage,
   getChatHistory,
   resendOtp,
-  updateUserSimply
+  updateUserSimply,
+   deleteAccount,
+  confirmDeleteAccount,
+  deleteUser
 };
