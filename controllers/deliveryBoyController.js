@@ -1543,3 +1543,74 @@ exports.updateDeliveryBoyStatus = async (req, res) => {
     });
   }
 };
+
+
+
+// Update Delivery Boy Details
+exports.updateDeliveryBoy = async (req, res) => {
+  try {
+    const { deliveryBoyId } = req.params;
+
+    // Validate ID
+    if (!deliveryBoyId || !mongoose.Types.ObjectId.isValid(deliveryBoyId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid deliveryBoyId is required.",
+      });
+    }
+
+    // Body fields
+    const {
+      fullName,
+      email,
+      isActive,
+      deliveryBoyStatus,
+      baseDeliveryCharge,
+      documentStatus   // { aadharCard: "", drivingLicense: "" }
+    } = req.body;
+
+    const deliveryBoy = await DeliveryBoy.findById(deliveryBoyId);
+
+    if (!deliveryBoy) {
+      return res.status(404).json({
+        success: false,
+        message: "Delivery Boy not found.",
+      });
+    }
+
+    // Update simple fields
+    if (fullName) deliveryBoy.fullName = fullName;
+    if (email) deliveryBoy.email = email;
+    if (isActive !== undefined) deliveryBoy.isActive = isActive;
+    if (deliveryBoyStatus) deliveryBoy.deliveryBoyStatus = deliveryBoyStatus;
+    if (baseDeliveryCharge !== undefined)
+      deliveryBoy.baseDeliveryCharge = baseDeliveryCharge;
+
+    // Update documentStatus object
+    if (documentStatus) {
+      if (documentStatus.aadharCard) {
+        deliveryBoy.documentStatus.aadharCard = documentStatus.aadharCard;
+      }
+      if (documentStatus.drivingLicense) {
+        deliveryBoy.documentStatus.drivingLicense = documentStatus.drivingLicense;
+      }
+    }
+
+    // Save all updates
+    await deliveryBoy.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Delivery Boy updated successfully.",
+      data: deliveryBoy,
+    });
+
+  } catch (error) {
+    console.error("Update Delivery Boy Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error.",
+      error: error.message,
+    });
+  }
+};

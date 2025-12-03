@@ -1,54 +1,80 @@
 const mongoose = require("mongoose");
-const { Category } = require("./foodSystemModel");
 
+const RestaurantProductSchema = new mongoose.Schema(
+  {
+    restaurantName: { type: String },
+    locationName: { type: String },
 
-const RestaurantProductSchema = new mongoose.Schema({
-  restaurantName: { type: String },
-  locationName: { type: String },
-  type: { type: [String] },
-  rating: { type: Number, default: 0 },
-  viewCount: { type: Number, default: 0 },
-
-  recommended: [{
+    // Recommended items
+  recommended: [
+  {
     name: { type: String },
-    price: { type: Number },
-    rating: { type: Number, default: 0 },
-    viewCount: { type: Number, default: 0 },
-    content: { type: String },
-    image: { type: String },
-    vendorHalfPercentage: { type: Number },
-    vendor_Platecost: { type: Number },
-
-    addons: {
-      productName: { type: String },
-      variation: {             // Single object
-        name: { type: String, default: "" },
-        type: { type: [String], default: [] } // e.g., ["Half"] or ["Full"]
-      },
-      plates: {
-        _id: false,
-        name: { type: String, default: "" }
-      }
-    },
-
+    price: { type: Number, default: 0 },
+    halfPlatePrice: { type: Number, default: 0 },
+    fullPlatePrice: { type: Number, default: 0 },
+    discount: { type: Number, default: 0 },
+    tags: { type: [String], default: [] },
+    content: { type: String, default: "" },
+    image: { type: String, default: "" },
     category: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "Category"
-    }
-  }],
+      ref: "Category",
+      default: null,
+    },
 
-     categoryId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'Category',  // Reference to the Category model
+    // ⭐ Added Here (New Field)
+    preparationTime: { type: String, default: "" },
+
+    reviews: [
+      {
+        userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+        stars: { type: Number, min: 1, max: 5 },
+        comment: { type: String },
+        createdAt: { type: Date, default: Date.now },
       },
-  user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-  restaurantId: { type: mongoose.Schema.Types.ObjectId, ref: "Restaurant" },
-  timeAndKm: { time: String, distance: String },
-  status: { type: String, enum: ["active", "inactive"], default: "pending" }
-}, {
-  timestamps: true,
-  toJSON: { virtuals: true },
-  toObject: { virtuals: true }
-});
+    ],
+
+    status: {
+      type: String,
+      enum: ["active", "inactive"],
+      default: "inactive"
+    },
+  },
+],
+
+
+    // Menu items
+    menu: [
+      {
+        name: { type: String},
+        price: { type: Number, default: 0 },
+        halfPlatePrice: { type: Number, default: 0 },
+        fullPlatePrice: { type: Number, default: 0 },
+        discount: { type: Number, default: 0 },
+        status: { type: String, enum: ["active", "inactive"], default: "inactive" },
+      },
+    ],
+
+    categoryId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Category",
+      default: null,
+    },
+
+    restaurantId: { type: mongoose.Schema.Types.ObjectId, ref: "Restaurant" },
+
+    timeAndKm: {
+      time: { type: String, default: "0 mins" },
+      distance: { type: String, default: "0 km" },
+    },
+
+    status: { type: String, enum: ["active", "inactive"], default: "inactive" },
+  },
+  {
+    timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true },
+  }
+);
 
 module.exports = mongoose.model("RestaurantProduct", RestaurantProductSchema);

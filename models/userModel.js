@@ -16,15 +16,27 @@ const userSchema = new mongoose.Schema({
 
 
 addresses: [
-    {
-      street: { type: String },
-      city: { type: String },
-      state: { type: String },
-      country: { type: String },
-      postalCode: { type: String },
-      addressType: { type: String, default: 'Home' },
-    },
-  ],
+  {
+    street: { type: String, required: true },
+    city: { type: String, required: true },
+    state: { type: String, required: true },
+    country: { type: String, required: true },
+    postalCode: { type: String, required: true },
+    addressType: { type: String, default: 'Home' },
+    location: {
+      type: {
+        type: String, 
+        enum: ['Point'], 
+        default: 'Point' 
+      },
+      coordinates: {
+        type: [Number], // [longitude, latitude]
+        default: [0.0, 0.0]
+      }
+    }
+  }
+],
+
 
 
   notifications: [

@@ -7,7 +7,7 @@ router.post('/create-ambsdor', createAmbassador);
 router.get('/allambsdor', getAllAmbassadors);
 router.post('/login', loginAmbassador);
 router.put('/update-ambsdor/:ambassadorId', updateAmbassador);
-router.put('/delete-ambsdor/:ambassadorId', deleteAmbassador);
+router.delete('/delete-ambsdor/:ambassadorId', deleteAmbassador);
 router.get('/profile/:ambassadorId', getAmbassadorById);
 router.get('/allusers/:ambassadorId', getAllUsersByAmbassador);
 router.get('/allvendors/:ambassadorId', getAllVendorsByAmbassador);

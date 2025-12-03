@@ -9,7 +9,14 @@ router.post('/send-otp', adminController.sendOtp);
 router.post('/verify-otp', adminController.verifyOtp);
 router.post('/set-password', adminController.setPassword);
 router.post('/login', adminController.login);
+router.post('/register', adminController.register)
 router.get('/getprofile/:adminId', adminController.getAdminByAdminId);
+
+// Get Profile by adminId
+router.get('/profile/:adminId', adminController.getProfile);
+
+// Update Profile by adminId
+router.put('/profile/:adminId', adminController.updateProfile);
 
 
 // Example of protected route
@@ -64,6 +71,44 @@ router.get('/allambsdorpayments', adminController.getAllAmbassadorPaymnet);
 router.get('/getdashboard', adminController.getDashboardStats);
 router.get('/getreffred', adminController.getReferredStats);
 
+
+// Vendor Plan Routes
+router.post('/vendorplans', adminController.createVendorPlan);
+router.get('/vendorplans', adminController.getAllVendorPlans);
+router.get('/vendorplans/:id', adminController.getVendorPlanById);
+router.put('/vendorplans/:id', adminController.updateVendorPlan);
+router.delete('/vendorplans/:id', adminController.deleteVendorPlan);
+
+
+// //charges
+
+// // Get all charges
+router.get('/allcharge', adminController.getAllCharges);
+
+// Get single charge
+router.get('/:id', adminController.getCharge);
+
+// Create new charge
+router.post('/createcharge', adminController.createCharge);
+
+// Update charge
+router.put('/updatecharge/:id', adminController.updateCharge);
+
+// Delete charge
+router.delete('/deletecharge/:id', adminController.deleteCharge);
+
+
+// ------------------- GET ALL -------------------
+
+// ------------------- CREATE -------------------
+// Create a new commission
+router.post("/addCommission", adminController.createCommission);
+
+// Update a commission by ID
+router.put("/updateCommission/:id", adminController.updateCommission);
+
+// Delete a commission by ID
+router.delete("/deleteCommission/:id", adminController.deleteCommission);
 
 
 

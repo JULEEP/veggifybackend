@@ -13,6 +13,8 @@ const WalletTransaction = require("../models/WalletTransaction");
 const WithdrawalRequest = require("../models/WithdrawalRequest");
 const Amount = require("../models/Amount");
 const Ambassador = require("../models/ambassadorModel");
+const userModel = require("../models/userModel");
+const Commission = require("../models/Commission");
 
 
 // Cloudinary config
@@ -272,241 +274,90 @@ exports.createRestaurant = async (req, res) => {
       restaurantName,
       description,
       locationName,
-      location,
-      rating,
-      startingPrice,
       email,
       mobile,
-      referralCode
+      gstNumber,
+      referralCode,
+      password,
+      lat,
+      lng,
+      commission // ADDED COMMISSION FIELD
     } = req.body;
 
-    // Check for image
-    if (!req.files || !req.files.image) {
-      return res.status(400).json({
-        success: false,
-        message: "Restaurant image is required",
-      });
+    // BASIC REQUIRED VALIDATIONS ONLY
+    if (!restaurantName) return sendError(res, "Restaurant name required");
+    if (!locationName) return sendError(res, "Location name required");
+    if (!email) return sendError(res, "Email required");
+    if (!mobile) return sendError(res, "Mobile required");
+    if (!password) return sendError(res, "Password required");
+    if (!lat || !lng) return sendError(res, "Location required");
+    if (!commission) return sendError(res, "Commission percentage required"); // ADDED COMMISSION VALIDATION
+    if (isNaN(commission) || parseFloat(commission) < 0 || parseFloat(commission) > 50) {
+      return sendError(res, "Commission must be a valid percentage between 0 and 50");
     }
 
-    const imageFile = req.files.image;
+    // FILES REQUIRED
+    if (!req.files?.image) return sendError(res, "Restaurant image required");
+    if (!req.files?.fssaiLicense) return sendError(res, "FSSAI license required");
+    if (!req.files?.panCard) return sendError(res, "PAN card required");
+    if (!req.files?.aadharCard) return sendError(res, "Aadhar card required");
 
-    if (
-      !restaurantName ||
-      !location ||
-      !locationName ||
-      !startingPrice ||
-      !email ||
-      !mobile
-    ) {
-      if (imageFile.tempFilePath) fs.unlinkSync(imageFile.tempFilePath);
-      return res.status(400).json({
-        success: false,
-        message:
-          "restaurantName, locationName, location, startingPrice, email, mobile are required",
-      });
-    }
+    // SIMPLE CLOUDINARY UPLOAD FUNCTION
+    const uploadFile = async (file, folder) => {
+      const result = await cloudinary.uploader.upload(file.tempFilePath, { folder });
+      return {
+        public_id: result.public_id,
+        url: result.secure_url
+      };
+    };
 
-    // Email validation
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      if (imageFile.tempFilePath) fs.unlinkSync(imageFile.tempFilePath);
-      return res.status(400).json({
-        success: false,
-        message: "Invalid email format",
-      });
-    }
+    // Upload all files
+    const image = await uploadFile(req.files.image, "restaurants");
 
-    const mobileRegex = /^[0-9]{10}$/;
-    if (!mobileRegex.test(mobile)) {
-      if (imageFile.tempFilePath) fs.unlinkSync(imageFile.tempFilePath);
-      return res.status(400).json({
-        success: false,
-        message: "Invalid mobile number (must be 10 digits)",
-      });
-    }
+    const gstCertificate = req.files.gstCertificate
+      ? await uploadFile(req.files.gstCertificate, "restaurants-docs")
+      : null;
 
-    // Parse location
-    let parsedLocation;
-    try {
-      parsedLocation = JSON.parse(location);
-      if (
-        typeof parsedLocation.latitude !== "number" ||
-        typeof parsedLocation.longitude !== "number"
-      ) {
-        if (imageFile.tempFilePath) fs.unlinkSync(imageFile.tempFilePath);
-        return res.status(400).json({
-          success: false,
-          message: "Latitude and Longitude must be valid numbers",
-        });
-      }
-    } catch (err) {
-      if (imageFile.tempFilePath) fs.unlinkSync(imageFile.tempFilePath);
-      return res.status(400).json({
-        success: false,
-        message:
-          "Invalid location format. Must be JSON with latitude and longitude",
-      });
-    }
+    const fssaiLicense = await uploadFile(req.files.fssaiLicense, "restaurants-docs");
+    const panCard = await uploadFile(req.files.panCard, "restaurants-docs");
+    const aadharCard = await uploadFile(req.files.aadharCard, "restaurants-docs");
 
-    // Upload to Cloudinary
-    const result = await cloudinary.uploader.upload(imageFile.tempFilePath, {
-      folder: "restaurants",
-      width: 1500,
-      crop: "scale",
-    });
+    // Generate Referral
+    const count = await Restaurant.countDocuments();
+    const generatedReferralCode = `VEGVEN${count + 1}`;
 
-    const restaurantCount = await Restaurant.countDocuments();
-    const generatedReferralCode = `VEGGYFYVENDOR${restaurantCount + 1}`;
-
-    // Create restaurant
+    // CREATE RESTAURANT
     const restaurant = await Restaurant.create({
       restaurantName,
       description,
       locationName,
-      rating: rating || 0,
-      startingPrice,
       email,
       mobile,
+      gstNumber: gstNumber || null,
+      commission: parseFloat(commission), // ADDED COMMISSION FIELD
+      password,
       referredBy: referralCode || null,
       referralCode: generatedReferralCode,
       location: {
         type: "Point",
-        coordinates: [parsedLocation.longitude, parsedLocation.latitude],
+        coordinates: [parseFloat(lng), parseFloat(lat)]
       },
-      image: {
-        public_id: result.public_id,
-        url: result.secure_url,
-      },
+      image,
+      gstCertificate,
+      fssaiLicense,
+      panCard,
+      aadharCard,
       status: "pending",
       walletBalance: 0
     });
 
-    // Remove temp file
-    if (imageFile.tempFilePath && fs.existsSync(imageFile.tempFilePath)) {
-      fs.unlinkSync(imageFile.tempFilePath);
-    }
-
-    // ===============================
-    // ⭐ REFERRAL CODE LOGIC ⭐
-    // ===============================
-    if (referralCode) {
-      const isAmbassador = referralCode.startsWith("VEGGYFYAMB");
-      const isVendor = referralCode.startsWith("VEGGYFYVENDOR");
-
-      // --------- Ambassador Referral ---------
-      if (isAmbassador) {
-        const ambassador = await Ambassador.findOne({ referralCode });
-
-        if (ambassador) {
-          const amountData = await Amount.findOne({
-            type: "Ambsaddor to Vendor",
-          });
-
-          if (amountData) {
-            ambassador.wallet = (ambassador.wallet || 0) + amountData.amount;
-            await ambassador.save();
-          }
-        }
-      }
-
-      // --------- Vendor Referral ---------
-      if (isVendor) {
-        const vendor = await Restaurant.findOne({ referralCode });
-
-        if (vendor) {
-          const amountData = await Amount.findOne({
-            type: "Vendor to Vendor",
-          });
-
-          if (amountData) {
-            vendor.walletBalance =
-              (vendor.walletBalance || 0) + amountData.amount;
-
-            await vendor.save();
-          }
-        }
-      }
-    }
-
-    // ===============================
-    // ⭐ REFERRAL LOGIC END ⭐
-    // ===============================
-
-    // Create Notification
-    await notificationModel.create({
-      message: `New restaurant created: ${restaurantName}`,
-      restaurantId: restaurant._id,
-      status: "pending",
-      createdAt: new Date(),
-    });
-
     res.status(201).json({
       success: true,
-      data: restaurant,
+      data: restaurant
     });
-  } catch (err) {
-    if (
-      req.files &&
-      req.files.image &&
-      req.files.image.tempFilePath &&
-      fs.existsSync(req.files.image.tempFilePath)
-    ) {
-      fs.unlinkSync(req.files.image.tempFilePath);
-    }
 
+  } catch (err) {
     console.error("Create Restaurant Error:", err);
-    res.status(500).json({
-      success: false,
-      message: "Server error",
-      error: err.message,
-    });
-  }
-};
-
-
-exports.getAllRestaurants = async (req, res) => {
-  try {
-    // 🔹 Step 1: Aggregate order stats (group by restaurantId)
-    const orderStats = await orderModel.aggregate([
-      {
-        $group: {
-          _id: "$restaurantId",
-          totalOrders: { $sum: 1 },
-          totalEarnings: { $sum: "$subTotal" }
-        }
-      }
-    ]);
-
-    // 🔹 Step 2: Convert aggregation result to map for quick lookup
-    const statsMap = {};
-    orderStats.forEach(stat => {
-      statsMap[stat._id.toString()] = {
-        totalOrders: stat.totalOrders,
-        totalEarnings: stat.totalEarnings.toFixed(2)
-      };
-    });
-
-    // 🔹 Step 3: Fetch all restaurants normally (full details)
-    const restaurants = await Restaurant.find();
-
-    // 🔹 Step 4: Merge stats into restaurant objects
-    const result = restaurants.map(restaurant => {
-      const stats = statsMap[restaurant._id.toString()] || { totalOrders: 0, totalEarnings: 0 };
-      return {
-        ...restaurant.toObject(), // keep all original restaurant fields
-        totalOrders: stats.totalOrders,
-        totalEarnings: stats.totalEarnings,
-      };
-    });
-
-    // 🔹 Step 5: Send response
-    res.status(200).json({
-      success: true,
-      message: "All restaurants with order statistics fetched successfully.",
-      data: result
-    });
-  } catch (err) {
-    console.error("Error fetching restaurants with order stats:", err);
     res.status(500).json({
       success: false,
       message: "Server error",
@@ -515,17 +366,134 @@ exports.getAllRestaurants = async (req, res) => {
   }
 };
 
+// basic error sender
+function sendError(res, msg) {
+  return res.status(400).json({ success: false, message: msg });
+}
+
+
+
+
+exports.getAllRestaurants = async (req, res) => {
+  try {
+    // 🔹 Step 1: Aggregate order stats (group by restaurantId)
+    const orderStats = await orderModel.aggregate([
+      {
+        $match: { restaurantId: { $ne: null } }, // Only include orders where restaurantId is not null
+      },
+      {
+        $group: {
+          _id: "$restaurantId",  // Group by restaurantId
+          totalOrders: { $sum: 1 },  // Count total orders
+          totalEarnings: { $sum: "$subTotal" }  // Sum of earnings (subTotal)
+        }
+      }
+    ]);
+
+    // 🔹 Step 2: Aggregate user count (group by referredBy - the restaurant's referralCode)
+    const userStats = await userModel.aggregate([
+      {
+        $match: { referredBy: { $ne: null } },  // Only include users where referredBy is not null
+      },
+      {
+        $group: {
+          _id: "$referredBy",  // Group by referredBy field (restaurant's referralCode)
+          totalUsers: { $sum: 1 }  // Count total users referred by each restaurant
+        }
+      }
+    ]);
+
+    // 🔹 Step 3: Convert aggregation results to maps for quick lookup
+    const statsMap = {};
+    orderStats.forEach(stat => {
+      if (stat._id) {  // Ensure _id is not null or undefined
+        statsMap[stat._id.toString()] = {
+          totalOrders: stat.totalOrders,
+          totalEarnings: stat.totalEarnings.toFixed(2)
+        };
+      }
+    });
+
+    const userMap = {};
+    userStats.forEach(stat => {
+      if (stat._id) {  // Ensure _id (referralCode) is not null or undefined
+        userMap[stat._id.toString()] = {
+          totalUsers: stat.totalUsers
+        };
+      }
+    });
+
+    // 🔹 Step 4: Fetch all restaurants normally (full details)
+    const restaurants = await Restaurant.find();
+
+    // 🔹 Step 5: Merge stats and user count into restaurant objects
+    const result = restaurants.map(restaurant => {
+      // Use null checks to prevent errors
+      const orderStats = statsMap[restaurant._id.toString()] || { totalOrders: 0, totalEarnings: 0 };
+      const userStats = userMap[restaurant.referralCode] || { totalUsers: 0 };
+
+      return {
+        ...restaurant.toObject(),  // Keep all original restaurant fields
+        totalOrders: orderStats.totalOrders,
+        totalEarnings: orderStats.totalEarnings,
+        totalUsers: userStats.totalUsers  // Add the user count
+      };
+    });
+
+    // 🔹 Step 6: Send the response
+    res.status(200).json({
+      success: true,
+      message: "All restaurants with order statistics and user counts fetched successfully.",
+      data: result
+    });
+  } catch (err) {
+    console.error("Error fetching restaurants with order stats and user counts:", err);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err.message
+    });
+  }
+};
+
+
 // ✅ Get Restaurant by ID
 exports.getRestaurantById = async (req, res) => {
   try {
-    const restaurant = await Restaurant.findById(req.params.id);
-    if (!restaurant) return res.status(404).json({ success: false, message: "Restaurant not found" });
+    const restaurant = await Restaurant.findById(req.params.id)
+      .populate({
+        path: "reviews.userId",
+        select: "firstName lastName profileImg"
+      });
 
-    res.status(200).json({ success: true, data: restaurant });
+    if (!restaurant) {
+      return res.status(404).json({ success: false, message: "Restaurant not found" });
+    }
+
+    // Calculate totalRatings as average stars
+    const totalRatings = restaurant.reviews.length > 0
+      ? parseFloat(
+          (
+            restaurant.reviews.reduce((acc, r) => acc + r.stars, 0) / restaurant.reviews.length
+          ).toFixed(2)
+        )
+      : 0;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        ...restaurant.toObject(),
+        totalRatings
+      }
+    });
+
   } catch (err) {
+    console.error("Get Restaurant Error:", err);
     res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
 };
+
+
 
 // ✅ Update Restaurant
 exports.updateRestaurant = async (req, res) => {
@@ -538,7 +506,11 @@ exports.updateRestaurant = async (req, res) => {
       location,
       rating,
       startingPrice,
-      status
+      status,
+      commission, // ADDED COMMISSION FIELD
+      email,
+      mobile,
+      gstNumber
     } = req.body;
 
     // ✅ Find restaurant
@@ -548,6 +520,22 @@ exports.updateRestaurant = async (req, res) => {
         success: false,
         message: "Restaurant not found"
       });
+    }
+
+    // ✅ Validate commission if provided
+    if (commission !== undefined) {
+      if (commission === "" || commission === null) {
+        return res.status(400).json({
+          success: false,
+          message: "Commission percentage is required"
+        });
+      }
+      if (isNaN(commission) || parseFloat(commission) < 0 || parseFloat(commission) > 50) {
+        return res.status(400).json({
+          success: false,
+          message: "Commission must be a valid percentage between 0 and 50"
+        });
+      }
     }
 
     // ✅ Parse location if provided
@@ -600,6 +588,36 @@ exports.updateRestaurant = async (req, res) => {
       }
     }
 
+    // ✅ Handle document updates if provided
+    const documentFields = ['gstCertificate', 'fssaiLicense', 'panCard', 'aadharCard'];
+    
+    for (const field of documentFields) {
+      if (req.files && req.files[field]) {
+        const documentFile = req.files[field];
+
+        // Upload new document
+        const result = await cloudinary.uploader.upload(documentFile.tempFilePath, {
+          folder: "restaurants-docs"
+        });
+
+        // Delete old document from Cloudinary if exists
+        if (restaurant[field]?.public_id) {
+          await cloudinary.uploader.destroy(restaurant[field].public_id);
+        }
+
+        // Update document data
+        restaurant[field] = {
+          public_id: result.public_id,
+          url: result.secure_url
+        };
+
+        // Remove temp file
+        if (fs.existsSync(documentFile.tempFilePath)) {
+          fs.unlinkSync(documentFile.tempFilePath);
+        }
+      }
+    }
+
     // ✅ Update other fields
     if (restaurantName) restaurant.restaurantName = restaurantName;
     if (description) restaurant.description = description;
@@ -607,6 +625,12 @@ exports.updateRestaurant = async (req, res) => {
     if (startingPrice) restaurant.startingPrice = startingPrice;
     if (rating) restaurant.rating = rating;
     if (status) restaurant.status = status;
+    if (email) restaurant.email = email;
+    if (mobile) restaurant.mobile = mobile;
+    if (gstNumber !== undefined) restaurant.gstNumber = gstNumber;
+    
+    // ADDED COMMISSION UPDATE
+    if (commission !== undefined) restaurant.commission = parseFloat(commission);
 
     if (parsedLocation) {
       restaurant.location = {
@@ -624,9 +648,13 @@ exports.updateRestaurant = async (req, res) => {
     });
 
   } catch (err) {
-    // Cleanup temp file on error
-    if (req.files && req.files.image && req.files.image.tempFilePath && fs.existsSync(req.files.image.tempFilePath)) {
-      fs.unlinkSync(req.files.image.tempFilePath);
+    // Cleanup temp files on error
+    if (req.files) {
+      Object.values(req.files).forEach(file => {
+        if (file.tempFilePath && fs.existsSync(file.tempFilePath)) {
+          fs.unlinkSync(file.tempFilePath);
+        }
+      });
     }
 
     console.error("Update Restaurant Error:", err);
@@ -796,60 +824,125 @@ function getDistance(coord1, coord2) {
 
 
 // ✅ V2: Get Nearby Restaurants by Category (Optimized)
+// Helper: calculate distance in km (Haversine formula)
+function calculateDistanceKm(lat1, lon1, lat2, lon2) {
+  const R = 6371; // Earth radius in km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
 exports.getNearbyRestaurantsByCategoryV2 = async (req, res) => {
   try {
     const { userId } = req.params;
     const { categoryName, maxDistance = 5000 } = req.query;
 
-    // 🔹 Validation
+    // ---------------- Validation ----------------
     if (!mongoose.Types.ObjectId.isValid(userId)) {
       return res.status(400).json({ success: false, message: "Invalid userId" });
     }
-
     if (!categoryName || categoryName.trim() === "") {
       return res.status(400).json({ success: false, message: "Category name is required" });
     }
 
-    // 🔹 Fetch user and location
-    const user = await User.findById(userId);
+    // ---------------- Fetch user ----------------
+    const user = await User.findById(userId).select("location");
     if (!user || !user.location?.coordinates?.length) {
       return res.status(404).json({ success: false, message: "User or location not found" });
     }
+    const [userLon, userLat] = user.location.coordinates;
 
-    const userCoords = user.location.coordinates;
+    // ---------------- Get category ID ----------------
+    const category = await Category.findOne({
+      categoryName: { $regex: new RegExp(`^${categoryName}$`, "i") }
+    });
+    if (!category) {
+      return res.status(404).json({ success: false, message: `Category '${categoryName}' not found` });
+    }
+    const categoryId = category._id;
 
-    // 🔹 Query: Geo + CategoryName (corrected)
-    const restaurants = await Restaurant.find({
-      location: {
-        $near: {
-          $geometry: {
-            type: "Point",
-            coordinates: userCoords,
-          },
-          $maxDistance: parseInt(maxDistance),
-        },
-      },
-      categoryName: { $regex: new RegExp(`^${categoryName}$`, "i") }, // case-insensitive exact match
-    }).select("-__v");
+    // ---------------- Query RestaurantProduct ----------------
+    let products = await RestaurantProduct.find({
+      "recommended.category": categoryId,
+      status: "active"
+    })
+    .populate({
+      path: "restaurantId",
+      select: "restaurantName locationName location image description rating"
+    })
+    .lean();
+
+    // ---------------- Group products by restaurant ----------------
+    const restaurantMap = new Map();
+
+    products.forEach(product => {
+      const restaurant = product.restaurantId;
+      if (!restaurant) return;
+
+      const matchingRecommended = product.recommended.filter(item =>
+        item.category && item.category.toString() === categoryId.toString()
+      );
+
+      if (!matchingRecommended.length) return;
+
+      if (!restaurantMap.has(restaurant._id.toString())) {
+        restaurantMap.set(restaurant._id.toString(), {
+          ...restaurant,
+          recommended: matchingRecommended
+        });
+      } else {
+        // Append recommended items if restaurant already exists
+        restaurantMap.get(restaurant._id.toString()).recommended.push(...matchingRecommended);
+      }
+    });
+
+    // ---------------- Calculate distance & time ----------------
+    const nearbyRestaurants = Array.from(restaurantMap.values())
+      .map(restaurant => {
+        if (!restaurant.location?.coordinates) {
+          return { ...restaurant, timeAndKm: { distance: "N/A", time: "N/A" } };
+        }
+
+        const [restLon, restLat] = restaurant.location.coordinates;
+        const distanceKm = calculateDistanceKm(userLat, userLon, restLat, restLon);
+        const timeMins = Math.ceil(distanceKm / 0.5); // assume 30 km/h
+
+        return {
+          ...restaurant,
+          timeAndKm: {
+            distance: `${distanceKm.toFixed(2)} km`,
+            time: `${timeMins} mins`
+          }
+        };
+      })
+      .filter(r => {
+        const distStr = r.timeAndKm.distance;
+        if (distStr === "N/A") return false;
+        const distNum = parseFloat(distStr);
+        return distNum <= maxDistance / 1000; // convert meters → km
+      });
 
     res.status(200).json({
       success: true,
-      message: `Nearby restaurants in '${categoryName}' category`,
-      count: restaurants.length,
-      data: restaurants,
+      message: `Nearby restaurants with products in '${categoryName}' category`,
+      count: nearbyRestaurants.length,
+      data: nearbyRestaurants
     });
+
   } catch (error) {
-    console.error("Error in getNearbyRestaurantsByCategoryV2:", error);
+    console.error("❌ Error in getNearbyRestaurantsByCategoryV2:", error);
     res.status(500).json({
       success: false,
       message: "Server error",
-      error: error.message,
+      error: error.message
     });
   }
 };
-
-
-
 
 // vendor transaction module
 
@@ -1624,5 +1717,115 @@ exports.getRestaurantsByCategory = async (req, res) => {
   } catch (error) {
     console.error("Error fetching restaurants by category:", error);
     return res.status(500).json({ success: false, message: "Server Error", error: error.message });
+  }
+};
+
+
+
+
+exports.uploadRestaurantDocuments = async (req, res) => {
+  try {
+    const { vendorId } = req.params; // ✅ changed from 'id' to 'vendorId'
+
+    if (!vendorId || !mongoose.Types.ObjectId.isValid(vendorId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid vendorId is required in params"
+      });
+    }
+
+    // Check if restaurant/vendor exists
+    const restaurant = await Restaurant.findById(vendorId);
+    if (!restaurant) {
+      return res.status(404).json({
+        success: false,
+        message: 'Vendor/Restaurant not found'
+      });
+    }
+
+    // Check if at least one file is provided
+    if (!req.files?.declarationForm && !req.files?.vendorAgreement) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide at least one document to upload'
+      });
+    }
+
+    // Cloudinary upload function
+    const uploadFile = async (file, folder) => {
+      const result = await cloudinary.uploader.upload(file.tempFilePath, { 
+        folder: `restaurants-docs/${folder}`,
+        resource_type: 'auto'
+      });
+      return {
+        public_id: result.public_id,
+        url: result.secure_url
+      };
+    };
+
+    const updateData = {};
+
+    // Upload declaration form
+    if (req.files.declarationForm) {
+      try {
+        updateData.declarationForm = await uploadFile(req.files.declarationForm, "declaration-forms");
+        updateData.declarationForm.uploadedAt = new Date();
+      } catch (uploadError) {
+        console.error("Declaration form upload error:", uploadError);
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to upload declaration form'
+        });
+      }
+    }
+
+    // Upload vendor agreement
+    if (req.files.vendorAgreement) {
+      try {
+        updateData.vendorAgreement = await uploadFile(req.files.vendorAgreement, "vendor-agreements");
+        updateData.vendorAgreement.uploadedAt = new Date();
+      } catch (uploadError) {
+        console.error("Vendor agreement upload error:", uploadError);
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to upload vendor agreement'
+        });
+      }
+    }
+
+    // Update vendor/restaurant document
+    const updatedRestaurant = await Restaurant.findByIdAndUpdate(
+      vendorId,
+      { $set: updateData },
+      { new: true, runValidators: true }
+    );
+
+    res.json({
+      success: true,
+      message: 'Documents uploaded successfully',
+      data: updatedRestaurant
+    });
+
+  } catch (err) {
+    console.error("Upload Restaurant Documents Error:", err);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err.message
+    });
+  }
+};
+
+
+
+// Get All Commissions
+exports.getAllCommissions = async (req, res) => {
+  try {
+    const commissions = await Commission.find()
+      .populate("vendorId", "name email")
+      .populate("ambassadorId", "name email");
+    res.status(200).json({ success: true, data: commissions });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
   }
 };

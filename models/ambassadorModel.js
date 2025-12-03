@@ -35,6 +35,29 @@ const ambassadorSchema = new mongoose.Schema({
         date: { type: Date, default: Date.now },
       },
     ],
+      aadharCard: {
+    type: String,
+  },
+  panCard: {
+    type: String,
+  },
+  kycStatus: {
+    type: String,
+    enum: ['pending', 'verified', 'rejected', 'under_review'],
+    default: 'pending'
+  },
+  kycSubmittedAt: {
+    type: Date,
+    default: Date.now
+  },
+  kycVerifiedAt: {
+    type: Date,
+    default: null
+  },
+  kycRejectionReason: {
+    type: String,
+    default: ""
+  },
 }, { timestamps: true });
 
 const Ambassador = mongoose.model('Ambassador', ambassadorSchema);

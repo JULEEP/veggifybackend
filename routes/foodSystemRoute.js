@@ -59,6 +59,10 @@ router.get('/profile/:restaurantId', controller.getRestaurantProfile);
 
 router.get('/allrestaurant/:categoryId', controller.getRestaurantsByCategory);
 
+router.put('/documents/:vendorId', controller.uploadRestaurantDocuments);
+router.get("/getCommissions", controller.getAllCommissions);
+
+
 
 
 

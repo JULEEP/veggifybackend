@@ -23,6 +23,7 @@ const orderSchema = new mongoose.Schema(
       type: String,
       enum: ["COD", "Online"],
     },
+       platformCharge: { type: Number, default: 0 }, // ✅ Added platformCharge
     paymentStatus: {
       type: String,
       enum: ["Pending", "Paid", "Failed"],
@@ -31,6 +32,9 @@ const orderSchema = new mongoose.Schema(
 
 
       totalAmount: {
+    type: Number,
+  },
+  gstAmount: {
     type: Number,
   },
 
@@ -103,18 +107,22 @@ const orderSchema = new mongoose.Schema(
     default: "Pending"
   },
 
+  transactionId: { type: String, default: null }, // store Razorpay txn id
+
 
    products: [{
     restaurantProductId: { type: mongoose.Schema.Types.ObjectId, ref: 'RestaurantProduct', },
     recommendedId: { type: mongoose.Schema.Types.ObjectId, ref: 'RecommendedItem' },
     quantity: { type: Number, default: 1 },
-    name: { type: String,  },
-    basePrice: { type: Number, },
-    image: { type: String },
-    addOn: { // storing add-ons if present
-      variation: { type: String },
-      plateitems: { type: Number },
-    },
+   // Plate selection flags
+      isHalfPlate: { type: Boolean, default: false },
+      isFullPlate: { type: Boolean, default: false },
+
+      name: { type: String, required: true },
+      price: { type: Number, default: 0 }, // backend sets automatically
+      image: { type: String, default: "" },
+        discountPercent: { type: Number, default: 0 },   // <-- add this
+      discountAmount: { type: Number, default: 0 }    // <-- add this
   }],
 
   // ✅ Optional timestamps

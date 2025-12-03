@@ -10,6 +10,8 @@ const mongoose = require("mongoose");
 const fs = require("fs");
 const Ambassador = require("../models/ambassadorModel");
 const QRCode = require('qrcode');
+const Razorpay = require("razorpay");
+
 
 // Haversine formula to calculate distance in km
 function calculateDistanceKm(lat1, lon1, lat2, lon2) {
@@ -422,7 +424,7 @@ exports.getWishlist = async (req, res) => {
   const { userId } = req.params;
 
   try {
-    // 1. Get the user's wishlist (array of recommended._id)
+    // 1. Get the user's wishlist
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ message: "User not found" });
 
@@ -431,20 +433,39 @@ exports.getWishlist = async (req, res) => {
       return res.status(404).json({ message: "Wishlist is empty" });
     }
 
-    // 2. Find only the recommended items
+    // 2. Find recommended items with restaurant details
     const wishlistItems = await Promise.all(
       myWishlist.map(async (recId) => {
+        // Find the product that has this recommended item
         const product = await RestaurantProduct.findOne(
           { "recommended._id": recId },
-          { recommended: { $elemMatch: { _id: recId } } } // only the matched recommended
-        ).populate("recommended.category"); // populate category if needed
+          { recommended: { $elemMatch: { _id: recId } } }
+        ).populate("restaurantId"); // populate restaurant details
 
-        // Return only the recommended object
-        return product?.recommended[0] || null;
+        if (!product || !product.recommended[0]) return null;
+
+        const recommendedItem = product.recommended[0];
+
+        // Add restaurant details to the recommended item
+        const restaurant = product.restaurantId; // populated document
+        const restaurantDetails = restaurant
+          ? {
+              restaurantId: restaurant._id, // Added restaurantId
+              restaurantName: restaurant.restaurantName || "",
+              locationName: restaurant.locationName || "",
+              status: restaurant.status || "unknown"
+            }
+          : {};
+
+        return {
+          ...recommendedItem.toObject(),
+          restaurantProductId: product._id, // ✅ Include parent RestaurantProduct ID
+          restaurant: restaurantDetails
+        };
       })
     );
 
-    // Filter out nulls if any recommended._id was not found
+    // Filter out nulls
     const filteredWishlist = wishlistItems.filter(item => item !== null);
 
     res.status(200).json({ wishlist: filteredWishlist });
@@ -453,6 +474,9 @@ exports.getWishlist = async (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 };
+
+
+
 // 3. Remove Specific Product
 exports.removeFromWishlist = async (req, res) => {
   const { userId, productId } = req.params;
@@ -474,195 +498,335 @@ exports.removeFromWishlist = async (req, res) => {
 // -------------------- ORDER CONTROLLERS --------------------
 
 
+const razorpay = new Razorpay({
+  key_id: process.env.RAZORPAY_KEY_ID || "rzp_test_RgqXPvDLbgEIVv",
+  key_secret: process.env.RAZORPAY_KEY_SECRET || "1FQJrX3Ol38hWDeZ4CRI7O3i",
+});
+
+
+
+// exports.createOrder = async (req, res) => {
+//   try {
+//     const { userId, paymentMethod, addressId } = req.body;
+
+//     // Basic validations
+//     if (!mongoose.Types.ObjectId.isValid(userId))
+//       return res.status(400).json({ success: false, message: "Valid userId is required." });
+//     if (!mongoose.Types.ObjectId.isValid(addressId))
+//       return res.status(400).json({ success: false, message: "Valid addressId is required." });
+//     if (!["COD", "Online"].includes(paymentMethod))
+//       return res.status(400).json({ success: false, message: "Invalid payment method." });
+
+//     // Get cart by userId
+//     const cart = await Cart.findOne({ userId }).populate('products.restaurantProductId');
+//     if (!cart) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "Cart not found for this user."
+//       });
+//     }
+
+//     // Check if cart has products
+//     if (!cart.products || cart.products.length === 0) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Cart is empty. Add products to create order."
+//       });
+//     }
+
+//     // Get user with specific address
+//     const user = await User.findOne(
+//       { _id: userId, "addresses._id": addressId },
+//       {
+//         name: 1,
+//         email: 1,
+//         location: 1,
+//         referredBy: 1, // Get the referral code if available
+//         addresses: { $elemMatch: { _id: addressId } }
+//       }
+//     );
+//     if (!user) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "User or address not found."
+//       });
+//     }
+
+//     const selectedAddress = user.addresses[0];
+//     if (!selectedAddress || !user.location || !user.location.coordinates) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "User location or selected address not found."
+//       });
+//     }
+
+//     // Get restaurant details from cart
+//     const restaurantId = cart.restaurantId;
+//     if (!restaurantId) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Restaurant not found in cart."
+//       });
+//     }
+
+//     const restaurant = await Restaurant.findById(restaurantId, "restaurantName location");
+//     if (!restaurant) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "Restaurant not found."
+//       });
+//     }
+
+//     // Process products from cart
+//     const cleanProducts = [];
+//     let subTotal = 0;
+//     let totalItems = 0;
+
+//     for (const prod of cart.products) {
+//       const restaurantProduct = prod.restaurantProductId;
+//       const recommendedItem = restaurantProduct?.recommended?.id(prod.recommendedId);
+
+//       if (!recommendedItem) continue;
+
+//       let unitPrice = recommendedItem.price || 0;
+//       const addOnClean = {};
+
+//       // Handle addons and variations
+//       if (recommendedItem.addons && prod.addOn) {
+//         if (recommendedItem.addons.variation?.type.includes("Half") && prod.addOn.variation === "Half") {
+//           addOnClean.variation = "Half";
+//           unitPrice = recommendedItem.calculatedPrice?.half ||
+//             Math.round(unitPrice * (recommendedItem.vendorHalfPercentage / 100));
+//         }
+
+//         if (recommendedItem.addons.plates && prod.addOn.plateitems > 0) {
+//           addOnClean.plateitems = prod.addOn.plateitems;
+//           const plateCost = prod.addOn.plateitems * (recommendedItem.vendor_Platecost || 0);
+//           unitPrice += plateCost;
+//         }
+//       }
+
+//       const productTotal = unitPrice * prod.quantity;
+//       subTotal += productTotal;
+//       totalItems += prod.quantity;
+
+//       cleanProducts.push({
+//         restaurantProductId: prod.restaurantProductId._id,
+//         recommendedId: prod.recommendedId,
+//         quantity: prod.quantity,
+//         name: recommendedItem.name,
+//         basePrice: unitPrice,
+//         image: recommendedItem.image || "",
+//         ...(Object.keys(addOnClean).length > 0 ? { addOn: addOnClean } : {}), // Add addons if any
+//       });
+//     }
+
+//     // **Calculate distanceKm** (using Haversine formula)
+//     const userCoords = user.location.coordinates; // Assuming [longitude, latitude]
+//     const restaurantCoords = restaurant.location.coordinates; // Assuming [longitude, latitude]
+
+//     const distanceKm = haversineDistance(
+//       [userCoords[0], userCoords[1]],
+//       [restaurantCoords[0], restaurantCoords[1]]
+//     );
+
+//     // **Get the DeliveryBoy's baseDeliveryCharge** (Assuming we can fetch the nearest available delivery boy)
+//     const nearestDeliveryBoy = await DeliveryBoy.findOne({ status: 'Available' }).sort({ createdAt: 1 });
+//     const baseDeliveryCharge = nearestDeliveryBoy ? nearestDeliveryBoy.baseDeliveryCharge : 5; // Default base charge if no delivery boy found
+
+//     // Calculate the actual delivery charge and round to nearest whole number
+//     const calculatedDeliveryCharge = Math.round(baseDeliveryCharge * distanceKm); // Round to nearest integer
+
+//     // Apply coupon from cart
+//     const couponDiscount = cart.couponDiscount || 0;
+//     const appliedCoupon = cart.appliedCoupon || null;
+//     const totalPayable = subTotal + calculatedDeliveryCharge - couponDiscount;
+
+//     // Round the total payable value to 2 decimal places
+//     const roundedTotalPayable = totalPayable.toFixed(2); // Ensure 2 decimals
+
+//     // Auto-set payment status based on payment method
+//     const paymentStatus = paymentMethod === "COD" ? "Pending" : "Paid";
+
+//     // Create order data with restaurant location directly
+//     const orderData = {
+//       userId,
+//       cartId: cart._id, // Use cart's _id
+//       restaurantId,
+//       restaurantLocation: restaurant.location, // Save the restaurant's location here (directly from restaurant)
+//       deliveryAddress: selectedAddress, // Full address object
+//       paymentMethod,
+//       paymentStatus,
+//       orderStatus: "Pending",
+//       totalItems,
+//       subTotal,
+//       deliveryCharge: calculatedDeliveryCharge,
+//       couponDiscount,
+//       appliedCoupon,
+//       totalPayable: roundedTotalPayable,  // Use the rounded totalPayable here
+//       products: cleanProducts,
+//       distanceKm,
+//     };
+
+//     // Create order
+//     const order = await Order.create(orderData);
+//     const populatedOrder = await Order.findById(order._id)
+//       .populate("restaurantId", "restaurantName") // Just populate restaurantName if needed
+//       .populate("userId", "name email");
+
+//     // Optional: Clear cart after successful order creation
+//     await Cart.findOneAndUpdate(
+//       { userId },
+//       {
+//         products: [],
+//         subTotal: 0,
+//         deliveryCharge: 0,
+//         couponDiscount: 0,
+//         finalAmount: 0,
+//         totalItems: 0,
+//         appliedCoupon: null,
+//       }
+//     );
+
+//     return res.status(201).json({
+//       success: true,
+//       message: paymentStatus === "Paid" ? "Payment successful and order created" : "Order created successfully",
+//       data: populatedOrder,
+//     });
+
+//   } catch (error) {
+//     console.error("createOrder error:", error);
+//     return res.status(500).json({
+//       success: false,
+//       message: "Server error",
+//       error: error.message,
+//     });
+//   }
+// };
+
 
 
 exports.createOrder = async (req, res) => {
   try {
-    const { userId, paymentMethod, addressId } = req.body;
+    const { userId, paymentMethod, addressId, transactionId } = req.body;
 
-    // Basic validations
+    // ✅ Validate input
     if (!mongoose.Types.ObjectId.isValid(userId))
       return res.status(400).json({ success: false, message: "Valid userId is required." });
+
     if (!mongoose.Types.ObjectId.isValid(addressId))
       return res.status(400).json({ success: false, message: "Valid addressId is required." });
+
     if (!["COD", "Online"].includes(paymentMethod))
       return res.status(400).json({ success: false, message: "Invalid payment method." });
 
-    // Get cart by userId
+    if (paymentMethod === "Online" && !transactionId)
+      return res.status(400).json({ success: false, message: "transactionId is required for Online payment." });
+
+    // ✅ Fetch cart
     const cart = await Cart.findOne({ userId }).populate('products.restaurantProductId');
-    if (!cart) {
-      return res.status(404).json({
-        success: false,
-        message: "Cart not found for this user."
-      });
-    }
+    if (!cart || !cart.products.length)
+      return res.status(404).json({ success: false, message: "Cart is empty." });
 
-    // Check if cart has products
-    if (!cart.products || cart.products.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Cart is empty. Add products to create order."
-      });
-    }
-
-    // Get user with specific address
+    // ✅ Fetch user & address
     const user = await User.findOne(
       { _id: userId, "addresses._id": addressId },
-      {
-        name: 1,
-        email: 1,
-        location: 1,
-        referredBy: 1, // Get the referral code if available
-        addresses: { $elemMatch: { _id: addressId } }
-      }
+      { name: 1, email: 1, location: 1, addresses: { $elemMatch: { _id: addressId } } }
     );
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User or address not found."
-      });
-    }
+    if (!user)
+      return res.status(404).json({ success: false, message: "User or address not found." });
 
     const selectedAddress = user.addresses[0];
-    if (!selectedAddress || !user.location || !user.location.coordinates) {
-      return res.status(400).json({
-        success: false,
-        message: "User location or selected address not found."
-      });
-    }
 
-    // Get restaurant details from cart
-    const restaurantId = cart.restaurantId;
-    if (!restaurantId) {
-      return res.status(400).json({
-        success: false,
-        message: "Restaurant not found in cart."
-      });
-    }
+    // ✅ Restaurant info
+    const restaurant = await Restaurant.findById(cart.restaurantId, "restaurantName location");
+    if (!restaurant)
+      return res.status(404).json({ success: false, message: "Restaurant not found." });
 
-    const restaurant = await Restaurant.findById(restaurantId, "restaurantName location");
-    if (!restaurant) {
-      return res.status(404).json({
-        success: false,
-        message: "Restaurant not found."
-      });
-    }
+    // ✅ Clean products (already formatted in cart)
+    const cleanProducts = cart.products;
 
-    // Process products from cart
-    const cleanProducts = [];
-    let subTotal = 0;
-    let totalItems = 0;
-
-    for (const prod of cart.products) {
-      const restaurantProduct = prod.restaurantProductId;
-      const recommendedItem = restaurantProduct?.recommended?.id(prod.recommendedId);
-
-      if (!recommendedItem) continue;
-
-      let unitPrice = recommendedItem.price || 0;
-      const addOnClean = {};
-
-      // Handle addons and variations
-      if (recommendedItem.addons && prod.addOn) {
-        if (recommendedItem.addons.variation?.type.includes("Half") && prod.addOn.variation === "Half") {
-          addOnClean.variation = "Half";
-          unitPrice = recommendedItem.calculatedPrice?.half ||
-            Math.round(unitPrice * (recommendedItem.vendorHalfPercentage / 100));
-        }
-
-        if (recommendedItem.addons.plates && prod.addOn.plateitems > 0) {
-          addOnClean.plateitems = prod.addOn.plateitems;
-          const plateCost = prod.addOn.plateitems * (recommendedItem.vendor_Platecost || 0);
-          unitPrice += plateCost;
-        }
-      }
-
-      const productTotal = unitPrice * prod.quantity;
-      subTotal += productTotal;
-      totalItems += prod.quantity;
-
-      cleanProducts.push({
-        restaurantProductId: prod.restaurantProductId._id,
-        recommendedId: prod.recommendedId,
-        quantity: prod.quantity,
-        name: recommendedItem.name,
-        basePrice: unitPrice,
-        image: recommendedItem.image || "",
-        ...(Object.keys(addOnClean).length > 0 ? { addOn: addOnClean } : {}), // Add addons if any
-      });
-    }
-
-    // **Calculate distanceKm** (using Haversine formula)
-    const userCoords = user.location.coordinates; // Assuming [longitude, latitude]
-    const restaurantCoords = restaurant.location.coordinates; // Assuming [longitude, latitude]
-
-    const distanceKm = haversineDistance(
-      [userCoords[0], userCoords[1]],
-      [restaurantCoords[0], restaurantCoords[1]]
-    );
-
-    // **Get the DeliveryBoy's baseDeliveryCharge** (Assuming we can fetch the nearest available delivery boy)
-    const nearestDeliveryBoy = await DeliveryBoy.findOne({ status: 'Available' }).sort({ createdAt: 1 });
-    const baseDeliveryCharge = nearestDeliveryBoy ? nearestDeliveryBoy.baseDeliveryCharge : 5; // Default base charge if no delivery boy found
-
-    // Calculate the actual delivery charge and round to nearest whole number
-    const calculatedDeliveryCharge = Math.round(baseDeliveryCharge * distanceKm); // Round to nearest integer
-
-    // Apply coupon from cart
+    // ✅ Calculate totals and GST
+    const subTotal = cart.subTotal;
+    const gstAmount = +(subTotal * 0.05).toFixed(2);
+    const deliveryCharge = cart.deliveryCharge;
+    const totalItems = cart.totalItems;
     const couponDiscount = cart.couponDiscount || 0;
     const appliedCoupon = cart.appliedCoupon || null;
-    const totalPayable = subTotal + calculatedDeliveryCharge - couponDiscount;
+    const distanceKm = cart.distanceKm || 0;
+    // Inside createOrder after calculating totals
+const platformCharge = cart.platformCharge || 0;
 
-    // Round the total payable value to 2 decimal places
-    const roundedTotalPayable = totalPayable.toFixed(2); // Ensure 2 decimals
+const totalPayable = +(subTotal + gstAmount + deliveryCharge + platformCharge - couponDiscount).toFixed(2);
+    //const totalPayable = +(subTotal + gstAmount + deliveryCharge - couponDiscount).toFixed(2);
 
-    // Auto-set payment status based on payment method
-    const paymentStatus = paymentMethod === "COD" ? "Pending" : "Paid";
+    // ✅ Payment status logic
+    let paymentStatus = paymentMethod === "COD" ? "Pending" : "Paid";
+    let razorpayPaymentDetails = null;
+    let finalTransactionId = transactionId || null;
 
-    // Create order data with restaurant location directly
-    const orderData = {
+    if (paymentMethod === "Online") {
+      try {
+        const payment = await razorpay.payments.fetch(transactionId);
+        razorpayPaymentDetails = payment;
+
+        if (payment.status === "authorized") {
+          const captured = await razorpay.payments.capture(transactionId, payment.amount, payment.currency);
+          razorpayPaymentDetails = captured;
+          finalTransactionId = captured.id;
+        }
+
+        // ✅ Always Paid for online
+        paymentStatus = "Paid";
+      } catch (err) {
+        return res.status(500).json({
+          success: false,
+          message: "Razorpay payment verification failed.",
+          error: err.message
+        });
+      }
+    }
+
+    // ✅ Create order
+    const order = await Order.create({
       userId,
-      cartId: cart._id, // Use cart's _id
-      restaurantId,
-      restaurantLocation: restaurant.location, // Save the restaurant's location here (directly from restaurant)
-      deliveryAddress: selectedAddress, // Full address object
+      cartId: cart._id,
+      restaurantId: cart.restaurantId,
+      restaurantLocation: restaurant.location,
+      deliveryAddress: selectedAddress,
       paymentMethod,
       paymentStatus,
+      transactionId: finalTransactionId,
+      razorpayPaymentDetails,
       orderStatus: "Pending",
       totalItems,
       subTotal,
-      deliveryCharge: calculatedDeliveryCharge,
+      gstAmount,
+      deliveryCharge,
       couponDiscount,
       appliedCoupon,
-      totalPayable: roundedTotalPayable,  // Use the rounded totalPayable here
+      platformCharge,
+      totalPayable,
       products: cleanProducts,
-      distanceKm,
-    };
+      distanceKm
+    });
 
-    // Create order
-    const order = await Order.create(orderData);
+    // ✅ Populate order for response
     const populatedOrder = await Order.findById(order._id)
-      .populate("restaurantId", "restaurantName") // Just populate restaurantName if needed
+      .populate("restaurantId", "restaurantName")
       .populate("userId", "name email");
 
-    // Optional: Clear cart after successful order creation
+    // ✅ Clear cart
     await Cart.findOneAndUpdate(
       { userId },
-      {
-        products: [],
-        subTotal: 0,
-        deliveryCharge: 0,
-        couponDiscount: 0,
-        finalAmount: 0,
-        totalItems: 0,
-        appliedCoupon: null,
-      }
+      { products: [], subTotal: 0, deliveryCharge: 0, couponDiscount: 0, gstAmount: 0, finalAmount: 0, totalItems: 0, appliedCoupon: null }
     );
 
     return res.status(201).json({
       success: true,
-      message: paymentStatus === "Paid" ? "Payment successful and order created" : "Order created successfully",
+      message: "Order created successfully",
       data: populatedOrder,
+      razorpayPaymentDetails
     });
 
   } catch (error) {
@@ -859,7 +1023,7 @@ exports.getPreviousOrdersByUserId = async (req, res) => {
     // Find orders for that user with status "Completed"
     const orders = await Order.find({
       userId,
-      orderStatus: "Completed"
+      orderStatus: "Delivered"
     }).populate("restaurantId", "restaurantName locationName");
 
     return res.status(200).json({
@@ -882,7 +1046,6 @@ exports.getAcceptedOrdersByUserId = async (req, res) => {
   try {
     const { userId } = req.params;
 
-    // Validate userId
     if (!mongoose.Types.ObjectId.isValid(userId)) {
       return res.status(400).json({
         success: false,
@@ -890,65 +1053,108 @@ exports.getAcceptedOrdersByUserId = async (req, res) => {
       });
     }
 
-    // Fetch all accepted orders for the user
-    const acceptedOrders = await Order.find({
-      userId,
-      orderStatus: "Accepted"
-    })
+    console.log("🔍 USER ID:", userId);
+
+    // Sirf latest order find karo BINA KISI FILTER KE
+    const latestOrder = await Order.findOne({ userId })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    console.log("🎯 LATEST ORDER (BINA FILTER KE):");
+    console.log("   Order ID:", latestOrder?._id?.toString());
+    console.log("   Status:", latestOrder?.orderStatus);
+    console.log("   Created At:", latestOrder?.createdAt);
+    console.log("   Restaurant ID:", latestOrder?.restaurantId?.toString());
+    console.log("   Delivery Boy ID:", latestOrder?.deliveryBoyId?.toString());
+
+    if (!latestOrder) {
+      return res.status(404).json({
+        success: false,
+        message: "No orders found for this user."
+      });
+    }
+
+    // ✅ NEW LOGIC: Check if latest order is Delivered or Cancelled
+    if (["Delivered", "Cancelled"].includes(latestOrder.orderStatus)) {
+      console.log("❌ Latest order is Delivered/Cancelled. Status:", latestOrder.orderStatus);
+      return res.status(404).json({
+        success: false,
+        message: `Your latest order is already ${latestOrder.orderStatus}. No active orders found.`
+      });
+    }
+
+    // ✅ Check if latest order has accepted status
+    if (!["Accepted", "Rider Accepted"].includes(latestOrder.orderStatus)) {
+      console.log("❌ Latest order is NOT accepted. Status:", latestOrder.orderStatus);
+      return res.status(404).json({
+        success: false,
+        message: `Your latest order is ${latestOrder.orderStatus}. No accepted orders found.`
+      });
+    }
+
+    // Agar accepted hai toh phir populate karo aur response bhejo
+    const populatedOrder = await Order.findById(latestOrder._id)
       .populate("restaurantId", "restaurantName locationName")
-      .populate("deliveryBoyId", "fullName mobileNumber");
+      .populate("deliveryBoyId", "fullName mobileNumber profileImage");
 
-    const result = acceptedOrders.map(order => {
-      const pickupTime = order.acceptedAt ? new Date(order.acceptedAt) : null;
+    console.log("✅ Latest order IS accepted. Sending response...");
 
-      // Estimate delivery time (e.g., +30 mins)
-      const deliveryTime = pickupTime ? new Date(pickupTime.getTime() + 30 * 60000) : null;
+    // Rest of your processing code...
+    const pickupTime = populatedOrder.acceptedAt ? new Date(populatedOrder.acceptedAt) : null;
+    const deliveryTime = pickupTime ? new Date(pickupTime.getTime() + 30 * 60000) : null;
 
-      const pickupTimeStr = pickupTime
-        ? pickupTime.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true })
-        : "";
+    const pickupTimeStr = pickupTime
+      ? pickupTime.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true })
+      : "";
 
-      const deliveryTimeStr = deliveryTime
-        ? deliveryTime.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true })
-        : "";
+    const deliveryTimeStr = deliveryTime
+      ? deliveryTime.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true })
+      : "";
 
-      return {
-        message: "Vendor Accepted Your Order From",
-        restaurantName: order.restaurantId?.restaurantName || "Unknown Restaurant",
-        restaurantLocation: order.restaurantId?.locationName || "Unknown Location",
+    const result = {
+      orderId: populatedOrder._id,
+      message: "Vendor Accepted Your Order From",
+      restaurantName: populatedOrder.restaurantId?.restaurantName || "Unknown Restaurant",
+      restaurantLocation: populatedOrder.restaurantId?.locationName || "Unknown Location",
 
-        orderDetails: {
-          totalItems: order.totalItems || 0,
-          subTotal: `₹${order.subTotal.toFixed(2)}`,
-          deliveryCharge: `₹${order.deliveryCharge.toFixed(2)}`,
-          totalPayable: `₹${order.totalPayable.toFixed(2)}`
+      orderDetails: {
+        totalItems: populatedOrder.totalItems || 0,
+        subTotal: `₹${populatedOrder.subTotal.toFixed(2)}`,
+        deliveryCharge: `₹${populatedOrder.deliveryCharge.toFixed(2)}`,
+        totalPayable: `₹${populatedOrder.totalPayable.toFixed(2)}`
+      },
+
+      deliveryFlow: {
+        restaurant: {
+          name: populatedOrder.restaurantId?.restaurantName || "Restaurant",
+          time: pickupTimeStr
         },
+        user: {
+          address: populatedOrder.deliveryAddress || "Your Address",
+          time: deliveryTimeStr
+        }
+      },
 
-        deliveryFlow: {
-          restaurant: {
-            name: order.restaurantId?.restaurantName || "Restaurant",
-            time: pickupTimeStr
-          },
-          user: {
-            address: order.deliveryAddress?.street || "Your Address",
-            time: deliveryTimeStr
+      riderDetails: populatedOrder.deliveryStatus === "Picked" || populatedOrder.orderStatus === "Rider Accepted"
+        ? {
+            id: populatedOrder.deliveryBoyId?._id || "N/A",
+            profileImage: populatedOrder.deliveryBoyId?.profileImage || "default-profile-image.jpg",
+            name: populatedOrder.deliveryBoyId?.fullName || "Delivery Boy",
+            contact: populatedOrder.deliveryBoyId?.mobileNumber || "N/A"
           }
-        },
+        : null
+    };
 
-        riderDetails:
-          order.deliveryStatus === "Picked"
-            ? {
-              name: order.deliveryBoyId?.fullName || "Delivery Boy",
-              contact: order.deliveryBoyId?.mobileNumber || "N/A"
-            }
-            : null
-      };
-    });
+    if (populatedOrder.orderStatus === "Rider Accepted") {
+      result.message = "Rider Accepted Your Order From";
+    }
 
+    console.log("📤 FINAL RESPONSE ORDER ID:", result.orderId);
     return res.status(200).json({
       success: true,
       data: result
     });
+
   } catch (error) {
     console.error("getAcceptedOrdersByUserId error:", error);
     return res.status(500).json({
@@ -958,6 +1164,113 @@ exports.getAcceptedOrdersByUserId = async (req, res) => {
     });
   }
 };
+
+exports.getOrderByUserIdAndOrderId = async (req, res) => {
+  try {
+    const { userId, orderId } = req.params;
+
+    // Validate userId and orderId
+    if (!mongoose.Types.ObjectId.isValid(userId) || !mongoose.Types.ObjectId.isValid(orderId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid userId and orderId are required."
+      });
+    }
+
+    // Fetch the order details for the user and orderId
+    const order = await Order.findOne({
+      _id: orderId,
+      userId,
+    })
+      .populate("restaurantId", "restaurantName locationName")
+      .populate("deliveryBoyId", "fullName mobileNumber profileImage");
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found."
+      });
+    }
+
+    // If the order status is "Delivered", remove the order data from the response
+    if (order.orderStatus === "Delivered") {
+      return res.status(200).json({
+        success: true,
+        message: "Your order has been delivered. No further details are available."
+      });
+    }
+
+    // Check if the order status is "Accepted", "Rider Accepted", or "Picked"
+    if (order.orderStatus !== "Accepted" && order.orderStatus !== "Rider Accepted" && order.orderStatus !== "Picked") {
+      return res.status(400).json({
+        success: false,
+        message: "Order has not been accepted, rider has not accepted, or the order has not been picked yet. Please wait for acceptance before viewing details."
+      });
+    }
+
+    const pickupTime = order.acceptedAt ? new Date(order.acceptedAt) : null;
+    const deliveryTime = pickupTime ? new Date(pickupTime.getTime() + 30 * 60000) : null;
+
+    const pickupTimeStr = pickupTime
+      ? pickupTime.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true })
+      : "";
+
+    const deliveryTimeStr = deliveryTime
+      ? deliveryTime.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true })
+      : "";
+
+    const result = {
+      orderId: order._id, // Order ID
+      message: "Your Order Details",
+      restaurantName: order.restaurantId?.restaurantName || "Unknown Restaurant",
+      restaurantLocation: order.restaurantId?.locationName || "Unknown Location",
+
+      orderDetails: {
+        totalItems: order.totalItems || 0,
+        subTotal: `₹${order.subTotal.toFixed(2)}`,
+        deliveryCharge: `₹${order.deliveryCharge.toFixed(2)}`,
+        totalPayable: `₹${order.totalPayable.toFixed(2)}`
+      },
+
+      deliveryFlow: {
+        restaurant: {
+          name: order.restaurantId?.restaurantName || "Restaurant",
+          time: pickupTimeStr
+        },
+        user: {
+          address: order.deliveryAddress || "Your Address",
+          time: deliveryTimeStr
+        }
+      },
+
+   riderDetails:
+  (order.deliveryStatus === "Rider Accepted" || order.orderStatus === "Picked")
+    ? {
+        id: order.deliveryBoyId?._id || "N/A",
+        name: order.deliveryBoyId?.fullName || "Delivery Boy",
+        contact: order.deliveryBoyId?.mobileNumber || "N/A",
+        profileImage: order.deliveryBoyId?.profileImage || "default-profile-image.jpg", // Apply default only if profileImage is missing
+      }
+    : null
+
+    };
+
+    return res.status(200).json({
+      success: true,
+      data: result
+    });
+  } catch (error) {
+    console.error("getOrderByUserIdAndOrderId error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message
+    });
+  }
+};
+
+
+
 
 
 
@@ -1065,7 +1378,7 @@ const haversineDistance = (coords1, coords2) => {
 exports.vendorAcceptOrder = async (req, res) => {
   try {
     const { orderId, vendorId } = req.params;  // Extract orderId and vendorId from the URL parameters
-    const { orderStatus } = req.body;  // Extract orderStatus from the request body
+    const { orderStatus } = req.body;  // ❌ preparationTime removed
 
     // Step 1: Find the order by orderId
     const order = await Order.findById(orderId);
@@ -1073,38 +1386,45 @@ exports.vendorAcceptOrder = async (req, res) => {
       return res.status(404).json({ success: false, message: "Order not found" });
     }
 
-    // Step 2: Verify if the restaurantId in the order matches the provided vendorId
+    // Step 2: Verify vendor ownership
     if (order.restaurantId.toString() !== vendorId) {
-      return res.status(403).json({ success: false, message: "Unauthorized action: Vendor ID does not match the order's restaurant" });
+      return res.status(403).json({
+        success: false,
+        message: "Unauthorized action: Vendor ID does not match the order's restaurant"
+      });
     }
 
-    // Step 3: Get the restaurant location from the order
+    // Step 3: ❌ preparationTime validation removed
+
+    // Step 4: Get the restaurant location from the order
     const restaurantCoords = order.restaurantLocation?.coordinates || [0, 0];
     if (restaurantCoords.length === 0) {
       return res.status(400).json({ success: false, message: "Restaurant location not available" });
     }
 
-  // Step 4: Find active delivery boys within 10 km of the restaurant's location
-const nearbyDeliveryBoys = await DeliveryBoy.find({
-  location: {
-    $nearSphere: {
-      $geometry: {
-        type: "Point",
-        coordinates: restaurantCoords,  // restaurant coordinates
+    // Step 5: Find active delivery boys within 10 km
+    const nearbyDeliveryBoys = await DeliveryBoy.find({
+      location: {
+        $nearSphere: {
+          $geometry: {
+            type: "Point",
+            coordinates: restaurantCoords,
+          },
+          $maxDistance: 10000 // 10 km in meters
+        }
       },
-      $maxDistance: 10000 // 10 km in meters
-    }
-  },
-  //isActive: true,        // Ensure delivery boy is active
-  //currentOrder: false    // Ensure delivery boy does not have an active order
-});
-
+      isActive: true,
+      currentOrder: false
+    });
 
     if (!nearbyDeliveryBoys.length) {
-      return res.status(404).json({ success: false, message: "No delivery boys found within 10 km or all are busy" });
+      return res.status(404).json({
+        success: false,
+        message: "No delivery boys found within 10 km or all are busy"
+      });
     }
 
-    // Step 5: Collect the available delivery boys' information (No need to calculate distance for charge)
+    // Step 6: Collect delivery boy info
     let deliveryBoysInfo = [];
 
     for (let i = 0; i < nearbyDeliveryBoys.length; i++) {
@@ -1119,29 +1439,31 @@ const nearbyDeliveryBoys = await DeliveryBoy.find({
       });
     }
 
-    // Step 6: Update order status with the provided value from the request body
-    order.orderStatus = orderStatus || "Pending";  // Default to "Pending" if no orderStatus is provided
-    order.deliveryStatus = "Pending"; // Always set deliveryStatus to "Pending"
+    // Step 7: Update order status
+    order.orderStatus = orderStatus || "Pending";
+    order.deliveryStatus = "Pending";
     order.acceptedAt = new Date();
-    order.distanceKm = 0;  // Distance calculation could be added here if necessary
+    order.distanceKm = 0;
 
-    // Step 7: Add the available delivery boys to the order
-    order.availableDeliveryBoys = deliveryBoysInfo;  // Store available delivery boys in the order
+    // ❌ Step for preparationTime removed
 
-    // Step 8: Return the delivery charge from the order directly
-    const deliveryCharge = order.deliveryCharge || 0;  // Assuming deliveryCharge is stored in the order
+    // Step 8: Save available delivery boys in order
+    order.availableDeliveryBoys = deliveryBoysInfo;
 
-    // Save the order with updated availableDeliveryBoys
+    // Step 9: Delivery charge
+    const deliveryCharge = order.deliveryCharge || 0;
+
+    // Save order
     await order.save();
 
-    // Step 9: Respond with available delivery boys, the updated order status, and the delivery charge
+    // Step 10: Response
     res.status(200).json({
       success: true,
       message: "Order accepted, delivery boys available for this order",
       order,
-      availableDeliveryBoys: deliveryBoysInfo, // List of available delivery boys with details
-      deliveryCharge,  // Show the delivery charge directly from the order
-      count: deliveryBoysInfo.length, // Number of delivery boys available
+      availableDeliveryBoys: deliveryBoysInfo,
+      deliveryCharge,
+      count: deliveryBoysInfo.length,
     });
 
   } catch (err) {
@@ -1345,7 +1667,24 @@ exports.getAcceptedOrdersForRider = async (req, res) => {
   try {
     const { deliveryBoyId } = req.params;  // Extract deliveryBoyId from params
 
-    // Step 1: Find the orders where deliveryBoyId is in availableDeliveryBoys and deliveryStatus is 'Pending'
+    // Step 1: Check if the delivery boy has a current order assigned
+    const deliveryBoy = await DeliveryBoy.findById(deliveryBoyId);
+    if (!deliveryBoy) {
+      return res.status(404).json({
+        success: false,
+        message: "Delivery boy not found."
+      });
+    }
+
+    // If the delivery boy has a current order (currentOrder = true), don't fetch new orders
+    if (deliveryBoy.currentOrder === true) {
+      return res.status(400).json({
+        success: false,
+        message: "This delivery boy already has an active order assigned."
+      });
+    }
+
+    // Step 2: Find the orders where deliveryBoyId is in availableDeliveryBoys and deliveryStatus is 'Pending'
     const orders = await Order.find({
       "availableDeliveryBoys.deliveryBoyId": deliveryBoyId,  // Check if deliveryBoyId is in availableDeliveryBoys array
       deliveryStatus: "Pending"  // Only consider orders with deliveryStatus 'Pending'
@@ -1353,7 +1692,7 @@ exports.getAcceptedOrdersForRider = async (req, res) => {
       .populate("restaurantId")  // Optionally, populate restaurantId to get full restaurant data
       .select('-availableDeliveryBoys');  // Exclude availableDeliveryBoys from the response
 
-    // Step 2: If no orders are found
+    // Step 3: If no orders are found
     if (orders.length === 0) {
       return res.status(404).json({
         success: false,
@@ -1361,7 +1700,7 @@ exports.getAcceptedOrdersForRider = async (req, res) => {
       });
     }
 
-    // Step 3: Return the full order data where the deliveryBoyId is present and deliveryStatus is 'Pending'
+    // Step 4: Return the full order data where the deliveryBoyId is present and deliveryStatus is 'Pending'
     return res.status(200).json({
       success: true,
       message: "Orders found for the delivery boy.",
@@ -1377,6 +1716,7 @@ exports.getAcceptedOrdersForRider = async (req, res) => {
     });
   }
 };
+
 
 
 
@@ -1642,7 +1982,7 @@ exports.getRiderPickedOrders = async (req, res) => {
       deliveryStatus: "Picked",  // Delivery status is "Picked"
       deliveryBoyId: deliveryBoyId  // Assigned to the specific delivery boy
     }).populate("restaurantId", "restaurantName locationName")
-      .populate("userId", "name email")
+      .populate("userId", "firstName lastName phoneNumber email")
       .populate("deliveryBoyId", "fullName mobileNumber");
 
     // If no orders found
@@ -1915,5 +2255,440 @@ exports.getAllDeliveredOrders = async (req, res) => {
       message: "Server error.",
       error: error.message,
     });
+  }
+};
+
+
+
+// Search Controller
+exports.searchRestaurantsAndProducts = async (req, res) => {
+  try {
+    const { query } = req.query;
+
+    if (!query || query.trim() === "") {
+      return res.status(400).json({ success: false, message: "Query is required." });
+    }
+
+    const searchRegex = new RegExp(query, "i"); // Case-insensitive search
+
+    // 1️⃣ Search Products
+    const productResults = await RestaurantProduct.find({
+      "recommended.name": searchRegex,
+      status: "active"
+    })
+      .populate("restaurantId", "restaurantName locationName image")
+      .lean();
+
+    const formattedProductResults = productResults.map(prod => ({
+      productId: prod._id,
+      productName: prod.recommended.find(r => searchRegex.test(r.name))?.name,
+      price: prod.recommended.find(r => searchRegex.test(r.name))?.price,
+      restaurantId: prod.restaurantId?._id,
+      restaurantName: prod.restaurantId?.restaurantName,
+      restaurantLocation: prod.restaurantId?.locationName,
+      restaurantImage: prod.restaurantId?.image?.url || null
+    }));
+
+    // 2️⃣ Search Restaurants
+    const restaurantResults = await Restaurant.find({
+      restaurantName: searchRegex,
+      status: "active"
+    })
+      .lean();
+
+    const formattedRestaurantResults = restaurantResults.map(rest => ({
+      restaurantId: rest._id,
+      restaurantName: rest.restaurantName,
+      description: rest.description,
+      rating: rest.rating,
+      startingPrice: rest.startingPrice,
+      locationName: rest.locationName,
+      image: rest.image?.url || null
+    }));
+
+    // Return combined results
+    return res.status(200).json({
+      success: true,
+      data: {
+        products: formattedProductResults,
+        restaurants: formattedRestaurantResults
+      }
+    });
+
+  } catch (error) {
+    console.error("searchRestaurantsAndProducts error:", error);
+    return res.status(500).json({ success: false, message: "Server error", error: error.message });
+  }
+};
+
+
+exports.addReview = async (req, res) => {
+  try {
+    const { productId, stars, comment, userId } = req.body;
+
+    // Validate inputs
+    if (!productId || !mongoose.Types.ObjectId.isValid(productId))
+      return res.status(400).json({ success: false, message: "Valid productId is required." });
+
+    if (!userId || !mongoose.Types.ObjectId.isValid(userId))
+      return res.status(400).json({ success: false, message: "Valid userId is required." });
+
+    if (!stars || stars < 1 || stars > 5)
+      return res.status(400).json({ success: false, message: "Stars must be between 1 and 5." });
+
+    // Find the product containing the recommended item
+    const product = await RestaurantProduct.findOne({ "recommended._id": productId });
+
+    if (!product)
+      return res.status(404).json({ success: false, message: "Recommended product not found." });
+
+    // Find the index of the recommended item
+    const recommendedIndex = product.recommended.findIndex(r => r._id.toString() === productId);
+
+    if (recommendedIndex === -1)
+      return res.status(404).json({ success: false, message: "Recommended product not found." });
+
+    // Push the review
+    product.recommended[recommendedIndex].reviews.push({
+      userId,
+      stars,
+      comment
+    });
+
+    // Recalculate average rating
+    const reviews = product.recommended[recommendedIndex].reviews;
+    const totalStars = reviews.reduce((acc, r) => acc + r.stars, 0);
+    const avgRating = totalStars / reviews.length;
+
+    product.recommended[recommendedIndex].rating = parseFloat(avgRating.toFixed(2));
+
+    await product.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Review added successfully",
+      recommended: product.recommended[recommendedIndex]
+    });
+
+  } catch (err) {
+    console.error("Add Review Error:", err);
+    return res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+
+
+// Edit a review inside recommended product
+exports.editProductReview = async (req, res) => {
+  try {
+    const { productId, reviewId, stars, comment, userId } = req.body;
+
+    if (!productId || !mongoose.Types.ObjectId.isValid(productId))
+      return res.status(400).json({ success: false, message: "Valid productId is required." });
+
+    if (!reviewId || !mongoose.Types.ObjectId.isValid(reviewId))
+      return res.status(400).json({ success: false, message: "Valid reviewId is required." });
+
+    if (!userId || !mongoose.Types.ObjectId.isValid(userId))
+      return res.status(400).json({ success: false, message: "Valid userId is required." });
+
+    // Find main product that contains recommended item
+    const product = await RestaurantProduct.findOne({ "recommended._id": productId });
+    if (!product)
+      return res.status(404).json({ success: false, message: "Recommended product not found." });
+
+    // recommended item index
+    const recommendedIndex = product.recommended.findIndex(r => r._id.toString() === productId);
+    if (recommendedIndex === -1)
+      return res.status(404).json({ success: false, message: "Recommended product not found." });
+
+    // find review
+    const review = product.recommended[recommendedIndex].reviews.id(reviewId);
+    if (!review)
+      return res.status(404).json({ success: false, message: "Review not found." });
+
+    // check review belongs to user
+    if (review.userId.toString() !== userId)
+      return res.status(403).json({ success: false, message: "You can only edit your own review." });
+
+    // update fields
+    if (stars) review.stars = stars;
+    if (comment) review.comment = comment;
+
+    // recalc rating
+    const reviews = product.recommended[recommendedIndex].reviews;
+    const avgRating = reviews.reduce((acc, r) => acc + r.stars, 0) / reviews.length;
+
+    product.recommended[recommendedIndex].rating = parseFloat(avgRating.toFixed(2));
+
+    await product.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Review updated successfully",
+      recommended: product.recommended[recommendedIndex]
+    });
+
+  } catch (err) {
+    console.error("Edit Review Error:", err);
+    return res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+
+
+// Delete a review inside recommended product
+exports.deleteProductReview = async (req, res) => {
+  try {
+    const { productId, reviewId, userId } = req.body;
+
+    if (!productId || !mongoose.Types.ObjectId.isValid(productId))
+      return res.status(400).json({ success: false, message: "Valid productId is required." });
+
+    if (!reviewId || !mongoose.Types.ObjectId.isValid(reviewId))
+      return res.status(400).json({ success: false, message: "Valid reviewId is required." });
+
+    if (!userId || !mongoose.Types.ObjectId.isValid(userId))
+      return res.status(400).json({ success: false, message: "Valid userId is required." });
+
+    // Find the recommended item
+    const product = await RestaurantProduct.findOne({ "recommended._id": productId });
+    if (!product)
+      return res.status(404).json({ success: false, message: "Recommended product not found." });
+
+    const recommendedItem = product.recommended.find(r => r._id.toString() === productId);
+    if (!recommendedItem)
+      return res.status(404).json({ success: false, message: "Recommended product not found." });
+
+    // Check if review belongs to the user
+    const review = recommendedItem.reviews.find(r => r._id.toString() === reviewId);
+    if (!review)
+      return res.status(404).json({ success: false, message: "Review not found." });
+
+    if (review.userId.toString() !== userId)
+      return res.status(403).json({ success: false, message: "You can only delete your own review." });
+
+    // Delete using $pull
+    await RestaurantProduct.updateOne(
+      { "recommended._id": productId },
+      { $pull: { "recommended.$.reviews": { _id: reviewId } } }
+    );
+
+    // Recalculate updated rating
+    const updatedProduct = await RestaurantProduct.findOne({ "recommended._id": productId });
+    const updatedItem = updatedProduct.recommended.find(r => r._id.toString() === productId);
+
+    const reviews = updatedItem.reviews;
+
+    const avgRating =
+      reviews.length > 0
+        ? reviews.reduce((acc, r) => acc + r.stars, 0) / reviews.length
+        : 0;
+
+    updatedItem.rating = parseFloat(avgRating.toFixed(2));
+
+    await updatedProduct.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Review deleted successfully",
+      recommended: updatedItem
+    });
+
+  } catch (err) {
+    console.error("Delete Review Error:", err);
+    return res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+
+
+exports.getSingleProduct = async (req, res) => {
+  try {
+    const { productId } = req.params;
+
+    if (!productId || !mongoose.Types.ObjectId.isValid(productId)) {
+      return res.status(400).json({ success: false, message: "Valid productId is required." });
+    }
+
+    // Find the product containing the recommended item
+    const product = await RestaurantProduct.findOne({ "recommended._id": productId })
+      .populate({
+        path: "restaurantId",
+        select: "restaurantName locationName location image"
+      })
+      .lean();
+
+    if (!product) {
+      return res.status(404).json({ success: false, message: "Recommended product not found." });
+    }
+
+    // Get the recommended item
+    const recommendedItem = product.recommended.find(r => r._id.toString() === productId);
+
+    if (!recommendedItem || recommendedItem.status !== "active") {
+      return res.status(404).json({ success: false, message: "Recommended product not available." });
+    }
+
+    let userRating = 0;
+
+    // Populate reviews' user info
+    if (recommendedItem.reviews && recommendedItem.reviews.length > 0) {
+      const userIds = recommendedItem.reviews.map(r => r.userId);
+      const users = await User.find({ _id: { $in: userIds } })
+        .select("firstName lastName profileImg")
+        .lean();
+
+      recommendedItem.reviews = recommendedItem.reviews.map(r => {
+        const user = users.find(u => u._id.toString() === r.userId.toString());
+        return {
+          ...r,
+          user: user
+            ? {
+                firstName: user.firstName,
+                lastName: user.lastName,
+                profileImg: user.profileImg
+              }
+            : null
+        };
+      });
+
+      const totalStars = recommendedItem.reviews.reduce((sum, r) => sum + (r.stars || 0), 0);
+      userRating = totalStars / recommendedItem.reviews.length;
+    }
+
+    return res.status(200).json({
+      success: true,
+      recommended: {
+        ...recommendedItem,
+      },
+      restaurantProductId: product._id, // ✅ include parent RestaurantProduct ID
+      restaurant: product.restaurantId, // ✅ include restaurant info
+      userRating: parseFloat(userRating.toFixed(2)) // rounded to 2 decimals
+    });
+
+  } catch (err) {
+    console.error("Get Single Product Error:", err);
+    return res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+
+
+// Add a review
+exports.addRestaurantReview = async (req, res) => {
+  try {
+    const { restaurantId, stars, comment, userId } = req.body;
+
+    if (!restaurantId || !mongoose.Types.ObjectId.isValid(restaurantId))
+      return res.status(400).json({ success: false, message: "Valid restaurantId is required." });
+
+    if (!userId || !mongoose.Types.ObjectId.isValid(userId))
+      return res.status(400).json({ success: false, message: "Valid userId is required." });
+
+    if (!stars || stars < 1 || stars > 5)
+      return res.status(400).json({ success: false, message: "Stars must be between 1 and 5." });
+
+    const restaurant = await Restaurant.findById(restaurantId);
+    if (!restaurant)
+      return res.status(404).json({ success: false, message: "Restaurant not found." });
+
+    restaurant.reviews.push({ userId, stars, comment });
+
+    // Recalculate average rating
+    const reviews = restaurant.reviews;
+    restaurant.rating = parseFloat((reviews.reduce((acc, r) => acc + r.stars, 0) / reviews.length).toFixed(2));
+
+    await restaurant.save();
+
+    return res.status(200).json({ success: true, message: "Review added successfully", restaurant });
+
+  } catch (err) {
+    console.error("Add Review Error:", err);
+    return res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+// Edit a review
+exports.editRestaurantReview = async (req, res) => {
+  try {
+    const { restaurantId, reviewId, stars, comment, userId } = req.body;
+
+    if (!restaurantId || !mongoose.Types.ObjectId.isValid(restaurantId))
+      return res.status(400).json({ success: false, message: "Valid restaurantId is required." });
+
+    if (!reviewId || !mongoose.Types.ObjectId.isValid(reviewId))
+      return res.status(400).json({ success: false, message: "Valid reviewId is required." });
+
+    if (!userId || !mongoose.Types.ObjectId.isValid(userId))
+      return res.status(400).json({ success: false, message: "Valid userId is required." });
+
+    const restaurant = await Restaurant.findById(restaurantId);
+    if (!restaurant)
+      return res.status(404).json({ success: false, message: "Restaurant not found." });
+
+    const review = restaurant.reviews.id(reviewId);
+
+    if (!review)
+      return res.status(404).json({ success: false, message: "Review not found." });
+
+    if (review.userId.toString() !== userId)
+      return res.status(403).json({ success: false, message: "You can only edit your own review." });
+
+    if (stars) review.stars = stars;
+    if (comment) review.comment = comment;
+
+    // Recalculate average rating
+    const reviews = restaurant.reviews;
+    restaurant.rating = parseFloat((reviews.reduce((acc, r) => acc + r.stars, 0) / reviews.length).toFixed(2));
+
+    await restaurant.save();
+
+    return res.status(200).json({ success: true, message: "Review updated successfully", restaurant });
+
+  } catch (err) {
+    console.error("Edit Review Error:", err);
+    return res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+// Delete a review using findByIdAndUpdate
+exports.deleteRestaurantReview = async (req, res) => {
+  try {
+    const { restaurantId, reviewId, userId } = req.body;
+
+    if (!restaurantId || !mongoose.Types.ObjectId.isValid(restaurantId))
+      return res.status(400).json({ success: false, message: "Valid restaurantId is required." });
+
+    if (!reviewId || !mongoose.Types.ObjectId.isValid(reviewId))
+      return res.status(400).json({ success: false, message: "Valid reviewId is required." });
+
+    if (!userId || !mongoose.Types.ObjectId.isValid(userId))
+      return res.status(400).json({ success: false, message: "Valid userId is required." });
+
+    // Remove the review
+    const restaurant = await Restaurant.findOneAndUpdate(
+      { _id: restaurantId, "reviews._id": reviewId, "reviews.userId": userId },
+      { $pull: { reviews: { _id: reviewId } } },
+      { new: true } // return the updated document
+    );
+
+    if (!restaurant) {
+      return res.status(404).json({ success: false, message: "Review or Restaurant not found, or user unauthorized." });
+    }
+
+    // Recalculate average rating
+    const reviews = restaurant.reviews;
+    restaurant.rating = reviews.length > 0
+      ? parseFloat((reviews.reduce((acc, r) => acc + r.stars, 0) / reviews.length).toFixed(2))
+      : 0;
+
+    await restaurant.save();
+
+    return res.status(200).json({ success: true, message: "Review deleted successfully", restaurant });
+
+  } catch (err) {
+    console.error("Delete Review Error:", err);
+    return res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
 };

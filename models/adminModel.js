@@ -6,6 +6,12 @@ const adminSchema = new mongoose.Schema({
     required: true,
     unique: true
   },
+   name: {
+    type: String,
+  },
+   email: {
+    type: String,
+  },
   password: {
     type: String,
     minlength: 6, // Only validated if password exists

@@ -197,161 +197,135 @@ function calculateDistanceKm(lat1, lon1, lat2, lon2) {
 
 
 
-// Add or update cart
+// ----------------------------------------
+// 👉 ADD TO CART (All calculations inline)
 exports.addToCart = async (req, res) => {
   try {
     const { userId } = req.params;
     const { products } = req.body;
 
-    if (!userId || !mongoose.Types.ObjectId.isValid(userId))
-      return res.status(400).json({ success: false, message: "Valid userId is required." });
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ success: false, message: "Invalid userId" });
+    }
 
-    if (!products || !Array.isArray(products))
-      return res.status(400).json({ success: false, message: "Products array is required." });
-
-    const user = await User.findById(userId);
-    if (!user || !user.location || !user.location.coordinates)
-      return res.status(400).json({ success: false, message: "User location not found." });
-
-    const [userLon, userLat] = user.location.coordinates;
-
-    // Load or create cart
     let cart = await Cart.findOne({ userId });
+
+    // Create cart if not exists
     if (!cart) {
       cart = new Cart({
         userId,
         products: [],
         subTotal: 0,
-        deliveryCharge: 0,
-        finalAmount: 0,
         totalItems: 0,
-        couponDiscount: 0,
-        appliedCouponId: null
+        totalDiscount: 0,
+        deliveryCharge: 0,
+        platformCharge: 10,
+        gstAmount: 0,
+        finalAmount: 0
       });
     }
 
-    let restaurantId = cart.restaurantId;
-
     for (const item of products) {
-      const { restaurantProductId, recommendedId, addOn, quantity = 1 } = item;
+      const { restaurantProductId, recommendedId, quantity = 1, isHalfPlate, isFullPlate } = item;
 
-      if (!mongoose.Types.ObjectId.isValid(restaurantProductId) || !mongoose.Types.ObjectId.isValid(recommendedId))
-        return res.status(400).json({ success: false, message: "Invalid product IDs." });
+      const productData = await RestaurantProduct.findById(restaurantProductId);
+      if (!productData) continue;
+      const recommendedItem = productData.recommended.id(recommendedId);
+      if (!recommendedItem) continue;
 
-      const restaurantProduct = await RestaurantProduct.findById(restaurantProductId);
-      if (!restaurantProduct) return res.status(404).json({ success: false, message: "Restaurant product not found." });
-
-      const recommendedItem = restaurantProduct.recommended.id(recommendedId);
-      if (!recommendedItem) return res.status(404).json({ success: false, message: "Recommended item not found." });
-
-      if (!restaurantId) restaurantId = restaurantProduct.restaurantId;
-
-      // Base price calculation
-      let unitPrice = recommendedItem.price || 0;
-      let platePrice = 0;
-      const addOnClean = {};
-      const hasAddons = recommendedItem.addons && (recommendedItem.addons.variation || recommendedItem.addons.plates);
-
-      if (hasAddons && addOn) {
-        if (
-          recommendedItem.addons.variation &&
-          recommendedItem.addons.variation.type.includes("Half") &&
-          addOn.variation === "Half"
-        ) {
-          addOnClean.variation = "Half";
-          unitPrice =
-            recommendedItem.calculatedPrice?.half ||
-            Math.round(unitPrice * (recommendedItem.vendorHalfPercentage / 100));
-        }
-        if (recommendedItem.addons.plates && addOn.plateitems > 0) {
-          addOnClean.plateitems = addOn.plateitems;
-          platePrice = addOn.plateitems * (recommendedItem.vendor_Platecost || 0);
-        }
+      // ------------------- CLEAR CART IF DIFFERENT RESTAURANT -------------------
+      if (
+        cart.restaurantId &&
+        cart.restaurantId.toString() !== productData.restaurantId.toString()
+      ) {
+        // Different restaurant → clear all products
+        cart.products = [];
       }
 
-      const productData = {
+      // Assign restaurant ID
+      cart.restaurantId = productData.restaurantId;
+
+      // ------------------- PRICE CALC -------------------
+      let basePrice = recommendedItem.price;
+      if (isHalfPlate) basePrice = recommendedItem.halfPlatePrice || recommendedItem.price;
+      if (isFullPlate) basePrice = recommendedItem.fullPlatePrice || recommendedItem.price;
+
+      const discountPercent = recommendedItem.discount || 0;
+      const discountAmount = (basePrice * discountPercent) / 100;
+      const finalPrice = basePrice - discountAmount;
+
+      // ------------------- CREATE PRODUCT OBJECT -------------------
+      const newProduct = {
         restaurantProductId,
         recommendedId,
-        quantity: Math.abs(quantity),
+        quantity,
         name: recommendedItem.name,
-        basePrice: unitPrice,
-        platePrice: platePrice,
-        image: recommendedItem.image || ""
+        image: recommendedItem.image,
+        isHalfPlate: !!isHalfPlate,
+        isFullPlate: !!isFullPlate,
+        originalPrice: basePrice,
+        discountPercent,
+        discountAmount: Number(discountAmount.toFixed(2)),
+        price: Number(finalPrice.toFixed(2))
       };
-      if (hasAddons && Object.keys(addOnClean).length > 0) productData.addOn = addOnClean;
 
+      // ------------------- ADD OR UPDATE -------------------
       const existingIndex = cart.products.findIndex(
         p =>
           p.restaurantProductId.toString() === restaurantProductId &&
-          p.recommendedId.toString() === recommendedId
+          p.recommendedId.toString() === recommendedId &&
+          p.isHalfPlate === !!isHalfPlate &&
+          p.isFullPlate === !!isFullPlate
       );
 
       if (existingIndex !== -1) {
-        const newQuantity = cart.products[existingIndex].quantity + quantity;
-        if (newQuantity <= 0) {
-          cart.products.splice(existingIndex, 1);
-        } else {
-          cart.products[existingIndex].quantity = newQuantity;
-          cart.products[existingIndex].basePrice = unitPrice;
-          cart.products[existingIndex].platePrice = platePrice;
-          if (productData.addOn) cart.products[existingIndex].addOn = productData.addOn;
-        }
-      } else if (quantity > 0) {
-        cart.products.push(productData);
+        // Product already exists → update quantity
+        cart.products[existingIndex].quantity += quantity;
+      } else {
+        // New product → add to cart
+        cart.products.push(newProduct);
       }
     }
 
-    cart.restaurantId = restaurantId;
-
-    // Recalculate totals
+    // ------------------- TOTAL CALCULATIONS -------------------
     let subTotal = 0;
     let totalItems = 0;
-    let distanceKm = 0;
+    let totalDiscount = 0;
 
-    for (const prod of cart.products) {
-      subTotal += (prod.basePrice * prod.quantity) + (prod.platePrice || 0);
-      totalItems += prod.quantity;
-    }
+    cart.products.forEach(p => {
+      subTotal += p.price * p.quantity;
+      totalItems += p.quantity;
+      totalDiscount += (p.discountAmount || 0) * p.quantity;
+    });
 
-    let deliveryCharge = 0;
-    if (restaurantId && totalItems > 0) {
-      const restaurant = await Restaurant.findById(restaurantId);
-      if (restaurant && restaurant.location && restaurant.location.coordinates) {
-        const [restLon, restLat] = restaurant.location.coordinates;
-        distanceKm = calculateDistanceKm(userLat, userLon, restLat, restLon);
-        deliveryCharge = distanceKm <= 5 ? 20 : 20 + 2 * Math.ceil(distanceKm - 5);
-      } else {
-        deliveryCharge = 20;
-      }
-    }
-
-    // Update totals
-    cart.subTotal = subTotal;
+    cart.subTotal = Number(subTotal.toFixed(2));
     cart.totalItems = totalItems;
-    cart.deliveryCharge = totalItems === 0 ? 0 : deliveryCharge;
+    cart.totalDiscount = Number(totalDiscount.toFixed(2));
 
-    // Reset coupon if subtotal changes
-    cart.couponDiscount = 0;
-    cart.appliedCouponId = null;
-    cart.finalAmount = cart.subTotal + cart.deliveryCharge;
+    cart.discount = cart.products.length > 0 ? cart.products[0].discountPercent : 0;
+    cart.gstAmount = Number((subTotal * 0.05).toFixed(2));
+    cart.deliveryCharge = cart.products.length > 0 ? 20 : 0;
+    cart.platformCharge = cart.products.length > 0 ? 10 : 0;
+    cart.finalAmount = Number(
+      (subTotal + cart.gstAmount + cart.deliveryCharge + cart.platformCharge).toFixed(2)
+    );
 
     await cart.save();
 
-    // Response
     return res.status(200).json({
       success: true,
       message: "Cart updated successfully",
-      distanceKm: parseFloat(distanceKm.toFixed(3)),
       cart
     });
 
-  } catch (err) {
-    console.error("Cart Operation Error:", err);
-    return res.status(500).json({ success: false, message: "Server error", error: err.message });
+  } catch (error) {
+    console.error("addToCart Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message
+    });
   }
 };
-
-
 
 // Get all carts
 exports.getAllCarts = async (req, res) => {
@@ -380,36 +354,59 @@ exports.getCartByUserId = async (req, res) => {
 
     // Validate userId
     if (!mongoose.Types.ObjectId.isValid(userId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid user ID"
-      });
+      return res.status(400).json({ success: false, message: "Invalid user ID" });
     }
 
-    // Just fetch the cart without any population
-    const cart = await Cart.findOne({ userId });
-
+    // Fetch the cart
+    const cart = await Cart.findOne({ userId }).lean();
     if (!cart) {
-      return res.status(404).json({
-        success: false,
-        message: "Cart not found for this user"
-      });
+      return res.status(404).json({ success: false, message: "Cart not found for this user" });
     }
 
-    return res.status(200).json({
+    // Populate recommended product details and restaurant status
+    const updatedProducts = await Promise.all(cart.products.map(async (p) => {
+      // Fetch recommended item details
+      const productDoc = await RestaurantProduct.findById(p.restaurantProductId)
+        .select("recommended restaurantId")
+        .populate({
+          path: "restaurantId",
+          select: "restaurantName locationName status"
+        })
+        .lean();
+
+      if (!productDoc) return p;
+
+      const recommendedItem = productDoc.recommended.find(r => r._id.toString() === p.recommendedId.toString());
+
+      const restaurant = productDoc.restaurantId;
+
+      return {
+        ...p, // quantity, isHalfPlate, isFullPlate, etc.
+        recommended: recommendedItem || null, // full recommended details
+        restaurant: restaurant
+          ? {
+              restaurantId: restaurant._id,
+              restaurantName: restaurant.restaurantName,
+              locationName: restaurant.locationName,
+              status: restaurant.status
+            }
+          : null
+      };
+    }));
+
+    cart.products = updatedProducts;
+
+    res.status(200).json({
       success: true,
       data: cart
     });
 
   } catch (err) {
     console.error("Get Cart By User Error:", err);
-    return res.status(500).json({
-      success: false,
-      message: "Server error",
-      error: err.message
-    });
+    res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
 };
+
 
 
 
@@ -489,78 +486,111 @@ exports.deleteCartById = async (req, res) => {
 
 
 
+// ----------------------------------------
+// 2️⃣ Update Cart Item Quantity
+// Helper: calculate distance in km (Haversine formula)
+function calculateDistanceKm(lat1, lon1, lat2, lon2) {
+  const toRad = val => (val * Math.PI) / 180;
+  const R = 6371; // km
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
 exports.updateCartItemQuantity = async (req, res) => {
   try {
     const { userId } = req.params;
-    const { restaurantProductId, recommendedId, action } = req.body;
+    const { restaurantProductId, recommendedId, action, isHalfPlate, isFullPlate } = req.body;
 
-    if (!userId || !mongoose.Types.ObjectId.isValid(userId)) {
+    // ---------------- Validate input ----------------
+    if (!userId || !mongoose.Types.ObjectId.isValid(userId))
       return res.status(400).json({ success: false, message: "Invalid userId." });
-    }
 
-    if (
-      !restaurantProductId || 
-      !mongoose.Types.ObjectId.isValid(restaurantProductId) || 
-      !recommendedId || 
-      !mongoose.Types.ObjectId.isValid(recommendedId)
-    ) {
+    if (!restaurantProductId || !mongoose.Types.ObjectId.isValid(restaurantProductId) ||
+        !recommendedId || !mongoose.Types.ObjectId.isValid(recommendedId))
       return res.status(400).json({ success: false, message: "Invalid product IDs." });
-    }
 
-    if (!["inc", "dec"].includes(action)) {
+    if (!["inc", "dec"].includes(action))
       return res.status(400).json({ success: false, message: "Action must be 'inc' or 'dec'." });
-    }
 
     const cart = await Cart.findOne({ userId });
-    if (!cart) {
-      return res.status(404).json({ success: false, message: "Cart not found." });
-    }
+    if (!cart) return res.status(404).json({ success: false, message: "Cart not found." });
 
-    const index = cart.products.findIndex(
-      (p) =>
-        p.restaurantProductId.toString() === restaurantProductId &&
-        p.recommendedId.toString() === recommendedId
+    // ---------------- Find product in cart ----------------
+    const index = cart.products.findIndex(p =>
+      p.restaurantProductId.toString() === restaurantProductId &&
+      p.recommendedId.toString() === recommendedId &&
+      (isHalfPlate === undefined || p.isHalfPlate === isHalfPlate) &&
+      (isFullPlate === undefined || p.isFullPlate === isFullPlate)
     );
 
-    if (index === -1) {
+    if (index === -1)
       return res.status(404).json({ success: false, message: "Product not found in cart." });
-    }
 
-    // Update quantity
+    // ---------------- Update quantity ----------------
     if (action === "inc") {
       cart.products[index].quantity += 1;
-    } else if (action === "dec") {
+    } else {
       cart.products[index].quantity -= 1;
-      if (cart.products[index].quantity <= 0) {
-        cart.products.splice(index, 1); // Remove item if quantity becomes 0
-      }
+      if (cart.products[index].quantity <= 0) cart.products.splice(index, 1);
     }
 
-    // Recalculate totals
-    let subTotal = 0;
-    let totalItems = 0;
-    for (const item of cart.products) {
-      subTotal += (item.basePrice * item.quantity) + (item.platePrice || 0);
-      totalItems += item.quantity;
-    }
+    // ---------------- Recalculate cart totals ----------------
+    let subTotal = 0, totalItems = 0, totalDiscount = 0;
+    cart.products.forEach(p => {
+      subTotal += p.price * p.quantity;
+      totalItems += p.quantity;
+      totalDiscount += (p.discountAmount || 0) * p.quantity;
+    });
 
+    cart.subTotal = Number(subTotal.toFixed(2));
     cart.totalItems = totalItems;
-    cart.subTotal = subTotal;
+    cart.totalDiscount = Number(totalDiscount.toFixed(2));
 
-    // Recalculate delivery charge
-    cart.deliveryCharge = totalItems === 0 ? 0 : 20; // Or your distance logic
-    cart.finalAmount = cart.subTotal + cart.deliveryCharge - cart.couponDiscount;
+    // GST 5%
+    cart.gstAmount = Number((subTotal * 0.05).toFixed(2));
+
+    // Delivery charge (distance-based)
+    let deliveryCharge = 0;
+    if (totalItems > 0 && cart.restaurantId) {
+      const user = await User.findById(userId);
+      const restaurant = await Restaurant.findById(cart.restaurantId);
+      const [userLon, userLat] = user.location.coordinates;
+      const [restLon, restLat] = restaurant.location.coordinates;
+      const distanceKm = calculateDistanceKm(userLat, userLon, restLat, restLon);
+      cart.distanceKm = Number(distanceKm.toFixed(2));
+      const baseCharge = 20;
+      deliveryCharge = distanceKm <= 5 ? baseCharge : baseCharge + 2 * Math.ceil(distanceKm - 5);
+    } else cart.distanceKm = 0;
+
+    cart.deliveryCharge = deliveryCharge;
+
+    // Keep platformCharge from cart, initialize if missing
+    if (!cart.platformCharge) cart.platformCharge = 10;
+
+    // Cart-level discount % (first product as reference)
+    cart.discount = cart.products.length > 0 ? cart.products[0].discountPercent : 0;
+
+    // Final amount
+    cart.finalAmount = Number(
+      (subTotal + cart.gstAmount + cart.deliveryCharge + cart.platformCharge).toFixed(2)
+    );
 
     await cart.save();
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: "Cart updated successfully.",
-      cart,
+      message: "Cart updated successfully",
+      cart
     });
-  } catch (error) {
-    console.error("Error updating cart quantity:", error);
-    res.status(500).json({ success: false, message: "Server error", error: error.message });
+
+  } catch (err) {
+    console.error("updateCartItemQuantity Error:", err);
+    return res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
 };
 
@@ -568,93 +598,95 @@ exports.updateCartItemQuantity = async (req, res) => {
 
 
 
-// Delete product from cart
+// ----------------------------------------
+// 3️⃣ Delete Product From Cart
 exports.deleteProductFromCart = async (req, res) => {
-    try {
-        const { userId, productId, recommendedId } = req.params;
+  try {
+    const { userId, productId, recommendedId } = req.params;
 
-        if (!mongoose.Types.ObjectId.isValid(userId)) {
-            return res.status(400).json({ success: false, message: "Invalid user ID" });
-        }
-        if (!mongoose.Types.ObjectId.isValid(productId) || !mongoose.Types.ObjectId.isValid(recommendedId)) {
-            return res.status(400).json({ success: false, message: "Invalid product IDs" });
-        }
-
-        // Find the cart of user
-        const cart = await Cart.findOne({ userId });
-        if (!cart) {
-            return res.status(404).json({ success: false, message: "Cart not found" });
-        }
-
-        // Find the index of product to remove
-        const productIndex = cart.products.findIndex(p =>
-            p.restaurantProductId.toString() === productId &&
-            p.recommendedId.toString() === recommendedId
-        );
-
-        if (productIndex === -1) {
-            return res.status(404).json({ success: false, message: "Product not found in cart" });
-        }
-
-        // Remove the product
-        cart.products.splice(productIndex, 1);
-
-        // Recalculate totals after removal
-        let subTotal = 0;
-        let totalItems = 0;
-        for (const prod of cart.products) {
-            subTotal += (prod.basePrice * prod.quantity) + (prod.platePrice || 0);
-            totalItems += prod.quantity;
-        }
-
-        // Reset restaurantId if cart is empty
-        if (cart.products.length === 0) {
-            cart.restaurantId = null;
-            cart.deliveryCharge = 0;
-            cart.couponDiscount = 0;
-            cart.appliedCouponId = null;
-            cart.finalAmount = 0;
-            cart.subTotal = 0;
-            cart.totalItems = 0;
-        } else {
-            // Calculate delivery charge based on restaurant location and user location
-            const user = await User.findById(userId);
-            if (!user || !user.location || !user.location.coordinates) {
-                return res.status(400).json({ success: false, message: "User location not found." });
-            }
-            const [userLon, userLat] = user.location.coordinates;
-
-            const restaurant = await Restaurant.findById(cart.restaurantId);
-            let deliveryCharge = 0;
-            let distanceKm = 0;
-
-            if (restaurant && restaurant.location && restaurant.location.coordinates) {
-                const [restLon, restLat] = restaurant.location.coordinates;
-                distanceKm = calculateDistanceKm(userLat, userLon, restLat, restLon);
-                deliveryCharge = distanceKm <= 5 ? 20 : 20 + 2 * Math.ceil(distanceKm - 5);
-            } else {
-                deliveryCharge = 20;
-            }
-
-            cart.subTotal = subTotal;
-            cart.totalItems = totalItems;
-            cart.deliveryCharge = deliveryCharge;
-            cart.finalAmount = cart.subTotal + cart.deliveryCharge - (cart.couponDiscount || 0);
-        }
-
-        await cart.save();
-
-        // Return updated cart
-        return res.status(200).json({
-            success: true,
-            message: "Product removed from cart successfully",
-            data: cart
-        });
-
-    } catch (err) {
-        console.error("Delete Product From Cart Error:", err);
-        return res.status(500).json({ success: false, message: "Server error", error: err.message });
+    // Validate IDs
+    if (
+      !mongoose.Types.ObjectId.isValid(userId) ||
+      !mongoose.Types.ObjectId.isValid(productId) ||
+      !mongoose.Types.ObjectId.isValid(recommendedId)
+    ) {
+      return res.status(400).json({ success: false, message: "Invalid IDs" });
     }
+
+    const cart = await Cart.findOne({ userId });
+    if (!cart) {
+      return res.status(404).json({ success: false, message: "Cart not found" });
+    }
+
+    // ------ FIND ONLY FIRST MATCH (without needing half/full plate) ------
+    const index = cart.products.findIndex(
+      p =>
+        p.restaurantProductId.toString() === productId &&
+        p.recommendedId.toString() === recommendedId
+    );
+
+    if (index === -1) {
+      return res.status(404).json({
+        success: false,
+        message: "Product not found in cart.",
+      });
+    }
+
+    // Remove exactly that item
+    cart.products.splice(index, 1);
+
+    // ---------------- RECALCULATE TOTALS ----------------
+    let subTotal = 0;
+    let totalItems = 0;
+    let totalDiscount = 0;
+
+    for (const p of cart.products) {
+      subTotal += p.price * p.quantity;
+      totalItems += p.quantity;
+      totalDiscount += (p.discountAmount || 0) * p.quantity;
+    }
+
+    cart.subTotal = Number(subTotal.toFixed(2));
+    cart.totalItems = totalItems;
+    cart.totalDiscount = Number(totalDiscount.toFixed(2));
+
+    cart.discount = cart.products.length > 0 ? cart.products[0].discountPercent : 0;
+    cart.gstAmount = Number((subTotal * 0.05).toFixed(2));
+
+    cart.deliveryCharge = cart.products.length > 0 ? 20 : 0;
+    cart.platformCharge = cart.products.length > 0 ? 10 : 0;
+
+    cart.finalAmount = Number(
+      (subTotal + cart.gstAmount + cart.deliveryCharge + cart.platformCharge).toFixed(2)
+    );
+
+    // If cart empty → reset all
+    if (cart.products.length === 0) {
+      cart.restaurantId = null;
+      cart.subTotal = 0;
+      cart.totalItems = 0;
+      cart.totalDiscount = 0;
+      cart.gstAmount = 0;
+      cart.deliveryCharge = 0;
+      cart.platformCharge = 0;
+      cart.finalAmount = 0;
+    }
+
+    await cart.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Product removed successfully",
+      cart
+    });
+
+  } catch (error) {
+    console.error("deleteProductFromCart Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
 };
 
 

@@ -49,146 +49,87 @@ const uploadToCloudinary = async (file, folder) => {
 
 exports.createRestaurantProduct = async (req, res) => {
   try {
-    console.log("📦 Request Body:", req.body);
-    console.log("🖼️ Raw Request:", req);
-    
-    const { restaurantId, userId, type, status, viewCount } = req.body;
+    const { restaurantId } = req.body;
 
-    // ✅ Check restaurant existence
+    // ✅ Check restaurant exists
     const restaurant = await Restaurant.findById(restaurantId);
-    if (!restaurant) {
+    if (!restaurant)
       return res.status(404).json({ success: false, message: "Restaurant not found" });
-    }
 
-    // 🧩 Parse Recommended Array
+    // --- Parse recommended items ---
     let recommended = [];
     if (typeof req.body.recommended === "string") {
-      try {
-        recommended = JSON.parse(req.body.recommended);
-      } catch (err) {
-        console.error("Invalid JSON in recommended field:", err);
-        return res.status(400).json({ success: false, message: "Invalid recommended data" });
-      }
+      recommended = JSON.parse(req.body.recommended);
     } else if (Array.isArray(req.body.recommended)) {
       recommended = req.body.recommended;
     }
 
-    console.log("🔢 Recommended items:", recommended.length);
-    console.log("📝 Recommended data:", recommended);
-
-    // Handle file uploads - Cloudinary direct
+    // --- Handle recommended images upload ---
     let recommendedFiles = [];
-    
-    // Check if files are coming in the request
     if (req.files && req.files.recommendedImages) {
-      recommendedFiles = Array.isArray(req.files.recommendedImages) 
-        ? req.files.recommendedImages 
+      recommendedFiles = Array.isArray(req.files.recommendedImages)
+        ? req.files.recommendedImages
         : [req.files.recommendedImages];
     }
 
-    console.log("🖼️ Received files count:", recommendedFiles.length);
-    recommendedFiles.forEach((file, index) => {
-      console.log(`File ${index}:`, file.name, file.size, file.mimetype);
-    });
-
-    const formattedRecommended = [];
-
-    for (let i = 0; i < recommended.length; i++) {
-      const item = recommended[i];
-      let imageUrl = "";
-
-      // ✅ Upload image to Cloudinary if exists
-      if (recommendedFiles[i]) {
-        console.log(`📤 Uploading image for index ${i}:`, recommendedFiles[i].name);
-        try {
-          imageUrl = await uploadToCloudinary(
-            recommendedFiles[i],
-            "restaurant-recommended"
-          );
-          console.log(`✅ Image uploaded for index ${i}:`, imageUrl);
-        } catch (uploadError) {
-          console.error(`❌ Cloudinary upload failed for index ${i}:`, uploadError);
-          imageUrl = ""; // Empty if upload fails
-        }
-      } else {
-        console.log(`❌ No file found for index ${i}`);
+    // ✅ Map recommended items with preparationTime
+   const formattedRecommended = await Promise.all(
+  recommended.map(async (item, i) => {
+    let imageUrl = "";
+    if (recommendedFiles[i]) {
+      try {
+        imageUrl = await uploadToCloudinary(
+          recommendedFiles[i],
+          "restaurant-recommended"
+        );
+      } catch (err) {
+        console.error("Cloudinary Upload Error:", err);
+        imageUrl = "";
       }
-
-      // ✅ Parse addons safely
-      let parsedAddons = {
-        productName: item.name || "",
-        variation: { name: "", type: [] },
-        plates: { name: "" },
-      };
-
-      if (item.addons) {
-        try {
-          parsedAddons = {
-            productName: item.addons.productName || item.name || "",
-            variation: {
-              name: item.addons.variation?.name || "",
-              type: Array.isArray(item.addons.variation?.type) 
-                ? item.addons.variation.type 
-                : [],
-            },
-            plates: {
-              name: item.addons.plates?.name || "",
-            },
-          };
-        } catch (err) {
-          console.error("Error parsing addons:", err);
-        }
-      }
-
-      const vendorPlateCost = parseFloat(item.vendor_Platecost) || 0;
-      const vendorHalfPercentage = parseFloat(item.vendorHalfPercentage) || 0;
-
-      formattedRecommended.push({
-        name: item.name,
-        price: parseFloat(item.price) || 0,
-        rating: 0,
-        viewCount: 0,
-        content: item.content || "",
-        image: imageUrl, // This will be Cloudinary URL or empty string
-        vendorHalfPercentage: vendorHalfPercentage,
-        vendor_Platecost: vendorPlateCost,
-        addons: parsedAddons,
-        category: item.category || null,
-      });
     }
 
-    // ⚙️ Create new Restaurant Product
+    const price = parseFloat(item.price) || 0;
+
+    return {
+      name: item.name,
+      price: price,
+      halfPlatePrice: parseFloat(item.halfPlatePrice) || 0,
+      fullPlatePrice: price, // ✅ fullPlatePrice now equals price
+      discount: parseFloat(item.discount) || 0,
+      tags: Array.isArray(item.tags) ? item.tags : [],
+      content: item.content || "",
+      image: imageUrl,
+      category: item.category || null,
+      preparationTime: item.preparationTime || "",
+      status: "inactive",
+    };
+  })
+);
+
+    // --- Create Restaurant Product ---
     const newProduct = new RestaurantProduct({
       restaurantName: restaurant.restaurantName,
       locationName: restaurant.locationName,
-      type: typeof type === "string" ? JSON.parse(type) : type,
-      rating: restaurant.rating || 0,
-      viewCount: parseInt(viewCount) || 0,
       recommended: formattedRecommended,
-      restaurantId: restaurantId,
-      userId: userId,
-      timeAndKm: {
-        time: "0 mins",
-        distance: "0 km"
-      },
-      status: status || "active",
+      restaurantId,
+      status: "inactive",
+      timeAndKm: { time: "0 mins", distance: "0 km" },
     });
 
     const savedProduct = await newProduct.save();
 
-    console.log("✅ Product saved successfully:", savedProduct._id);
-
     return res.status(201).json({
       success: true,
-      message: "Restaurant Product created successfully ✅",
+      message: "Restaurant product created successfully",
       data: savedProduct,
     });
+
   } catch (error) {
-    console.error("❌ Create Restaurant Product Error:", error);
+    console.error("Create Restaurant Product Error:", error);
     return res.status(500).json({
       success: false,
-      message: "Server Error",
-      error: error.message,
+      message: "Server error",
+      error: error.message
     });
   }
 };
@@ -205,7 +146,7 @@ exports.getAllRestaurantProducts = async (req, res) => {
   }
 };
 // Get product by product ID
-exports.getByrestaurantProductId= async (req, res) => {
+exports.getByrestaurantProductId = async (req, res) => {
   try {
     const { Id } = req.params;  // Ensure your route uses /:productId
 
@@ -257,7 +198,7 @@ exports.getCartByUserId = async (req, res) => {
 };
 // Get restaurant products by category ID
 exports.getRestaurantProductsByCategoryId = async (req, res) => {
-    try {
+  try {
     const { categoryId } = req.params;
     if (!mongoose.Types.ObjectId.isValid(categoryId))
       return res.status(400).json({ success: false, message: "Invalid category ID" });
@@ -273,20 +214,48 @@ exports.getRestaurantProductsByCategoryId = async (req, res) => {
 exports.getRecommendedByRestaurantId = async (req, res) => {
   try {
     const { restaurantId } = req.params;
-    const { categoryName, name } = req.query; // filters
+    const { categoryName, name } = req.query;
 
-    // ✅ Validate restaurantId
     if (!restaurantId || !mongoose.Types.ObjectId.isValid(restaurantId)) {
       return res.status(400).json({ success: false, message: "Valid restaurantId is required" });
     }
 
-    // ✅ Check if restaurant exists
-    const restaurant = await Restaurant.findById(restaurantId);
+    // Get restaurant data
+    const restaurant = await Restaurant.findById(restaurantId).lean();
     if (!restaurant) {
       return res.status(404).json({ success: false, message: "Restaurant not found" });
     }
 
-    // ✅ Fetch all products with populated categories
+    const restaurantStatus = restaurant.status || "unknown";
+
+    // Calculate totalRatings and totalReviews
+    let totalRatings = 0;
+    let totalReviews = 0;
+    if (Array.isArray(restaurant.reviews) && restaurant.reviews.length > 0) {
+      totalReviews = restaurant.reviews.length;
+      const ratingSum = restaurant.reviews.reduce((sum, r) => sum + (r.stars || 0), 0);
+      totalRatings = parseFloat((ratingSum / totalReviews).toFixed(2));
+
+      const userIds = restaurant.reviews.map(r => r.userId);
+      const users = await User.find({ _id: { $in: userIds } })
+        .select("firstName lastName profileImg")
+        .lean();
+
+      restaurant.reviews = restaurant.reviews.map(r => {
+        const user = users.find(u => u._id.toString() === r.userId.toString());
+        return {
+          _id: r._id,
+          stars: r.stars,
+          comment: r.comment,
+          createdAt: r.createdAt,
+          firstName: user?.firstName || null,
+          lastName: user?.lastName || null,
+          profileImg: user?.profileImg || null
+        };
+      });
+    }
+
+    // Get recommended products
     const products = await RestaurantProduct.find({ restaurantId })
       .populate("recommended.category");
 
@@ -294,40 +263,49 @@ exports.getRecommendedByRestaurantId = async (req, res) => {
       return res.status(404).json({ success: false, message: "No recommended products found" });
     }
 
-    // ✅ Flatten all recommended items
     let recommendedList = [];
 
     products.forEach(product => {
       if (Array.isArray(product.recommended) && product.recommended.length > 0) {
         product.recommended.forEach(item => {
+          const imageUrl = item.image || product.image || "";
+
           recommendedList.push({
             productId: product._id,
             restaurantName: product.restaurantName,
             locationName: product.locationName,
             type: product.type,
-            status: product.status,
             rating: product.rating,
             viewCount: product.viewCount,
             recommendedItem: {
               _id: item._id,
               name: item.name || "",
-              price: item.price || 0,
-              rating: item.rating || 0,
-              viewCount: item.viewCount || 0,
+              price: parseFloat(item.price) || 0,
+              halfPlatePrice: parseFloat(item.halfPlatePrice) || 0,
+              fullPlatePrice: parseFloat(item.fullPlatePrice) || 0,
+              discount: parseFloat(item.discount) || 0,
+              tags: Array.isArray(item.tags) ? item.tags : [],
               content: item.content || "",
-              image: item.image || "",
-              addons: item.addons || {},
+              image: imageUrl,
               category: item.category || null,
-              vendorHalfPercentage: item.vendorHalfPercentage || 0,
-              vendor_Platecost: item.vendor_Platecost || 0,
-              calculatedPrice: item.calculatedPrice || null,
+              status: item.status,
+              preparationTime: item.preparationTime || "",
+              reviews: Array.isArray(item.reviews) ? item.reviews.map(r => ({
+                _id: r._id,
+                stars: r.stars,
+                comment: r.comment,
+                createdAt: r.createdAt,
+                firstName: r.user?.firstName || null,
+                lastName: r.user?.lastName || null,
+                profileImg: r.user?.profileImg || null
+              })) : []
             }
           });
         });
       }
     });
 
-    // ✅ Apply filters (case-insensitive)
+    // Apply filters
     if (categoryName) {
       const regex = new RegExp(categoryName.trim(), "i");
       recommendedList = recommendedList.filter(item =>
@@ -353,7 +331,11 @@ exports.getRecommendedByRestaurantId = async (req, res) => {
     return res.status(200).json({
       success: true,
       totalRecommendedItems: recommendedList.length,
-      recommendedProducts: recommendedList
+      restaurantStatus,  // <-- TOP LEVEL after totalRecommendedItems
+      recommendedProducts: recommendedList,
+      restaurantReviews: restaurant.reviews || [],
+      totalRatings,
+      totalReviews
     });
 
   } catch (error) {
@@ -366,6 +348,8 @@ exports.getRecommendedByRestaurantId = async (req, res) => {
   }
 };
 
+
+
 exports.updateRestaurantProduct = async (req, res) => {
   try {
     const { productId } = req.params;
@@ -374,75 +358,87 @@ exports.updateRestaurantProduct = async (req, res) => {
       return res.status(400).json({ success: false, message: "Valid productId is required." });
     }
 
-    // Find existing product
+    // Fetch existing product
     const existingProduct = await RestaurantProduct.findById(productId);
     if (!existingProduct) {
       return res.status(404).json({ success: false, message: "Restaurant Product not found." });
     }
 
-    const { type, status, viewCount } = req.body;
+    // Start with existing product data
+    let updateData = { ...existingProduct.toObject() };
 
-    // Parse recommended array
-    let recommended = [];
-    if (typeof req.body.recommended === "string") {
-      try {
-        recommended = JSON.parse(req.body.recommended);
-      } catch (err) {
-        return res.status(400).json({ success: false, message: "Invalid recommended JSON" });
-      }
-    } else if (Array.isArray(req.body.recommended)) {
-      recommended = req.body.recommended;
+    // Update only the fields that are provided in request
+    if (req.body.type) {
+      updateData.type = JSON.parse(req.body.type);
     }
 
-    const recommendedFiles = req.files?.recommendedImages || [];
-
-    const formattedRecommended = [];
-
-    for (let i = 0; i < recommended.length; i++) {
-      const item = recommended[i];
-      // Keep existing image if not updating
-      let imageUrl = item.image || (existingProduct.recommended[i]?.image || "");
-
-      // Upload new image if provided
-      if (recommendedFiles[i]) {
-        imageUrl = await uploadToCloudinary(recommendedFiles[i], "restaurant-recommended");
-      }
-
-      // Parse addons safely
-      const parsedAddons = {
-        productName: item.addons?.productName || existingProduct.recommended[i]?.addons?.productName || "",
-        variation: {
-          name: item.addons?.variation?.name || existingProduct.recommended[i]?.addons?.variation?.name || "",
-          type: Array.isArray(item.addons?.variation?.type) ? item.addons.variation.type : existingProduct.recommended[i]?.addons?.variation?.type || []
-        },
-        plates: {
-          name: item.addons?.plates?.name || existingProduct.recommended[i]?.addons?.plates?.name || ""
-        }
-      };
-
-      formattedRecommended.push({
-        name: item.name || existingProduct.recommended[i]?.name || "",
-        price: parseFloat(item.price) || existingProduct.recommended[i]?.price || 0,
-        rating: item.rating || existingProduct.recommended[i]?.rating || 0,
-        viewCount: item.viewCount || existingProduct.recommended[i]?.viewCount || 0,
-        content: item.content || existingProduct.recommended[i]?.content || "",
-        image: imageUrl,
-        vendorHalfPercentage: parseFloat(item.vendorHalfPercentage) || existingProduct.recommended[i]?.vendorHalfPercentage || 0,
-        vendor_Platecost: parseFloat(item.vendor_Platecost) || existingProduct.recommended[i]?.vendor_Platecost || 0,
-        addons: parsedAddons,
-        category: item.category || existingProduct.recommended[i]?.category || null
-      });
+    if (req.body.status) {
+      updateData.status = req.body.status;
     }
 
-    // Prepare update object
-    const updateData = {
-      ...(type && { type: typeof type === "string" ? JSON.parse(type) : type }),
-      ...(status && { status }),
-      ...(viewCount !== undefined && { viewCount: parseInt(viewCount) }),
-      ...(recommended.length > 0 && { recommended: formattedRecommended })
-    };
+    if (req.body.viewCount) {
+      updateData.viewCount = parseInt(req.body.viewCount);
+    }
 
-    // Update the product
+    // Handle recommended updates - only update provided fields
+    if (req.body.recommended) {
+      let recommendedUpdates = [];
+      if (typeof req.body.recommended === "string") {
+        recommendedUpdates = JSON.parse(req.body.recommended);
+      } else if (Array.isArray(req.body.recommended)) {
+        recommendedUpdates = req.body.recommended;
+      }
+
+      // Image upload handling
+      let recommendedFiles = [];
+      if (req.files && req.files.recommendedImages) {
+        recommendedFiles = Array.isArray(req.files.recommendedImages)
+          ? req.files.recommendedImages
+          : [req.files.recommendedImages];
+      }
+
+      // Update only the fields that are provided in recommended
+      updateData.recommended = await Promise.all(
+        existingProduct.recommended.map(async (existingItem, index) => {
+          const itemUpdate = recommendedUpdates[index] || {};
+          let imageUrl = existingItem.image;
+
+          // Handle image upload if new image provided
+          if (recommendedFiles[index]) {
+            try {
+              imageUrl = await uploadToCloudinary(
+                recommendedFiles[index],
+                "restaurant-recommended"
+              );
+            } catch (err) {
+              console.error("Cloudinary Upload Error:", err);
+            }
+          }
+
+          return {
+            ...existingItem.toObject(),
+
+            ...(itemUpdate.name && { name: itemUpdate.name }),
+            ...(itemUpdate.price && { price: parseFloat(itemUpdate.price) }),
+            ...(itemUpdate.halfPlatePrice && { halfPlatePrice: parseFloat(itemUpdate.halfPlatePrice) }),
+            ...(itemUpdate.fullPlatePrice && { fullPlatePrice: parseFloat(itemUpdate.fullPlatePrice) }),
+            ...(itemUpdate.discount && { discount: parseFloat(itemUpdate.discount) }),
+            ...(itemUpdate.tags && { tags: Array.isArray(itemUpdate.tags) ? itemUpdate.tags : [] }),
+            ...(itemUpdate.content && { content: itemUpdate.content }),
+            ...(itemUpdate.category && { category: itemUpdate.category }),
+            ...(itemUpdate.preparationTime && { preparationTime: itemUpdate.preparationTime }),
+
+            // ⭐ FIXED HERE — update regardless of active/inactive
+            ...(itemUpdate.status !== undefined && { status: itemUpdate.status }),
+
+            ...(imageUrl !== existingItem.image && { image: imageUrl }),
+          };
+
+        })
+      );
+    }
+
+    // Update product
     const updatedProduct = await RestaurantProduct.findByIdAndUpdate(
       productId,
       { $set: updateData },
@@ -451,8 +447,8 @@ exports.updateRestaurantProduct = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: "Restaurant Product updated successfully ✅",
-      data: updatedProduct
+      message: "Restaurant Product updated successfully",
+      data: updatedProduct,
     });
 
   } catch (error) {

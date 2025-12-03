@@ -23,6 +23,7 @@ exports.createAmbassador = async (req, res) => {
     const formData = req.body;
 
     console.log("Request body:", req.body);
+    console.log("Uploaded files:", req.files);
 
     // ========================
     // Step 1: Generate referral code
@@ -31,103 +32,239 @@ exports.createAmbassador = async (req, res) => {
     const referralCode = `VEGGYFYAMB${(ambassadorCount + 1).toString().padStart(2, '0')}`;
 
     // ========================
-    // Step 2: Handle profile image
+    // Step 2: Handle file uploads (Profile Image, Aadhar Card, PAN Card)
     // ========================
     let uploadedImageUrl = "";
+    let uploadedAadharUrl = "";
+    let uploadedPanUrl = "";
+
+    // Handle Profile Image
     if (req.files && req.files.profileImage) {
       const profileImage = req.files.profileImage;
 
       if (profileImage.mimetype.startsWith('image')) {
         const result = await cloudinary.uploader.upload(profileImage.tempFilePath, {
-          folder: "veggyfy/ambassadors",
+          folder: "veggyfy/ambassadors/profile",
         });
         uploadedImageUrl = result.secure_url;
       } else {
         return res.status(400).json({
           success: false,
-          message: "Invalid file type. Only image files are allowed.",
+          message: "Invalid file type for profile image. Only image files are allowed.",
         });
       }
     }
 
+    // Handle Aadhar Card - REQUIRED
+    if (req.files && req.files.aadharCard) {
+      const aadharCard = req.files.aadharCard;
+
+      // Check if file is image or PDF
+      if (aadharCard.mimetype.startsWith('image') || aadharCard.mimetype === 'application/pdf') {
+        const result = await cloudinary.uploader.upload(aadharCard.tempFilePath, {
+          folder: "veggyfy/ambassadors/documents/aadhar",
+          resource_type: aadharCard.mimetype === 'application/pdf' ? 'raw' : 'image'
+        });
+        uploadedAadharUrl = result.secure_url;
+      } else {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid file type for Aadhar Card. Only images and PDF are allowed.",
+        });
+      }
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: "Aadhar Card is required for verification.",
+      });
+    }
+
+    // Handle PAN Card - REQUIRED
+    if (req.files && req.files.panCard) {
+      const panCard = req.files.panCard;
+
+      // Check if file is image or PDF
+      if (panCard.mimetype.startsWith('image') || panCard.mimetype === 'application/pdf') {
+        const result = await cloudinary.uploader.upload(panCard.tempFilePath, {
+          folder: "veggyfy/ambassadors/documents/pan",
+          resource_type: panCard.mimetype === 'application/pdf' ? 'raw' : 'image'
+        });
+        uploadedPanUrl = result.secure_url;
+      } else {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid file type for PAN Card. Only images and PDF are allowed.",
+        });
+      }
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: "PAN Card is required for verification.",
+      });
+    }
+
     // ========================
-    // Step 3: Create Ambassador document
+    // Step 3: Check if ambassador already exists with same email or mobile
+    // ========================
+    const existingAmbassador = await Ambassador.findOne({
+      $or: [
+        { email: formData.email },
+        { mobileNumber: formData.mobileNumber }
+      ]
+    });
+
+    if (existingAmbassador) {
+      return res.status(400).json({
+        success: false,
+        message: "Ambassador with this email or mobile number already exists.",
+      });
+    }
+
+    // ========================
+    // Step 4: Create Ambassador document with KYC documents
     // ========================
     const newAmbassador = new Ambassador({
+      // Personal Information
       fullName: formData.fullName,
       email: formData.email,
       mobileNumber: formData.mobileNumber,
       dateOfBirth: formData.dateOfBirth || "",
       gender: formData.gender || "",
+      
+      // Location Information
       city: formData.city,
       area: formData.area,
       pincode: formData.pincode || "",
+      
+      // Social Media
       instagram: formData.instagram || "",
       facebook: formData.facebook || "",
       twitter: formData.twitter || "",
+      
+      // Ambassador Specific
       whyVeggyfy: formData.whyVeggyfy,
       marketingIdeas: formData.marketingIdeas || "",
       targetAudience: formData.targetAudience || "",
       expectedCommission: formData.expectedCommission || "",
+      
+      // Referral & Status
       referralCode: referralCode,
       referredBy: formData.referredBy || null,
       status: formData.status || "pending",
+      
+      // Files
       profileImage: uploadedImageUrl || "",
-      wallet: 0
+      aadharCard: uploadedAadharUrl,
+      panCard: uploadedPanUrl,
+      
+      // Wallet
+      wallet: 0,
+      
+      // KYC Status
+      kycStatus: "pending", // pending, approved, rejected
+      kycSubmittedAt: new Date()
     });
 
     await newAmbassador.save();
 
     // ========================
-    // Step 4: Referral Logic
+    // Step 5: Referral Logic
     // ========================
-    if (formData.referredBy) {
-      const code = formData.referredBy;
+    if (formData.referredBy && formData.referredBy.trim() !== "") {
+      const code = formData.referredBy.trim();
 
       if (code.startsWith("VEGGYFYAMB")) {
-        // Ambassador referred
+        // Ambassador referred by another ambassador
         const refAmbassador = await Ambassador.findOne({ referralCode: code });
         if (refAmbassador) {
           const amountData = await Amount.findOne({ type: "Ambsaddor to Ambsaddor" });
           if (amountData) {
             refAmbassador.wallet = (refAmbassador.wallet || 0) + amountData.amount;
             await refAmbassador.save();
+
+            // Create referral bonus record
+            const referralBonus = new ReferralBonus({
+              referrerId: refAmbassador._id,
+              referredId: newAmbassador._id,
+              referralCode: code,
+              amount: amountData.amount,
+              type: "ambassador_to_ambassador",
+              status: "credited"
+            });
+            await referralBonus.save();
           }
         }
       }
 
       if (code.startsWith("VEGGYFYVENDOR")) {
-        // Vendor referred
+        // Ambassador referred by vendor
         const refVendor = await Restaurant.findOne({ referralCode: code });
         if (refVendor) {
           const amountData = await Amount.findOne({ type: "Vendor to Ambassador" });
           if (amountData) {
             refVendor.walletBalance = (refVendor.walletBalance || 0) + amountData.amount;
             await refVendor.save();
+
+            // Create referral bonus record
+            const referralBonus = new ReferralBonus({
+              referrerId: refVendor._id,
+              referredId: newAmbassador._id,
+              referralCode: code,
+              amount: amountData.amount,
+              type: "vendor_to_ambassador",
+              status: "credited"
+            });
+            await referralBonus.save();
           }
         }
       }
     }
 
     // ========================
-    // Step 5: Response
+    // Step 6: Send confirmation email (optional)
+    // ========================
+    try {
+      // You can add email sending logic here
+      console.log(`Ambassador application received from: ${formData.email}`);
+    } catch (emailError) {
+      console.error("Email sending failed:", emailError);
+      // Don't fail the request if email fails
+    }
+
+    // ========================
+    // Step 7: Response
     // ========================
     res.status(201).json({
       success: true,
-      message: "Ambassador application submitted successfully!",
-      data: newAmbassador,
+      message: "Ambassador application submitted successfully! Your KYC documents are under verification.",
+      data: {
+        _id: newAmbassador._id,
+        fullName: newAmbassador.fullName,
+        email: newAmbassador.email,
+        referralCode: newAmbassador.referralCode,
+        status: newAmbassador.status,
+        kycStatus: newAmbassador.kycStatus,
+        appliedAt: newAmbassador.createdAt
+      },
     });
 
   } catch (err) {
     console.error("❌ Error creating ambassador:", err);
+    
+    // Clean up uploaded files if error occurred
+    try {
+      // You can add cleanup logic for Cloudinary files if needed
+    } catch (cleanupError) {
+      console.error("Cleanup error:", cleanupError);
+    }
+
     res.status(500).json({
       success: false,
-      message: "Server error",
+      message: "Server error while creating ambassador",
       error: err.message,
     });
   }
 };
-
 
 
 exports.loginAmbassador = async (req, res) => {

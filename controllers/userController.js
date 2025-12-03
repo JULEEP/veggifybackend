@@ -517,7 +517,7 @@ const deleteProfileImage = async (req, res) => {
 };
 
 
-const addAddress = async (req, res) => {
+ const addAddress = async (req, res) => {
   try {
     const { userId } = req.params;
     const { street, city, state, postalCode, country, addressType, latitude, longitude } = req.body;
@@ -527,41 +527,45 @@ const addAddress = async (req, res) => {
       return res.status(400).json({ message: 'All address fields are required ❌' });
     }
 
+    // Find user
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ message: 'User not found ❌' });
 
-    // Create the new address object
+    // Create the new address object with proper GeoJSON format
     const newAddress = {
       street,
       city,
       state,
       postalCode,
       country,
-      addressType: addressType || 'Home', // Default is 'Home' if not provided
+      addressType: addressType || 'Home',
       location: {
         type: "Point",
         coordinates: [
-          longitude || 0, // longitude first in GeoJSON
-          latitude || 0   // latitude second
+          Number(longitude) || 0, // longitude first
+          Number(latitude) || 0   // latitude second
         ]
       }
     };
 
-    // If the user already has an address array, push the new address; otherwise, create a new array
+    // Initialize addresses array if it doesn't exist
     if (!Array.isArray(user.addresses)) {
       user.addresses = [];
     }
+
+    // Push the new address
     user.addresses.push(newAddress);
 
-    // Save the updated user document
+    // Save user
     await user.save();
 
     res.status(200).json({
       message: 'Address added successfully ✅',
-      addresses: newAddress // Return the newly added address
+      address: newAddress // Return the newly added address
     });
 
   } catch (err) {
+    console.error("Error adding address:", err);
     res.status(500).json({ message: 'Failed to add address ❌', error: err.message });
   }
 };

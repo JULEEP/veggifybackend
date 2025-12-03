@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const {savePrivacyPolicy,getPrivacyPolicy} = require('../controllers/privacyPolicyController');
 const {upsertAboutUs,getAboutUs} = require('../controllers/aboutUsController');
-const { submitHelpUs, getAllHelpUs } = require('../controllers/helpUsControler');
+const { submitHelpUs, getAllHelpUs, getIssuesByUser, updateHelpUs, deleteHelpUs } = require('../controllers/helpUsControler');
 const {createNotification,getAllNotifications,markAsRead,deleteNotification} = require('../controllers/notificationController');
 const controller = require('../controllers/orderControler');
 const enquiryController = require("../controllers/enquirycontroller");
@@ -26,12 +26,20 @@ router.delete('/wishlist/:userId/:productId', controller.removeFromWishlist);
 
 // ---------- ORDER ROUTES ----------
 router.post('/createorder', controller.createOrder);
+router.post('/addreview', controller.addReview);
+router.put('/editprodutreview', controller.editProductReview);
+router.delete('/deleteproductreview', controller.deleteProductReview);
+router.get("/getsingleproduct/:productId", controller.getSingleProduct);
 router.get('/orders', controller.getAllOrders);
 router.get('/userorders/:userId', controller.getOrdersByUserId);
 router.get('/userpreviousorders/:userId', controller.getPreviousOrdersByUserId);
 router.get("/acceptedorders/:userId", controller.getAcceptedOrdersByUserId);
+router.get("/acceptedorders/:userId/:orderId", controller.getOrderByUserIdAndOrderId);
 router.put('/orders/:orderId', controller.updateOrderByUserId);
 router.delete('/orders/user/:userId/:orderId', controller.deleteOrderByUserId);
+
+router.get("/search", controller.searchRestaurantsAndProducts);
+
 
 // Vendor accepts order
 router.put('/acceptorder/:orderId/:vendorId', controller.vendorAcceptOrder);
@@ -65,6 +73,10 @@ router.get('/delivered-orders/:deliveryBoyId', controller.getAllDeliveredOrders)
 
 router.post('/help/:userId', submitHelpUs);
 router.get('/help', getAllHelpUs); // Optional: only if admin needs to see the list
+router.get('/help/:userId', getIssuesByUser);
+router.put('/help/:issueId', updateHelpUs);
+router.delete('/help/:issueId', deleteHelpUs);
+
 
 
 
@@ -100,6 +112,16 @@ router.put("/updateorders/:id", controller.updateOrderStatus);
 
 // Delete order by ID
 router.delete("/deleteorders/:id", controller.deleteOrder);
+
+
+// Add review
+router.post("/addrestureview", controller.addRestaurantReview);
+
+// Edit review
+router.put("/editrestureview", controller.editRestaurantReview);
+
+// Delete review
+router.delete("/deleterestureview", controller.deleteRestaurantReview);
 
 
 

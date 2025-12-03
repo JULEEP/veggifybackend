@@ -17,6 +17,9 @@ const Amount = require('../models/Amount');
 const AmbassadorPlan = require('../models/AmbassadorPlan');
 const AmbassadorPayment = require('../models/AmbassadorPayment');
 const Ambassador = require('../models/ambassadorModel');
+const VendorPlan = require('../models/VendorPlan');
+const Commission = require('../models/Commission');
+const Charge = require('../models/Charge');
 
 
 
@@ -95,24 +98,86 @@ exports.setPassword = async (req, res) => {
 
 
 
-// 4. Login with phone number only (no password)
+
+exports.register = async (req, res) => {
+    try {
+        const { name, email, phoneNumber, password } = req.body;
+
+        // Validate the required fields
+        if (!name || !email || !phoneNumber || !password) {
+            return res.status(400).json({ message: 'All fields are required' });
+        }
+
+        // Check if the admin already exists (either by email or phoneNumber)
+        const existingAdminByEmail = await Admin.findOne({ email });
+        if (existingAdminByEmail) {
+            return res.status(400).json({ message: 'Admin with this email already exists' });
+        }
+
+        const existingAdminByPhone = await Admin.findOne({ phoneNumber });
+        if (existingAdminByPhone) {
+            return res.status(400).json({ message: 'Admin with this phone number already exists' });
+        }
+
+        // Create the new admin (no password hashing)
+        const newAdmin = new Admin({
+            name,
+            email,
+            phoneNumber,
+            password, // Save the password as it is (plain text)
+        });
+
+        // Save the admin in the database
+        await newAdmin.save();
+
+        // Generate an authentication token for the new admin
+        const token = generateAuthToken({
+            id: newAdmin._id,
+            phoneNumber: newAdmin.phoneNumber,
+        });
+
+        // Send the response
+        return res.status(201).json({
+            message: 'Registration successful',
+            token,
+            adminId: newAdmin._id,
+        });
+
+    } catch (err) {
+        console.error('Registration Error:', err);
+        return res.status(500).json({ message: 'Server error', error: err.message });
+    }
+};
+
+// 4. Login with email and password
 exports.login = async (req, res) => {
     try {
-        const { phoneNumber } = req.body;
-        if (!phoneNumber)
-            return res.status(400).json({ message: 'Phone number is required' });
+        const { email, password } = req.body;
 
-        const admin = await Admin.findOne({ phoneNumber });
-        if (!admin)
+        // Validate the required fields
+        if (!email || !password) {
+            return res.status(400).json({ message: 'Email and password are required' });
+        }
+
+        // Find the admin by email
+        const admin = await Admin.findOne({ email });
+        if (!admin) {
             return res.status(404).json({ message: 'Admin not registered' });
+        }
 
-        // No password check here anymore
+        // Generate an authentication token for the logged-in admin
+        const token = generateAuthToken({
+            id: admin._id,
+            email: admin.email,
+        });
 
-        const token = generateAuthToken({ id: admin._id, phoneNumber: admin.phoneNumber });
-        return res.status(200).json({ 
-            message: 'Login successful', 
-            token, 
-            adminId: admin._id 
+        // Send the response with the token and other details
+        return res.status(200).json({
+            message: 'Login successful',
+            token,
+            adminId: admin._id,
+            name: admin.name,
+            email: admin.email
         });
     } catch (err) {
         console.error('Login Error:', err);
@@ -121,6 +186,76 @@ exports.login = async (req, res) => {
 };
 
 
+
+// 1. Get Profile (by adminId)
+exports.getProfile = async (req, res) => {
+    try {
+        const { adminId } = req.params; // Get adminId from request params
+
+        // Find the admin by adminId
+        const admin = await Admin.findById(adminId);
+        if (!admin) {
+            return res.status(404).json({ message: 'Admin not found' });
+        }
+
+        // Return the profile data
+        return res.status(200).json({
+            message: 'Profile fetched successfully',
+            adminId: admin._id,
+            name: admin.name,
+            email: admin.email,
+            phoneNumber: admin.phoneNumber,
+            password: admin.password
+        });
+
+    } catch (err) {
+        console.error('Get Profile Error:', err);
+        return res.status(500).json({ message: 'Server error', error: err.message });
+    }
+};
+
+// 2. Update Profile (by adminId)
+exports.updateProfile = async (req, res) => {
+    try {
+        const { adminId } = req.params; // Get adminId from request params
+        const { name, email, phoneNumber, password } = req.body; // Get the fields to update
+
+        // Find the admin by adminId
+        const admin = await Admin.findById(adminId);
+        if (!admin) {
+            return res.status(404).json({ message: 'Admin not found' });
+        }
+
+        // Update the admin details
+        if (name) admin.name = name;
+        if (email) admin.email = email;
+        if (phoneNumber) admin.phoneNumber = phoneNumber;
+        if (password) admin.password = password; // You may want to hash the password if updating it (optional)
+
+        // Save the updated admin profile
+        await admin.save();
+
+        // Generate a new authentication token (optional)
+        const token = generateAuthToken({
+            id: admin._id,
+            phoneNumber: admin.phoneNumber,
+        });
+
+        // Send the response
+        return res.status(200).json({
+            message: 'Profile updated successfully',
+            token,
+            adminId: admin._id,
+            name: admin.name,
+            email: admin.email,
+            phoneNumber: admin.phoneNumber,
+        });
+
+    } catch (err) {
+        console.error('Update Profile Error:', err);
+        return res.status(500).json({ message: 'Server error', error: err.message });
+    }
+};
 
 // 5. Get Admin Details by Admin ID
 exports.getAdminByAdminId = async (req, res) => {
@@ -1035,13 +1170,6 @@ exports.updateAmount = async (req, res) => {
       });
     }
 
-    if (!type || !amount) {
-      return res.status(400).json({
-        success: false,
-        message: 'Type and amount are required'
-      });
-    }
-
     // Check if amount exists
     const existingAmount = await Amount.findById(id);
     if (!existingAmount) {
@@ -1450,5 +1578,303 @@ exports.getReferredStats = async (req, res) => {
       message: 'Server error',
       error: err.message,
     });
+  }
+};
+
+
+
+// Create a new vendor plan
+exports.createVendorPlan = async (req, res) => {
+  try {
+    const { name, price, validity, benefits } = req.body;
+
+    const newPlan = new VendorPlan({
+      name,
+      price,
+      validity,
+      benefits,
+    });
+
+    await newPlan.save();
+
+    res.status(201).json({
+      success: true,
+      message: "Vendor Plan created successfully",
+      data: newPlan,
+    });
+  } catch (err) {
+    console.error("❌ Error creating vendor plan:", err);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err.message,
+    });
+  }
+};
+
+// Get all vendor plans
+exports.getAllVendorPlans = async (req, res) => {
+  try {
+    const plans = await VendorPlan.find().sort({ createdAt: -1 });
+    res.status(200).json({
+      success: true,
+      data: plans,
+    });
+  } catch (err) {
+    console.error("❌ Error fetching vendor plans:", err);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err.message,
+    });
+  }
+};
+
+// Get a single vendor plan by ID
+exports.getVendorPlanById = async (req, res) => {
+  try {
+    const plan = await VendorPlan.findById(req.params.id);
+    if (!plan) {
+      return res.status(404).json({ success: false, message: "Vendor plan not found" });
+    }
+    res.status(200).json({ success: true, data: plan });
+  } catch (err) {
+    console.error("❌ Error fetching vendor plan:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// Update a vendor plan
+exports.updateVendorPlan = async (req, res) => {
+  try {
+    const updatedPlan = await VendorPlan.findByIdAndUpdate(
+      req.params.id, 
+      req.body, 
+      { new: true, runValidators: true }
+    );
+    if (!updatedPlan) {
+      return res.status(404).json({ success: false, message: "Vendor plan not found" });
+    }
+    res.status(200).json({ 
+      success: true, 
+      message: "Vendor plan updated successfully", 
+      data: updatedPlan 
+    });
+  } catch (err) {
+    console.error("❌ Error updating vendor plan:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// Delete a vendor plan
+exports.deleteVendorPlan = async (req, res) => {
+  try {
+    const deletedPlan = await VendorPlan.findByIdAndDelete(req.params.id);
+    if (!deletedPlan) {
+      return res.status(404).json({ success: false, message: "Vendor plan not found" });
+    }
+    res.status(200).json({ 
+      success: true, 
+      message: "Vendor plan deleted successfully" 
+    });
+  } catch (err) {
+    console.error("❌ Error deleting vendor plan:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+
+
+// Get all charges
+exports.getAllCharges = async (req, res) => {
+  try {
+    const charges = await Charge.find().sort({ createdAt: -1 });
+    
+    res.status(200).json({
+      success: true,
+      data: charges,
+      message: 'Charges fetched successfully'
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+// Get single charge
+exports.getCharge = async (req, res) => {
+  try {
+    const charge = await Charge.findById(req.params.id);
+    
+    if (!charge) {
+      return res.status(404).json({
+        success: false,
+        message: 'Charge not found'
+      });
+    }
+    
+    res.status(200).json({
+      success: true,
+      data: charge
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+// Create new charge
+exports.createCharge = async (req, res) => {
+  try {
+    const { type, amount } = req.body;
+    
+    // Check if charge type already exists
+    const existingCharge = await Charge.findOne({ type });
+    if (existingCharge) {
+      return res.status(400).json({
+        success: false,
+        message: 'Charge type already exists'
+      });
+    }
+    
+    // Auto-detect charge type based on the type field
+    let chargeType = 'fixed';
+    if (type === 'gst_charges' || type === 'gst_on_delivery' || type === 'platform_charge') {
+      chargeType = 'percentage';
+    }
+    
+    const newCharge = await Charge.create({
+      type,
+      amount,
+      chargeType
+    });
+    
+    res.status(201).json({
+      success: true,
+      data: newCharge,
+      message: 'Charge created successfully'
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+// Update charge
+exports.updateCharge = async (req, res) => {
+  try {
+    const { amount, chargeType } = req.body;
+    const chargeId = req.params.id;
+    
+    const updatedCharge = await Charge.findByIdAndUpdate(
+      chargeId,
+      { 
+        amount,
+        chargeType,
+        updatedAt: Date.now()
+      },
+      { new: true, runValidators: true }
+    );
+    
+    if (!updatedCharge) {
+      return res.status(404).json({
+        success: false,
+        message: 'Charge not found'
+      });
+    }
+    
+    res.status(200).json({
+      success: true,
+      data: updatedCharge,
+      message: 'Charge updated successfully'
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+// Delete charge
+exports.deleteCharge = async (req, res) => {
+  try {
+    const chargeId = req.params.id;
+    
+    const deletedCharge = await Charge.findByIdAndDelete(chargeId);
+    
+    if (!deletedCharge) {
+      return res.status(404).json({
+        success: false,
+        message: 'Charge not found'
+      });
+    }
+    
+    res.status(200).json({
+      success: true,
+      message: 'Charge deleted successfully'
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+
+
+
+
+// Create Commission
+exports.createCommission = async (req, res) => {
+  const { type, userId, commission } = req.body;
+  if (!userId || commission == null) return res.status(400).json({ success: false, message: "userId and commission are required" });
+
+  try {
+    const exists = await Commission.findOne(type === "vendor" ? { type, vendorId: userId } : { type, ambassadorId: userId });
+
+    const newComm = await Commission.create({
+      type,
+      commission,
+      ...(type === "vendor" ? { vendorId: userId } : { ambassadorId: userId })
+    });
+
+    res.status(201).json({ success: true, data: newComm });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// Update Commission
+exports.updateCommission = async (req, res) => {
+  const { id } = req.params;
+  const { commission } = req.body;
+  if (commission == null) return res.status(400).json({ success: false, message: "commission is required" });
+
+  try {
+    const updated = await Commission.findByIdAndUpdate(id, { commission }, { new: true });
+    if (!updated) return res.status(404).json({ success: false, message: "Commission not found" });
+    res.status(200).json({ success: true, data: updated });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// Delete Commission
+exports.deleteCommission = async (req, res) => {
+  const { id } = req.params;
+  try {
+    const deleted = await Commission.findByIdAndDelete(id);
+    if (!deleted) return res.status(404).json({ success: false, message: "Commission not found" });
+    res.status(200).json({ success: true, message: "Commission deleted successfully" });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
   }
 };

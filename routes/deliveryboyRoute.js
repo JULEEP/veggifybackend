@@ -63,6 +63,8 @@ router.get('/myprofile/:deliveryBoyId', DeliveryBoy.getDeliveryBoyProfile);
 router.put('/updateProfileImage/:deliveryBoyId', DeliveryBoy.updateProfileImage);
 router.get('/mydashboard/:deliveryBoyId', DeliveryBoy.getDeliveryBoyDashboard);
 router.put('/deliveryboystatus/:deliveryBoyId', DeliveryBoy.updateDeliveryBoyStatus);
+router.put('/updatedeliverybody/:deliveryBoyId', DeliveryBoy.updateDeliveryBoy);
+
 
 
 module.exports = router;
