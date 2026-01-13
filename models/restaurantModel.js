@@ -221,6 +221,32 @@ otp: {
       default: Date.now
     }
   },
+
+  deleteToken: {
+  type: String,
+},
+
+deleteTokenExpiration: {
+  type: Date,
+},
+
+deleteReason: {
+  type: String, // optional but recommended
+},
+
+deletedAt: {
+  type: Date,
+},
+isActive: {
+  type: Boolean,
+  default: true,
+},
+
+isDeleted: {
+  type: Boolean,
+  default: false, // ✅ soft delete ke liye
+},
+
      // ⭐ ADDED: documents (same format as image)
     gstCertificate: {
       public_id: String,

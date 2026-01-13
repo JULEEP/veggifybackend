@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const { vendorLogin, getOrdersByVendorId, updateOrderById, deleteOrderById, getVendorProfile, getDashboardData, getAllUsersByRestaurant, captureVendorPayment, getVendorPaymentDetails, getAllVendorPayments, getVendorStatus, updateVendorStatus, verifyOtp, forgotPassword, resetPasswordWithOtp, addAccount, getVendorAccounts, updateAccount, deleteAccount, getRestaurantNotifications, getAllOrdersByRestaurant, updateVendorPaymentStatus, deleteVendorPayment} = require("../controllers/vendorController");
+const { vendorLogin, getOrdersByVendorId, updateOrderById, deleteOrderById, getVendorProfile, getDashboardData, getAllUsersByRestaurant, captureVendorPayment, getVendorPaymentDetails, getAllVendorPayments, getVendorStatus, updateVendorStatus, verifyOtp, forgotPassword, resetPasswordWithOtp, addAccount, getVendorAccounts, updateAccount, deleteAccount, getRestaurantNotifications, getAllOrdersByRestaurant, updateVendorPaymentStatus, deleteVendorPayment, deleteRestaurantAccount, confirmDeleteRestaurantAccount, deleteRestaurantByAdmin} = require("../controllers/vendorController");
 
 router.post("/vendorlogin", vendorLogin);
 router.post("/verify-otp", verifyOtp);
@@ -31,6 +31,13 @@ router.delete('/deletevendorpayment/:id', deleteVendorPayment);
 
 
 
+router.post('/deleteaccount', deleteRestaurantAccount);
+
+// Route: Confirm account deletion (via email link)
+router.get('/confirm-delete-account/:token', confirmDeleteRestaurantAccount);
+
+// Route: Delete user by ID (admin)
+router.delete('/delete-vendor/:userId', deleteRestaurantByAdmin);
 
 
 

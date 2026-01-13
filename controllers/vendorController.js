@@ -13,6 +13,8 @@ const nodemailer = require("nodemailer");
 const dotenv = require("dotenv");
 const VendorAccount = require("../models/VendorAccount");
 const orderModel = require("../models/orderModel");
+const crypto = require('crypto');
+
 
 dotenv.config();
 
@@ -1836,3 +1838,150 @@ exports.getAllOrdersByRestaurant = async (req, res) => {
     });
   }
 };
+
+
+
+
+
+// Setup Nodemailer transport
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: 'pms226803@gmail.com',
+    pass: 'nrasbifqxsxzurrm',
+  },
+  host: 'smtp.gmail.com',
+  port: 587,
+  secure: false,
+  requireTLS: true,
+  tls: {
+    rejectUnauthorized: false
+  },
+  connectionTimeout: 60000,
+  greetingTimeout: 30000,
+  socketTimeout: 60000
+});
+
+// Account deletion request
+// DELETE ACCOUNT REQUEST (VENDOR)
+exports.deleteRestaurantAccount = async (req, res) => {
+  const { email, reason } = req.body;
+
+  // 🔴 Validation
+  if (!email || !reason) {
+    return res.status(400).json({
+      message: "Email and deletion reason are required",
+    });
+  }
+
+  try {
+    // ✅ Find restaurant by email
+    const restaurant = await Restaurant.findOne({ email });
+
+    if (!restaurant) {
+      return res.status(404).json({
+        message: "Vendor not found with this email",
+      });
+    }
+
+    // 🔐 Generate token
+    const token = crypto.randomBytes(20).toString("hex");
+    const deleteLink = `${process.env.VENDOR_BASE_URL}/confirm-delete-account/${token}`;
+
+    // Save token in restaurant
+    restaurant.deleteToken = token;
+    restaurant.deleteTokenExpiration = Date.now() + 60 * 60 * 1000; // 1 hour
+
+    await restaurant.save();
+
+    // 📧 Send Email
+    const mailOptions = {
+      from: "pms226803@gmail.com",
+      to: email,
+      subject: "Confirm Account Deletion",
+      text: `Hi ${restaurant.restaurantName},
+
+We received your account deletion request.
+
+To confirm deletion, click the link below:
+${deleteLink}
+
+Reason:
+${reason}
+
+If you did not request this, please ignore this email.
+
+Regards,
+Vegiffy Team`,
+    };
+
+    await transporter.sendMail(mailOptions);
+
+    return res.status(200).json({
+      message:
+        "Account deletion link sent successfully. Please check your email.",
+    });
+
+  } catch (error) {
+    console.error("Delete restaurant error:", error);
+    return res.status(500).json({
+      message: "Server error",
+    });
+  }
+};
+
+
+// Confirm account deletion
+exports.confirmDeleteRestaurantAccount = async (req, res) => {
+  const { token } = req.params;
+
+  try {
+    const restaurant = await Restaurant.findOne({
+      deleteToken: token,
+      deleteTokenExpiration: { $gt: Date.now() },
+    });
+
+    await Restaurant.findByIdAndDelete(restaurant._id);
+
+    return res.status(200).json({
+      message: "Your restaurant account has been deleted successfully",
+    });
+
+  } catch (error) {
+    console.error("Confirm delete error:", error);
+    return res.status(500).json({
+      message: "Server error",
+    });
+  }
+};
+
+
+// Delete user by ID (admin)
+// ADMIN DELETE VENDOR
+exports.deleteRestaurantByAdmin = async (req, res) => {
+  const { vendorId } = req.params;
+
+  try {
+    const restaurant = await Restaurant.findById(vendorId);
+
+    if (!restaurant) {
+      return res.status(404).json({
+        message: "Vendor not found",
+      });
+    }
+
+    await Restaurant.findByIdAndDelete(vendorId);
+
+    return res.status(200).json({
+      message: "Vendor deleted successfully",
+    });
+
+  } catch (error) {
+    console.error("Admin delete vendor error:", error);
+    return res.status(500).json({
+      message: "Server error",
+    });
+  }
+};
+
+
