@@ -37,7 +37,7 @@ router.post('/deleteaccount', deleteRestaurantAccount);
 router.get('/confirm-delete-account/:token', confirmDeleteRestaurantAccount);
 
 // Route: Delete user by ID (admin)
-router.delete('/delete-vendor/:userId', deleteRestaurantByAdmin);
+router.delete('/delete-vendor/:vendorId', deleteRestaurantByAdmin);
 
 
 

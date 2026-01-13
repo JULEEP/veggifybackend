@@ -57,7 +57,7 @@ mongoose.connect(process.env.MONGO_URI)
 
   // CORS setup for specific origin
 app.use(cors({
-  origin: ['https://veegify-web.web.app', 'http://localhost:3000', 'https://panel.vegiffyy.com', 'https://vendor.vegiffyy.com'],  // Allow both URLs
+  origin: ['https://veegify-web.web.app', 'http://localhost:3000', 'https://panel.vegiffyy.com', 'https://vendor.vegiffyy.com', 'https://vegiffyvendordelete.vercel.app'],  // Allow both URLs
   methods: ['GET', 'POST'],
   credentials: true
 }));
