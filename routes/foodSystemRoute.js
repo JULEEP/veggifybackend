@@ -24,6 +24,8 @@ router.post('/restaurant', controller.createRestaurant);
 
 // GET /api/restaurants - Get all restaurants
 router.get('/restaurant', controller.getAllRestaurants);
+router.get('/allrestaurant', controller.getAllRestaurantsforAdmin);
+router.get('/allpendingresturant', controller.getAllPendingRestaurants);
 
 // GET /api/restaurants/:id - Get single restaurant
 router.get('/restaurant/:id', controller.getRestaurantById);

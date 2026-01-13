@@ -1,11 +1,13 @@
 const express = require('express');
 const router = express.Router();
-const { createAmbassador, getAllAmbassadors, loginAmbassador, updateAmbassador, deleteAmbassador, getAmbassadorById, getAllUsersByAmbassador, getAllOrdersByAmbassador, getTransactionHistoryAndWalletByAmbassador, getTop10Ambassadors, requestAmbassadorWithdrawal, getAmbassadorWithdrawalRequests, getAllWithdrawalRequests, processAmbassadorWithdrawal, getAllVendorsByAmbassador, getReferredAmbassadorsByAmbassador, capturePayment, getMyPlans, getAmbassadorDashboard } = require('../controllers/ambsdorController');  // Adjust path if needed
+const { createAmbassador, getAllAmbassadors, loginAmbassador, updateAmbassador, deleteAmbassador, getAmbassadorById, getAllUsersByAmbassador, getAllOrdersByAmbassador, getTransactionHistoryAndWalletByAmbassador, getTop10Ambassadors, requestAmbassadorWithdrawal, getAmbassadorWithdrawalRequests, getAllWithdrawalRequests, processAmbassadorWithdrawal, getAllVendorsByAmbassador, getReferredAmbassadorsByAmbassador, capturePayment, getMyPlans, getAmbassadorDashboard, createAccount, getAllAccounts, updateAccount, deleteAccount, verifyAmbassadorOtp, forgotPassword, resetPassword, updateAmbassadorPaymentStatus, deleteAmbassadorPayment  } = require('../controllers/ambsdorController');  // Adjust path if needed
+
 
 // POST request to create a new ambassador
 router.post('/create-ambsdor', createAmbassador);
 router.get('/allambsdor', getAllAmbassadors);
 router.post('/login', loginAmbassador);
+router.post('/verify-otp', verifyAmbassadorOtp);
 router.put('/update-ambsdor/:ambassadorId', updateAmbassador);
 router.delete('/delete-ambsdor/:ambassadorId', deleteAmbassador);
 router.get('/profile/:ambassadorId', getAmbassadorById);
@@ -22,6 +24,19 @@ router.put('/withdrawals/:withdrawalId', processAmbassadorWithdrawal);
 router.post('/pay/:ambassadorId', capturePayment);
 router.get('/myplan/:ambassadorId', getMyPlans);
 router.get('/mydashboard/:ambassadorId', getAmbassadorDashboard);
+
+
+router.post('/createaccounts', createAccount);
+router.get('/allaccounts/:ambassadorId', getAllAccounts);
+router.put('/updateaccount/:accountId', updateAccount);
+router.delete('/deleteaccount/:accountId', deleteAccount);
+
+
+router.post('/forgot-password', forgotPassword);
+router.post('/reset-password', resetPassword);
+
+router.put('/ambsaddorpayments/:id', updateAmbassadorPaymentStatus);
+router.delete('/deleteambsaddorpayment/:id', deleteAmbassadorPayment);
 
 
 

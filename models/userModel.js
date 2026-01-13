@@ -49,6 +49,21 @@ addresses: [
   }
 ],
 
+
+ wallet: [
+    {
+      amount: { type: Number, },
+      dateAdded: { type: Date, default: Date.now },
+      type: { type: String, enum: ["order_payment", "refund", "wallet_topup"], },
+      orderId: { type: mongoose.Schema.Types.ObjectId, ref: "Order" },
+      orderTotal: Number,
+      commissionDeducted: Number,
+      commissionPercentage: Number,
+      netAmount: Number,
+      description: String,
+    }
+  ],
+
   location: {
     type: {
       type: String,

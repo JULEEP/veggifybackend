@@ -15,14 +15,46 @@ const nodemailer = require('nodemailer');
 const crypto = require('crypto');
 
 const dotenv = require("dotenv");
+const WebsiteEnquiry = require('../models/WebsiteEnquiry');
+const Maintenance = require('../models/Maintenance');
+const twilio = require("twilio");
 
 dotenv.config();
+
+
+const client = twilio(
+  process.env.TWILIO_ACCOUNT_SID,
+  process.env.TWILIO_AUTH_TOKEN
+);
 
 
 
 let latestToken = null;
 let tempForgotToken = null;
 let verifiedForgotPhone = null;
+
+
+const generateOTP = () => {
+  return Math.floor(1000 + Math.random() * 9000).toString(); // 4 digit OTP
+};
+
+
+const formatPhoneNumber = (phoneNumber) => {
+  // remove spaces, dashes, etc
+  let phone = phoneNumber.replace(/\D/g, "");
+
+  // if already has country code
+  if (phone.length === 12 && phone.startsWith("91")) {
+    return `+${phone}`;
+  }
+
+  // normal Indian number
+  if (phone.length === 10) {
+    return `+91${phone}`;
+  }
+
+  throw new Error("Invalid phone number format");
+};
 
 
 
@@ -34,50 +66,62 @@ const register = async (req, res) => {
       return res.status(400).json({ message: "All fields are required" });
     }
 
-    // Check if user already exists in DB
     const existingUser = await User.findOne({
-      $or: [{ email }, { phoneNumber }]
+      $or: [{ email }, { phoneNumber }],
     });
+
     if (existingUser) {
       return res.status(400).json({ message: "User already exists" });
     }
 
-    // Generate referral code
-    const generatedReferralCode = `VEGGYFYUSER${generateReferralCode()}`;
+    const generatedReferralCode = `VEGUSER${generateReferralCode()}`;
+    const otp = generateOTP();
 
-    // Hardcoded OTP
-    const otp = "1234";
+    // ✅ FORMAT NUMBER INSIDE CONTROLLER
+    const formattedPhone = formatPhoneNumber(phoneNumber);
 
-    // Payload to put in token
+    // ✅ SET MESSAGE BODY IN EXACT REQUIRED FORMAT
+    const messageBody = `Welcome to Vegiffy – Pure Vegetarian Food Delivery App
+Your verification OTP is ${otp}.
+Valid for 5 minutes. Do not share this code.`;
+
+    await client.messages.create({
+      body: messageBody,
+      from: process.env.TWILIO_PHONE,
+      to: formattedPhone,
+    });
+
     const payload = {
       firstName,
       lastName,
       email,
-      phoneNumber,
+      phoneNumber, // original saved
       referralCode: generatedReferralCode,
       referredBy: referralCode || null,
       otp,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
     };
 
-    // Generate temp token (JWT or your custom)
     const tempToken = generateTempToken(payload);
 
-    res.status(200).json({
-      message: "OTP sent ✅",
-      otp, // for testing
+    return res.status(200).json({
+      success: true,
+      message: "OTP sent successfully ✅",
       token: tempToken,
-      referralCode: generatedReferralCode
+      referralCode: generatedReferralCode,
+        otp: otp
     });
 
   } catch (err) {
-    console.error(err);
-    res.status(500).json({
+    console.error("Register Error:", err);
+    return res.status(500).json({
+      success: false,
       message: "Registration failed",
-      error: err.message
+      error: err.message,
     });
   }
 };
+
 
 
 const updateUserSimply = async (req, res) => {
@@ -333,41 +377,70 @@ const setPassword = async (req, res) => {
   }
 };
 
-const sendForgotOtp = async (req, res) => {
+ const sendForgotOtp = async (req, res) => {
   try {
     const { phoneNumber } = req.body;
 
     if (!phoneNumber) {
-      return res.status(400).json({ status: false, message: "Phone number required ❌" });
+      return res.status(400).json({
+        status: false,
+        message: "Phone number required ❌",
+      });
     }
 
     const user = await User.findOne({ phoneNumber });
-    if (!user) return res.status(404).json({ status: false, message: "User not found ❌" });
+    if (!user) {
+      return res.status(404).json({
+        status: false,
+        message: "User not found ❌",
+      });
+    }
 
-    // ✅ Static OTP for testing
-    const otp = '1234'; 
+    // ✅ Generate random 4-digit OTP
+    const otp = generateOTP();
 
-    // ✅ Create a short-lived token for OTP verification
+    // ✅ FORMAT PHONE NUMBER
+    const formattedPhone = `+91${phoneNumber}`; // ya agar formatPhoneNumber function hai use kar sakte ho
+
+    // ✅ SET MESSAGE BODY IN SAME FORMAT AS REGISTRATION
+    const messageBody = `Welcome to Vegiffy – Pure Vegetarian Food Delivery App
+Your verification OTP is ${otp}.
+Valid for 5 minutes. Do not share this code.`;
+
+    // ✅ Send OTP via Twilio
+    await client.messages.create({
+      body: messageBody,
+      from: process.env.TWILIO_PHONE,
+      to: formattedPhone,
+    });
+
+    // ✅ Short-lived JWT token for OTP verification
     const tempToken = jwt.sign(
-      { userId: user._id, phoneNumber: user.phoneNumber, otp },
+      {
+        userId: user._id,
+        phoneNumber: user.phoneNumber,
+        otp,
+      },
       process.env.JWT_SECRET,
-      { expiresIn: '10m' } // token valid for 10 minutes
+      { expiresIn: "10m" }
     );
-
-    // Optional: send OTP via SMS here
 
     return res.status(200).json({
       status: true,
       message: "OTP sent successfully ✅",
-      otp,        // static OTP
-      token: tempToken // user will use this token to verify OTP
+      token: tempToken,
     });
 
   } catch (err) {
-    console.error(err);
-    return res.status(500).json({ status: false, message: "OTP send failed ❌", error: err.message });
+    console.error("Forgot OTP Error:", err);
+    return res.status(500).json({
+      status: false,
+      message: "OTP send failed ❌",
+      error: err.message,
+    });
   }
 };
+
 
 const verifyForgotOtp = async (req, res) => {
   try {
@@ -841,12 +914,36 @@ const createBanner = async (req, res) => {
 // ✅ READ ALL
 const getAllBanners = async (req, res) => {
   try {
-    const banners = await Banner.find().sort({ createdAt: -1 });
-    return res.status(200).json({ message: 'Banners fetched ✅', data: banners });
+    const banners = await Banner.find({ status: "active" })
+      .sort({ createdAt: -1 });
+
+    return res
+      .status(200)
+      .json({ message: "Active banners fetched ✅", data: banners });
   } catch (err) {
-    return res.status(500).json({ message: 'Fetch failed ❌', error: err.message });
+    return res
+      .status(500)
+      .json({ message: "Fetch failed ❌", error: err.message });
   }
 };
+
+
+const getPendingBanners = async (req, res) => {
+  try {
+    const banners = await Banner.find({ status: "pending" })
+      .sort({ createdAt: -1 });
+
+    return res
+      .status(200)
+      .json({ message: "Pending banners fetched ✅", data: banners });
+  } catch (err) {
+    return res
+      .status(500)
+      .json({ message: "Fetch failed ❌", error: err.message });
+  }
+};
+
+
 
 // ✅ READ BY ID
 const getBannerById = async (req, res) => {
@@ -1223,6 +1320,256 @@ const deleteUser = async (req, res) => {
 };
 
 
+
+
+// Submit Website Enquiry (Already Provided)
+const submitWebsiteEnquiry = async (req, res) => {
+  try {
+    const { name, phoneNumber, email, partnerType } = req.body;
+
+    // Check if all fields are provided
+    if (!name || !phoneNumber || !email || !partnerType) {
+      return res.status(400).json({
+        success: false,
+        message: "All fields (name, phone number, email, partner type) are required",
+      });
+    }
+
+    // Create a new enquiry record
+    const newEnquiry = new WebsiteEnquiry({
+      name,
+      phoneNumber,
+      email,
+      partnerType,
+    });
+
+    // Save the enquiry to the database
+    await newEnquiry.save();
+
+    res.status(201).json({
+      success: true,
+      message: "Enquiry submitted successfully! We will get in touch with you soon.",
+      data: newEnquiry,
+    });
+  } catch (error) {
+    console.error("Error submitting website enquiry:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error while submitting the enquiry",
+      error: error.message,
+    });
+  }
+};
+
+// Get All Website Enquiries
+const getAllWebsiteEnquiries = async (req, res) => {
+  try {
+    // Fetch all website enquiries from the database
+    const enquiries = await WebsiteEnquiry.find().sort({ createdAt: -1 }); // Sorting by creation date (most recent first)
+
+    if (enquiries.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "No enquiries found",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Enquiries fetched successfully",
+      data: enquiries,
+    });
+  } catch (error) {
+    console.error("Error fetching website enquiries:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error while fetching enquiries",
+      error: error.message,
+    });
+  }
+};
+
+
+
+
+// Update enquiry status
+const updateEnquiry = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid enquiry ID",
+      });
+    }
+
+    const enquiry = await WebsiteEnquiry.findByIdAndUpdate(
+      id,
+      { status },
+      { new: true }
+    );
+
+    if (!enquiry) {
+      return res.status(404).json({
+        success: false,
+        message: "Enquiry not found",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Enquiry updated successfully",
+      data: enquiry,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
+  }
+};
+// Delete enquiry
+const deleteEnquiry = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    console.log("Delete request for ID:", id);
+
+    // First check if enquiry exists
+    const existingEnquiry = await WebsiteEnquiry.findById(id);
+    if (!existingEnquiry) {
+      console.log("Enquiry not found for ID:", id);
+      return res.status(404).json({
+        success: false,
+        message: "Enquiry not found"
+      });
+    }
+
+    const enquiry = await WebsiteEnquiry.findByIdAndDelete(id);
+
+    console.log("Deleted enquiry:", enquiry);
+
+    res.status(200).json({
+      success: true,
+      message: "Enquiry deleted successfully"
+    });
+  } catch (error) {
+    console.error("Error deleting enquiry:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error while deleting enquiry",
+      error: error.message,
+    });
+  }
+};
+
+
+// Set maintenance mode
+const setMaintenance = async (req, res) => {
+  try {
+    const { status, message } = req.body;
+
+    let maintenance = await Maintenance.findOne();
+    if (!maintenance) {
+      maintenance = new Maintenance({ status, message });
+    } else {
+      maintenance.status = status;
+      maintenance.message = message;
+    }
+
+    await maintenance.save();
+
+    res.status(200).json({
+      message: "Maintenance status updated",
+      isSuccessfull: true,
+      maintenance,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      message: "Server error",
+      isSuccessfull: false,
+      error: error.message,
+    });
+  }
+};
+
+
+const getMaintenanceStatus = async (req, res) => {
+  try {
+    let maintenance = await Maintenance.findOne();
+
+    // Default values if no document exists
+    const response = {
+      maintenance: maintenance ? maintenance.status : false,
+      message: maintenance ? maintenance.message : "OK",
+    };
+
+    res.status(200).json({
+      ...response,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      message: "Server error",
+      isSuccessfull: false,
+      maintenance: false,
+      message: "Error fetching maintenance status",
+      error: error.message,
+    });
+  }
+};
+
+
+
+const getUserWallet = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    // Validate ID
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({
+        message: "Invalid userId",
+        isSuccessfull: false
+      });
+    }
+
+    // Fetch User Wallet
+    const user = await User.findById(userId).select("wallet firstName lastName");
+
+    if (!user) {
+      return res.status(404).json({
+        message: "User not found",
+        isSuccessfull: false
+      });
+    }
+
+    // Calculate Total Balance
+    const totalBalance =
+      user.wallet?.reduce((sum, txn) => sum + (txn.netAmount || txn.amount || 0), 0) || 0;
+
+    return res.status(200).json({
+      message: "Wallet fetched successfully",
+      isSuccessfull: true,
+      userName: `${user.firstName} ${user.lastName}`,
+      totalBalance,
+      transactions: user.wallet || []
+    });
+
+  } catch (error) {
+    console.error("Get Wallet Error:", error);
+
+    return res.status(500).json({
+      message: "Server error",
+      error: error.message,
+      isSuccessfull: false
+    });
+  }
+};
+
 module.exports = {
   register,
   verifyOtp,
@@ -1256,5 +1603,13 @@ module.exports = {
   updateUserSimply,
    deleteAccount,
   confirmDeleteAccount,
-  deleteUser
+  deleteUser,
+  submitWebsiteEnquiry,
+  getAllWebsiteEnquiries,
+  updateEnquiry,
+  deleteEnquiry,
+  setMaintenance,
+  getMaintenanceStatus,
+  getUserWallet,
+  getPendingBanners
 };

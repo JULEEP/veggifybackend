@@ -10,6 +10,10 @@ const AmbassadorPlanSchema = new mongoose.Schema({
   validity: {
     type: Number, // validity in days
   },
+   discount: {
+    type: Number,
+    default: 0
+  },
   benefits: {
     type: [String], // array of benefit descriptions
     default: [],

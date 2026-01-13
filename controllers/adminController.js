@@ -22,6 +22,43 @@ const Commission = require('../models/Commission');
 const Charge = require('../models/Charge');
 
 
+const nodemailer = require("nodemailer");
+
+
+const dotenv = require("dotenv");
+const ReferralReward = require('../models/ReferralReward');
+const Credential = require('../models/Credential');
+
+dotenv.config();
+
+
+
+
+ const sendEmail = async (to, subject, html) => {
+  try {
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS
+      }
+    });
+
+    await transporter.sendMail({
+      from: `VEGIFFY! <${process.env.EMAIL_USER}>`,
+      to,
+      subject,
+      html
+    });
+
+    return true;
+  } catch (error) {
+    console.log("Email Send Error:", error);
+    return false;
+  }
+};
+
+
 
 // 1. Send OTP (hardcoded for now as 1234)
 exports.sendOtp = async (req, res) => {
@@ -49,28 +86,28 @@ exports.sendOtp = async (req, res) => {
 };
 
 // 2. Verify OTP
-exports.verifyOtp = async (req, res) => {
-    try {
-        const { otp, token } = req.body;
-        if (!otp || !token)
-            return res.status(400).json({ message: 'OTP and token are required' });
+// exports.verifyOtp = async (req, res) => {
+//     try {
+//         const { otp, token } = req.body;
+//         if (!otp || !token)
+//             return res.status(400).json({ message: 'OTP and token are required' });
 
-        const decoded = verifyTempToken(token);
-        if (!decoded) return res.status(400).json({ message: 'OTP expired or invalid token' });
-        if (otp !== decoded.otp) return res.status(400).json({ message: 'Invalid OTP' });
+//         const decoded = verifyTempToken(token);
+//         if (!decoded) return res.status(400).json({ message: 'OTP expired or invalid token' });
+//         if (otp !== decoded.otp) return res.status(400).json({ message: 'Invalid OTP' });
 
-        const admin = await Admin.findOne({ phoneNumber: decoded.phoneNumber });
-        if (!admin) return res.status(404).json({ message: 'Admin not found' });
+//         const admin = await Admin.findOne({ phoneNumber: decoded.phoneNumber });
+//         if (!admin) return res.status(404).json({ message: 'Admin not found' });
 
-        admin.isOtpVerified = true;
-        await admin.save();
+//         admin.isOtpVerified = true;
+//         await admin.save();
 
-        return res.status(200).json({ message: 'OTP verified successfully' });
-    } catch (err) {
-        console.error('Verify OTP Error:', err);
-        return res.status(500).json({ message: 'Server error', error: err.message });
-    }
-};
+//         return res.status(200).json({ message: 'OTP verified successfully' });
+//     } catch (err) {
+//         console.error('Verify OTP Error:', err);
+//         return res.status(500).json({ message: 'Server error', error: err.message });
+//     }
+// };
 
 // 3. Set Password (first time or reset password)
 exports.setPassword = async (req, res) => {
@@ -149,42 +186,115 @@ exports.register = async (req, res) => {
     }
 };
 
-// 4. Login with email and password
 exports.login = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ success: false, message: "Email and password are required" });
+    }
+
+    const admin = await Admin.findOne({ email: email.toLowerCase() });
+    if (!admin) {
+      return res.status(404).json({ success: false, message: "Admin not registered" });
+    }
+
+    if (admin.password !== password) {
+      return res.status(401).json({ success: false, message: "Invalid password" });
+    }
+
+    // Generate 4-digit OTP
+    const otp = Math.floor(1000 + Math.random() * 9000).toString();
+    const otpExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes expiry
+
+    admin.otp = otp;
+    admin.otpExpiry = otpExpiry;
+    await admin.save();
+
+    const subject = "🔒 Your Login OTP — MyApp";
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; color: #333;">
+        <h2 style="color: #1e88e5;">Your One-Time Password (OTP)</h2>
+        <p>Hello,</p>
+        <p>You requested to login. Use the OTP given below to complete your login:</p>
+        <p style="font-size: 28px; font-weight: bold; margin: 20px 0; letter-spacing: 4px;">${otp}</p>
+        <p>This OTP is valid for <strong>10 minutes</strong>.</p>
+        <hr style="margin: 30px 0;" />
+        <p>If you did not request this, please ignore this email or contact our support.</p>
+        <p style="margin-top: 20px;">Need help? Contact us at <a href="mailto:support@myapp.com">support@myapp.com</a></p>
+      </div>
+    `;
+
+    const emailSent = await sendEmail(admin.email, subject, html);
+    if (!emailSent) {
+      return res.status(500).json({ success: false, message: "Failed to send OTP email" });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "OTP sent to your email",
+      adminId: admin._id,     // ✅ Admin ID included
+      email: admin.email,
+      otpSent: true,
+      otp // (Remove in production)
+    });
+
+  } catch (err) {
+    console.error("Login Error:", err);
+    res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+// 5. Verify OTP
+exports.verifyOtp = async (req, res) => {
     try {
-        const { email, password } = req.body;
+        const { adminId, otp } = req.body;
 
-        // Validate the required fields
-        if (!email || !password) {
-            return res.status(400).json({ message: 'Email and password are required' });
+        if (!adminId || !otp) {
+            return res.status(400).json({ message: 'Admin ID and OTP are required' });
         }
 
-        // Find the admin by email
-        const admin = await Admin.findOne({ email });
+        const admin = await Admin.findById(adminId);
         if (!admin) {
-            return res.status(404).json({ message: 'Admin not registered' });
+            return res.status(404).json({ message: 'Admin not found' });
         }
 
-        // Generate an authentication token for the logged-in admin
+        // Check if OTP exists and is not expired
+        if (!admin.otp || !admin.otpExpiry) {
+            return res.status(400).json({ message: 'OTP not requested or expired' });
+        }
+
+        if (admin.otpExpiry < new Date()) {
+            return res.status(400).json({ message: 'OTP expired' });
+        }
+
+        if (admin.otp !== otp) {
+            return res.status(401).json({ message: 'Invalid OTP' });
+        }
+
+        // Clear OTP after successful verification
+        admin.otp = undefined;
+        admin.otpExpiry = undefined;
+        await admin.save();
+
+        // Generate final authentication token
         const token = generateAuthToken({
             id: admin._id,
             email: admin.email,
         });
 
-        // Send the response with the token and other details
         return res.status(200).json({
-            message: 'Login successful',
+            message: 'OTP verified successfully',
             token,
             adminId: admin._id,
             name: admin.name,
             email: admin.email
         });
     } catch (err) {
-        console.error('Login Error:', err);
+        console.error('OTP Verification Error:', err);
         return res.status(500).json({ message: 'Server error', error: err.message });
     }
 };
-
 
 
 // 1. Get Profile (by adminId)
@@ -729,38 +839,80 @@ function formatTimeAgo(date) {
 
 exports.registerStaff = async (req, res) => {
   try {
-    const { fullName, email, mobileNumber, role, gender, age, pagesAccess } = req.body;
+    const { 
+      fullName, 
+      email, 
+      mobileNumber, 
+      role, 
+      gender, 
+      age, 
+      department,
+      employeeId,
+      joiningDate,
+      address,
+      salary,
+      emergencyContact,
+      pagesAccess 
+    } = req.body;
 
     // ✅ express-fileupload → files are directly inside req.files
-    const aadharCard = req.files?.aadharCard;
+    const aadharCardFront = req.files?.aadharCardFront;
+    const aadharCardBack = req.files?.aadharCardBack;
     const photo = req.files?.photo;
 
-    if (!aadharCard || !photo) {
+    // Validate required documents
+    if (!aadharCardFront || !photo) {
       return res.status(400).json({
         success: false,
-        message: "Aadhar card and photo are required",
+        message: "Aadhar Card Front and Photo are required",
       });
     }
 
-    // ✅ Check if staff already exists
+    // ✅ Check if staff already exists by email or phone
     const existingStaff = await Staff.findOne({
-      $or: [{ email }, { phone: mobileNumber }],
+      $or: [
+        { email: email.toLowerCase() }, 
+        { phone: mobileNumber }
+      ],
     });
 
-    // ✅ Upload directly from temp file path
-    const aadharUpload = await cloudinary.uploader.upload(aadharCard.tempFilePath, {
-      folder: "staff/aadhar",
+    if (existingStaff) {
+      return res.status(400).json({
+        success: false,
+        message: existingStaff.email === email.toLowerCase() 
+          ? "Email already registered" 
+          : "Phone number already registered",
+      });
+    }
+
+    // ✅ Upload Aadhar Card Front to Cloudinary
+    const aadharFrontUpload = await cloudinary.uploader.upload(aadharCardFront.tempFilePath, {
+      folder: "staff/aadhar/front",
+      resource_type: "auto"
     });
+
+    // ✅ Upload Photo to Cloudinary
     const photoUpload = await cloudinary.uploader.upload(photo.tempFilePath, {
       folder: "staff/photo",
+      resource_type: "image"
     });
+
+    // ✅ Upload Aadhar Card Back to Cloudinary (if provided)
+    let aadharBackUpload = null;
+    if (aadharCardBack) {
+      aadharBackUpload = await cloudinary.uploader.upload(aadharCardBack.tempFilePath, {
+        folder: "staff/aadhar/back",
+        resource_type: "auto"
+      });
+    }
 
     // ✅ Parse pagesAccess if it's JSON string
     let parsedPagesAccess = [];
     if (pagesAccess) {
       try {
-        parsedPagesAccess =
-          typeof pagesAccess === "string" ? JSON.parse(pagesAccess) : pagesAccess;
+        parsedPagesAccess = typeof pagesAccess === "string" 
+          ? JSON.parse(pagesAccess) 
+          : pagesAccess;
       } catch (parseError) {
         console.error("Error parsing pagesAccess:", parseError);
         parsedPagesAccess = [];
@@ -770,15 +922,23 @@ exports.registerStaff = async (req, res) => {
     // ✅ Create staff data
     const staffData = {
       fullName,
-      email,
+      email: email.toLowerCase(),
       phone: mobileNumber,
       role,
       gender,
-      age,
-      aadharCard: aadharUpload.secure_url,
+      age: age || null,
+      department: department || null,
+      employeeId: employeeId || null,
+      joiningDate: joiningDate ? new Date(joiningDate) : null,
+      address: address || null,
+      salary: salary || null,
+      emergencyContact: emergencyContact || null,
+      aadharCardFront: aadharFrontUpload.secure_url,
+      aadharCardBack: aadharBackUpload ? aadharBackUpload.secure_url : null,
       photo: photoUpload.secure_url,
       pagesAccess: parsedPagesAccess,
       status: "pending",
+      isActive: true
     };
 
     const newStaff = new Staff(staffData);
@@ -787,14 +947,40 @@ exports.registerStaff = async (req, res) => {
     res.status(201).json({
       success: true,
       message: "Staff registered successfully!",
-      staff: newStaff,
+      staff: {
+        id: newStaff._id,
+        fullName: newStaff.fullName,
+        email: newStaff.email,
+        phone: newStaff.phone,
+        role: newStaff.role,
+        status: newStaff.status
+      },
     });
   } catch (error) {
     console.error("Staff Registration Error:", error);
-    res.status(500).json({ success: false, message: "Server Error", error: error.message });
+    
+    // Handle duplicate key errors
+    if (error.code === 11000) {
+      const field = Object.keys(error.keyPattern)[0];
+      const message = field === 'email' 
+        ? 'Email already exists' 
+        : field === 'phone' 
+          ? 'Phone number already exists'
+          : 'Employee ID already exists';
+      
+      return res.status(400).json({ 
+        success: false, 
+        message 
+      });
+    }
+    
+    res.status(500).json({ 
+      success: false, 
+      message: "Server Error", 
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined 
+    });
   }
 };
-
 
 exports.addSalaryToStaff = async (req, res) => {
   try {
@@ -1057,6 +1243,46 @@ exports.staffLogin = async (req, res) => {
 
 
 
+// Staff Profile Route
+exports.getStaffProfile = async (req, res) => {
+  try {
+    const { staffId } = req.params;
+
+    // Find the staff by the provided staffId
+    const staff = await Staff.findById(staffId);
+    if (!staff) {
+      return res.status(404).json({ message: "Staff not found" });
+    }
+
+    // Return staff profile information
+    res.status(200).json({
+      message: "Staff profile fetched successfully",
+      staff: {
+        _id: staff._id,
+        fullName: staff.fullName,
+        email: staff.email,
+        phone: staff.phone,
+        role: staff.role,
+        gender: staff.gender,  // Added gender
+        age: staff.age,        // Added age
+        aadharCard: staff.aadharCard,  // Added Aadhar Card link
+        photo: staff.photo,    // Added photo link
+        pagesAccess: staff.pagesAccess || [], // Include pagesAccess if exists
+        status: staff.status,
+        mySalary: staff.mySalary || [], // Added salary information
+        createdAt: staff.createdAt,
+        updatedAt: staff.updatedAt
+      }
+    });
+  } catch (error) {
+    console.error("Staff profile fetch error:", error);
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+
+
+
+
 exports.createAmount = async (req, res) => {
   try {
     const { type, amount } = req.body;
@@ -1255,16 +1481,16 @@ exports.deleteAmount = async (req, res) => {
 
 
 
-// Create a new plan
 exports.createPlan = async (req, res) => {
   try {
-    const { name, price, validity, benefits } = req.body;
+    const { name, price, discount = 0, validity, benefits } = req.body;
 
     const newPlan = new AmbassadorPlan({
       name,
       price,
+      discount,
       validity,
-      benefits,
+      benefits
     });
 
     await newPlan.save();
@@ -1272,17 +1498,18 @@ exports.createPlan = async (req, res) => {
     res.status(201).json({
       success: true,
       message: "Ambassador Plan created successfully",
-      data: newPlan,
+      data: newPlan
     });
   } catch (err) {
-    console.error("❌ Error creating plan:", err);
+    console.error("Error creating plan:", err);
     res.status(500).json({
       success: false,
       message: "Server error",
-      error: err.message,
+      error: err.message
     });
   }
 };
+
 
 // Get all plans
 exports.getAllPlans = async (req, res) => {
@@ -1397,11 +1624,11 @@ exports.getDashboardStats = async (req, res) => {
 
     // Total Revenue: Summing order totalPayable amounts (assuming each order has this field)
     const totalRevenue = await orderModel.aggregate([
-      { $match: { orderStatus: 'Delivered' } },  // Filter for completed orders
+      { $match: { orderStatus: 'Delivered' } },  // Filter for delivered orders
       { $group: { _id: null, totalRevenue: { $sum: '$totalPayable' } } }, // Sum totalPayable for revenue
     ]);
 
-    // Get Counts and Revenue for each Order Status (Completed, Pending, Cancelled)
+    // Get Counts and Revenue for each Order Status (Delivered, Pending, Cancelled)
     const orderStatusCountsAndRevenue = await orderModel.aggregate([
       {
         $group: {
@@ -1412,18 +1639,20 @@ exports.getDashboardStats = async (req, res) => {
       }
     ]);
 
+    console.log("Order Status Aggregation Result:", orderStatusCountsAndRevenue); // Debug log
+
     // Initialize order stats with default values
     const orderStats = {
-      completed: { count: 0, sales: 0 },
+      delivered: { count: 0, sales: 0 },  // Changed from 'completed' to 'delivered'
       pending: { count: 0, sales: 0 },
       cancelled: { count: 0, sales: 0 }
     };
 
     // Loop through the aggregation result and assign counts and sales
     orderStatusCountsAndRevenue.forEach(status => {
-      if (status._id === 'Completed') {
-        orderStats.completed.count = status.count;
-        orderStats.completed.sales = status.totalSales;
+      if (status._id === 'Delivered') {  // Changed from 'Completed' to 'Delivered'
+        orderStats.delivered.count = status.count;
+        orderStats.delivered.sales = status.totalSales;
       }
       if (status._id === 'Pending') {
         orderStats.pending.count = status.count;
@@ -1437,8 +1666,8 @@ exports.getDashboardStats = async (req, res) => {
 
     // Sales Overview (simplified)
     const salesOverview = {
-      completedOrders: orderStats.completed.count,
-      completedSales: orderStats.completed.sales,
+      deliveredOrders: orderStats.delivered.count,  // Changed from 'completedOrders'
+      deliveredSales: orderStats.delivered.sales,   // Changed from 'completedSales'
       pendingOrders: orderStats.pending.count,
       pendingSales: orderStats.pending.sales,
       cancelledOrders: orderStats.cancelled.count,
@@ -1449,53 +1678,58 @@ exports.getDashboardStats = async (req, res) => {
     // Total Banners
     const totalBanners = await Banner.countDocuments();
 
-    // Fetch Latest Orders (let's assume we want the latest 5 orders)
+    // Fetch Latest Orders (latest 5 orders)
     const latestOrders = await orderModel.aggregate([
       { $sort: { createdAt: -1 } }, // Sort by creation date (newest first)
       { $limit: 5 }, // Limit to the latest 5 orders
+      
+      // Lookup customer details
       {
         $lookup: {
-          from: 'users', // Assuming users are stored in the 'users' collection
+          from: 'users',
           localField: 'userId',
           foreignField: '_id',
           as: 'customer'
         }
       },
       {
-        $unwind: { path: "$customer", preserveNullAndEmptyArrays: true } // Unwind the customer array
-      },
-      {
-        $lookup: {
-          from: 'restaurantproducts', // Assuming restaurant products are in 'restaurantproducts'
-          localField: 'products.restaurantProductId',
-          foreignField: '_id',
-          as: 'productDetails'
+        $unwind: {
+          path: "$customer",
+          preserveNullAndEmptyArrays: true
         }
       },
+      
+      // Process products array to get first product's details
       {
-        $unwind: { path: "$productDetails", preserveNullAndEmptyArrays: true } // Unwind product details
-      },
-      {
-        $project: {
-          orderId: 1,
-          customerName: { $concat: ["$customer.firstName", " ", "$customer.lastName"] },
-          productName: { $arrayElemAt: ["$productDetails.name", 0] },
-          category: { $arrayElemAt: ["$productDetails.category", 0] },
-          price: { $arrayElemAt: ["$productDetails.basePrice", 0] },
-          status: 1,
-          createdAt: 1
+        $addFields: {
+          firstProduct: {
+            $arrayElemAt: ["$products", 0] // Get first product from array
+          }
         }
       },
+      
+      // Project the required fields
       {
         $project: {
-          orderId: 1,
-          customerName: 1,
-          productName: 1,
-          category: 1,
-          price: 1,
-          status: 1,
+          orderId: "$_id",
+          customerName: {
+            $concat: [
+              { $ifNull: ["$customer.firstName", ""] },
+              " ",
+              { $ifNull: ["$customer.lastName", ""] }
+            ]
+          },
+          productName: "$firstProduct.name", // Get product name from products array
+          price: "$firstProduct.price", // Get price from products array
+          quantity: "$firstProduct.quantity", // Get quantity if needed
+          orderStatus: 1,
+          totalPayable: 1,
+          createdAt: 1,
           timeAgo: {
-            $dateToString: { format: "%H:%M:%S", date: "$createdAt" }
+            $dateToString: {
+              format: "%H:%M:%S",
+              date: "$createdAt"
+            }
           }
         }
       }
@@ -1507,14 +1741,14 @@ exports.getDashboardStats = async (req, res) => {
       createdAt: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) }
     });
 
-    // 2. Revenue Today
+    // 2. Revenue Today (Delivered orders only)
     const revenueToday = await orderModel.aggregate([
       { $match: { orderStatus: 'Delivered', createdAt: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) } } },
       { $group: { _id: null, totalRevenue: { $sum: '$totalPayable' } } }
     ]);
 
-    // 3. Success Rate (Completed Orders / Total Orders)
-    const successRate = totalOrders > 0 ? (orderStats.completed.count / totalOrders) * 100 : 0;
+    // 3. Success Rate (Delivered Orders / Total Orders)
+    const successRate = totalOrders > 0 ? (orderStats.delivered.count / totalOrders) * 100 : 0;  // Changed from 'completed' to 'delivered'
 
     // 4. Pending Actions (Pending Orders + Cancelled Orders)
     const pendingActions = orderStats.pending.count + orderStats.cancelled.count;
@@ -1530,12 +1764,12 @@ exports.getDashboardStats = async (req, res) => {
         activeUsers,
         totalRevenue: totalRevenue[0]?.totalRevenue || 0, // Default to 0 if no revenue found
         totalBanners,
-        orderStats,  // Separate order stats (completed, pending, cancelled)
+        orderStats,  // Separate order stats (delivered, pending, cancelled)
         salesOverview, // Separate sales overview (order count and sales)
         latestOrders, // Latest 5 orders with details
         ordersToday, // Orders Today
         revenueToday: revenueToday[0]?.totalRevenue || 0, // Revenue Today
-        successRate, // Success Rate (Percentage)
+        successRate: parseFloat(successRate.toFixed(2)), // Success Rate (Percentage) formatted to 2 decimal places
         pendingActions // Pending Actions (Pending + Cancelled)
       },
     });
@@ -1548,7 +1782,6 @@ exports.getDashboardStats = async (req, res) => {
     });
   }
 };
-
 
 
 exports.getReferredStats = async (req, res) => {
@@ -1730,27 +1963,95 @@ exports.getCharge = async (req, res) => {
 // Create new charge
 exports.createCharge = async (req, res) => {
   try {
-    const { type, amount } = req.body;
+    const { 
+      type, 
+      amount, 
+      chargeType,
+      distance,
+      deliveryMethod,
+      minDistance,
+      maxDistance,
+      perKmRate,
+      freeDeliveryThreshold  // ✅ Added new field
+    } = req.body;
     
-    // Check if charge type already exists
-    const existingCharge = await Charge.findOne({ type });
-    if (existingCharge) {
+    // Validate required fields
+    if (!type) {
       return res.status(400).json({
         success: false,
-        message: 'Charge type already exists'
+        message: 'Type is required field'
       });
     }
     
-    // Auto-detect charge type based on the type field
-    let chargeType = 'fixed';
-    if (type === 'gst_charges' || type === 'gst_on_delivery' || type === 'platform_charge') {
-      chargeType = 'percentage';
+    // For free delivery threshold, amount is optional
+    if (type !== 'free_delivery_threshold' && amount === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: 'Amount is required for this charge type'
+      });
     }
+    
+    // Additional validation for delivery charges
+    if (type === 'delivery_charge') {
+      if (!deliveryMethod) {
+        return res.status(400).json({
+          success: false,
+          message: 'Delivery method is required for delivery charges'
+        });
+      }
+      
+      switch(deliveryMethod) {
+        case 'flat_rate':
+        
+          break;
+        case 'per_km':
+          break;
+        case 'slab_based':
+          if (!minDistance || !maxDistance || !perKmRate) {
+            return res.status(400).json({
+              success: false,
+              message: 'Min distance, max distance and per km rate are required for slab based delivery'
+            });
+          }
+          if (minDistance >= maxDistance) {
+            return res.status(400).json({
+              success: false,
+              message: 'Min distance must be less than max distance'
+            });
+          }
+          break;
+        default:
+          return res.status(400).json({
+            success: false,
+            message: 'Invalid delivery method'
+          });
+      }
+    }
+    
+    // Validation for free delivery threshold
+    if (type === 'free_delivery_threshold') {
+      if (!freeDeliveryThreshold || freeDeliveryThreshold <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Free delivery threshold amount is required'
+        });
+      }
+    }
+    
+    // Use the chargeType sent from frontend, or default to 'fixed'
+    const finalChargeType = chargeType || 'fixed';
+    const finalAmount = type === 'free_delivery_threshold' ? 0 : amount;
     
     const newCharge = await Charge.create({
       type,
-      amount,
-      chargeType
+      amount: finalAmount,
+      chargeType: finalChargeType,
+      distance: type === 'delivery_charge' ? distance : null,
+      deliveryMethod: type === 'delivery_charge' ? deliveryMethod : null,
+      minDistance: type === 'delivery_charge' ? minDistance : null,
+      maxDistance: type === 'delivery_charge' ? maxDistance : null,
+      perKmRate: type === 'delivery_charge' ? perKmRate : null,
+      freeDeliveryThreshold: type === 'free_delivery_threshold' ? freeDeliveryThreshold : null
     });
     
     res.status(201).json({
@@ -1759,6 +2060,17 @@ exports.createCharge = async (req, res) => {
       message: 'Charge created successfully'
     });
   } catch (error) {
+    // Handle validation errors from mongoose
+    if (error.name === 'ValidationError') {
+      const messages = Object.values(error.errors).map(val => val.message);
+      return res.status(400).json({
+        success: false,
+        message: messages.join(', ')
+      });
+    }
+    
+    // Handle duplicate key errors
+    
     res.status(500).json({
       success: false,
       message: error.message
@@ -1769,25 +2081,123 @@ exports.createCharge = async (req, res) => {
 // Update charge
 exports.updateCharge = async (req, res) => {
   try {
-    const { amount, chargeType } = req.body;
-    const chargeId = req.params.id;
+    const { id } = req.params;
+    const { 
+      amount, 
+      chargeType,
+      distance,
+      deliveryMethod,
+      minDistance,
+      maxDistance,
+      perKmRate,
+      freeDeliveryThreshold  // ✅ Added new field
+    } = req.body;
     
-    const updatedCharge = await Charge.findByIdAndUpdate(
-      chargeId,
-      { 
-        amount,
-        chargeType,
-        updatedAt: Date.now()
-      },
-      { new: true, runValidators: true }
-    );
-    
-    if (!updatedCharge) {
+    // Find existing charge
+    const existingCharge = await Charge.findById(id);
+    if (!existingCharge) {
       return res.status(404).json({
         success: false,
         message: 'Charge not found'
       });
     }
+    
+    // For free delivery threshold, amount is optional
+    if (existingCharge.type !== 'free_delivery_threshold' && amount === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: 'Amount is required for this charge type'
+      });
+    }
+    
+    // If updating delivery charge, validate delivery-specific fields
+    if (existingCharge.type === 'delivery_charge') {
+      // If updating delivery method, validate the required fields
+      const methodToUse = deliveryMethod || existingCharge.deliveryMethod;
+      
+      switch(methodToUse) {
+        case 'flat_rate':
+          const newDistance = distance !== undefined ? distance : existingCharge.distance;
+          break;
+        case 'per_km':
+          const newPerKmRate = perKmRate !== undefined ? perKmRate : existingCharge.perKmRate;
+          if (!newPerKmRate || newPerKmRate <= 0) {
+            return res.status(400).json({
+              success: false,
+              message: 'Per km rate is required for per kilometer delivery'
+            });
+          }
+          break;
+        case 'slab_based':
+          const newMinDistance = minDistance !== undefined ? minDistance : existingCharge.minDistance;
+          const newMaxDistance = maxDistance !== undefined ? maxDistance : existingCharge.maxDistance;
+          const newSlabPerKmRate = perKmRate !== undefined ? perKmRate : existingCharge.perKmRate;
+          
+          if (!newMinDistance || !newMaxDistance || !newSlabPerKmRate) {
+            return res.status(400).json({
+              success: false,
+              message: 'Min distance, max distance and per km rate are required for slab based delivery'
+            });
+          }
+          if (newMinDistance >= newMaxDistance) {
+            return res.status(400).json({
+              success: false,
+              message: 'Min distance must be less than max distance'
+            });
+          }
+          break;
+      }
+    }
+    
+    // Validation for free delivery threshold
+    if (existingCharge.type === 'free_delivery_threshold') {
+      const newThreshold = freeDeliveryThreshold !== undefined ? freeDeliveryThreshold : existingCharge.freeDeliveryThreshold;
+      if (!newThreshold || newThreshold <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Free delivery threshold amount is required'
+        });
+      }
+    }
+    
+    // Prepare update data
+    const updateData = {};
+    if (amount !== undefined) updateData.amount = amount;
+    if (chargeType) updateData.chargeType = chargeType;
+    
+    // Add type-specific fields
+    if (existingCharge.type === 'delivery_charge') {
+      if (distance !== undefined) updateData.distance = distance;
+      if (deliveryMethod) updateData.deliveryMethod = deliveryMethod;
+      if (minDistance !== undefined) updateData.minDistance = minDistance;
+      if (maxDistance !== undefined) updateData.maxDistance = maxDistance;
+      if (perKmRate !== undefined) updateData.perKmRate = perKmRate;
+      updateData.freeDeliveryThreshold = null; // Clear free delivery threshold
+    } 
+    else if (existingCharge.type === 'free_delivery_threshold') {
+      if (freeDeliveryThreshold !== undefined) updateData.freeDeliveryThreshold = freeDeliveryThreshold;
+      // Clear delivery-related fields
+      updateData.distance = null;
+      updateData.deliveryMethod = null;
+      updateData.minDistance = null;
+      updateData.maxDistance = null;
+      updateData.perKmRate = null;
+    }
+    else {
+      // Clear delivery-related fields for other non-delivery charges
+      updateData.distance = null;
+      updateData.deliveryMethod = null;
+      updateData.minDistance = null;
+      updateData.maxDistance = null;
+      updateData.perKmRate = null;
+      updateData.freeDeliveryThreshold = null;
+    }
+    
+    const updatedCharge = await Charge.findByIdAndUpdate(
+      id,
+      updateData,
+      { new: true, runValidators: true }
+    );
     
     res.status(200).json({
       success: true,
@@ -1795,6 +2205,15 @@ exports.updateCharge = async (req, res) => {
       message: 'Charge updated successfully'
     });
   } catch (error) {
+    // Handle validation errors from mongoose
+    if (error.name === 'ValidationError') {
+      const messages = Object.values(error.errors).map(val => val.message);
+      return res.status(400).json({
+        success: false,
+        message: messages.join(', ')
+      });
+    }
+    
     res.status(500).json({
       success: false,
       message: error.message
@@ -1876,5 +2295,481 @@ exports.deleteCommission = async (req, res) => {
     res.status(200).json({ success: true, message: "Commission deleted successfully" });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+
+
+// Get Admin Wallet Balance
+exports.getAdminWallet = async (req, res) => {
+    try {
+        const { adminId } = req.params;
+
+        // Find the admin by adminId
+        const admin = await Admin.findById(adminId);
+        if (!admin) {
+            return res.status(404).json({
+                success: false,
+                message: 'Admin not found'
+            });
+        }
+
+        // Return wallet balance
+        return res.status(200).json({
+            success: true,
+            message: 'Admin wallet fetched successfully',
+            data: {
+                adminId: admin._id,
+                name: admin.name,
+                walletBalance: admin.walletBalance || 0
+            }
+        });
+
+    } catch (err) {
+        console.error('Get Admin Wallet Error:', err);
+        return res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: err.message
+        });
+    }
+};
+
+
+
+exports.addReferralReward = async (req, res) => {
+  try {
+    const { userType, rewardType, rewardValue, minOrderValue, maxReward } = req.body;
+
+    // Validate required fields
+    if (!userType || !rewardType || rewardValue === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: 'User type, reward type and reward value are required'
+      });
+    }
+
+    // Validate percentage range
+    if (rewardType === 'percentage' && (rewardValue < 0 || rewardValue > 100)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Percentage must be between 0 and 100'
+      });
+    }
+
+    // Check if already exists
+    const existing = await ReferralReward.findOne({ userType });
+    
+    if (existing) {
+      // Update existing
+      existing.rewardType = rewardType;
+      existing.rewardValue = rewardValue;
+      existing.minOrderValue = minOrderValue || 0;
+      existing.maxReward = maxReward || 0;
+      
+      const updated = await existing.save();
+      
+      return res.status(200).json({
+        success: true,
+        message: 'Referral reward updated',
+        data: updated
+      });
+    }
+
+    // Create new
+    const reward = await ReferralReward.create({
+      userType,
+      rewardType,
+      rewardValue,
+      minOrderValue: minOrderValue || 0,
+      maxReward: maxReward || 0
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Referral reward created',
+      data: reward
+    });
+
+  } catch (error) {
+    console.error('Error creating reward:', error);
+    
+    if (error.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        message: 'Reward for this user type already exists'
+      });
+    }
+    
+    if (error.name === 'ValidationError') {
+      const messages = Object.values(error.errors).map(val => val.message);
+      return res.status(400).json({
+        success: false,
+        message: messages.join(', ')
+      });
+    }
+    
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// GET ALL - Get all referral rewards
+exports.getReferralRewards = async (req, res) => {
+  try {
+    const rewards = await ReferralReward.find().sort({ createdAt: -1 });
+    
+    res.status(200).json({
+      success: true,
+      count: rewards.length,
+      data: rewards
+    });
+  } catch (error) {
+    console.error('Error fetching rewards:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// UPDATE - Update referral reward
+exports.updateReferralReward = async (req, res) => {
+  try {
+    const { rewardType, rewardValue, minOrderValue, maxReward } = req.body;
+    
+    const reward = await ReferralReward.findById(req.params.id);
+    
+    if (!reward) {
+      return res.status(404).json({
+        success: false,
+        message: 'Reward not found'
+      });
+    }
+
+    // Validate percentage range
+    if (rewardType === 'percentage' && (rewardValue < 0 || rewardValue > 100)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Percentage must be between 0 and 100'
+      });
+    }
+
+    // Update fields
+    if (rewardType) reward.rewardType = rewardType;
+    if (rewardValue !== undefined) reward.rewardValue = rewardValue;
+    if (minOrderValue !== undefined) reward.minOrderValue = minOrderValue;
+    if (maxReward !== undefined) reward.maxReward = maxReward;
+
+    const updated = await reward.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Reward updated',
+      data: updated
+    });
+
+  } catch (error) {
+    console.error('Error updating reward:', error);
+    
+    if (error.name === 'ValidationError') {
+      const messages = Object.values(error.errors).map(val => val.message);
+      return res.status(400).json({
+        success: false,
+        message: messages.join(', ')
+      });
+    }
+    
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// DELETE - Delete referral reward
+exports.deleteReferralReward = async (req, res) => {
+  try {
+    const reward = await ReferralReward.findById(req.params.id);
+    
+    if (!reward) {
+      return res.status(404).json({
+        success: false,
+        message: 'Reward not found'
+      });
+    }
+
+    await reward.deleteOne();
+
+    res.status(200).json({
+      success: true,
+      message: 'Reward deleted'
+    });
+
+  } catch (error) {
+    console.error('Error deleting reward:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+
+
+// Helper function to generate 4-digit OTP
+const generateOTP = () => {
+  return Math.floor(1000 + Math.random() * 9000); // 1000-9999
+};
+
+
+
+// Forgot Password Controller
+// Forgot Password Controller
+exports.forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    // Check if admin exists
+    const admin = await Admin.findOne({ email });
+    if (!admin) {
+      return res.status(400).json({
+        success: false,
+        message: 'No admin found with this email'
+      });
+    }
+
+    // Generate 4-digit reset OTP
+    const resetOTP = generateOTP();
+    const resetOTPExpires = Date.now() + 10 * 60 * 1000; // 10 minutes
+
+    // Save reset OTP
+    admin.resetOTP = resetOTP;
+    admin.resetOTPExpires = resetOTPExpires;
+    await admin.save();
+
+    // Prepare email HTML
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+        <div style="text-align: center; margin-bottom: 30px;">
+          <h2 style="color: #8B5CF6;">VEGIFFY Admin Portal</h2>
+          <h3 style="color: #333;">Password Reset Request</h3>
+        </div>
+        <div style="background: linear-gradient(135deg, #10B981, #059669); color: white; padding: 30px; border-radius: 10px; text-align: center; margin-bottom: 20px;">
+          <h1 style="font-size: 48px; margin: 0; letter-spacing: 10px;">${resetOTP}</h1>
+          <p style="margin-top: 10px; font-size: 14px;">(Valid for 10 minutes)</p>
+        </div>
+        <p style="color: #666; font-size: 14px; margin-bottom: 15px;">
+          Hello ${admin.name || 'Admin'},
+        </p>
+        <p style="color: #666; font-size: 14px; margin-bottom: 20px;">
+          We received a request to reset your admin account password. Use the OTP above to proceed with resetting your password.
+        </p>
+        <div style="background-color: #f9f9f9; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+          <p style="margin: 0; color: #666; font-size: 14px;">
+            <strong>Important:</strong> 
+            <ul style="margin: 10px 0; padding-left: 20px;">
+              <li>This OTP is valid for 10 minutes only</li>
+              <li>Do not share this OTP with anyone</li>
+              <li>If you didn't request this, please ignore this email</li>
+            </ul>
+          </p>
+        </div>
+        <div style="text-align: center; margin-bottom: 20px;">
+          <a href="${process.env.FRONTEND_URL}/login" 
+             style="display: inline-block; background: linear-gradient(135deg, #8B5CF6, #EC4899); color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; font-weight: bold;">
+            Go to Login Page
+          </a>
+        </div>
+        <div style="color: #666; font-size: 12px; text-align: center; border-top: 1px solid #e0e0e0; padding-top: 20px;">
+          <p>© ${new Date().getFullYear()} VEGIFFY Admin Portal. All rights reserved.</p>
+        </div>
+      </div>
+    `;
+
+    // Send OTP email using sendEmail helper
+    const emailSent = await sendEmail(email, 'VEGIFFY Admin - Password Reset OTP', html);
+
+    if (!emailSent) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to send OTP email'
+      });
+    }
+
+    // Return response with OTP (for dev/testing)
+    res.status(200).json({
+      success: true,
+      message: 'Password reset OTP sent to your email',
+      resetOTP, // 4-digit OTP included
+      email: admin.email
+    });
+
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// Reset Password Controller
+// Reset Password Controller
+exports.resetPassword = async (req, res) => {
+  try {
+    const { otp, newPassword } = req.body;
+
+    if (!otp || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'OTP and new password are required'
+      });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password must be at least 6 characters long'
+      });
+    }
+
+    // Find admin using OTP
+    const admin = await Admin.findOne({
+      resetOTP: otp,
+      resetOTPExpires: { $gt: Date.now() }
+    });
+
+    if (!admin) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid or expired OTP'
+      });
+    }
+
+    // Direct password save (NO hash)
+    admin.password = newPassword;
+    admin.resetOTP = undefined;
+    admin.resetOTPExpires = undefined;
+    admin.lastPasswordChange = Date.now();
+
+    await admin.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Password reset successfully'
+    });
+
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+
+
+exports.addCredential = async (req, res) => {
+  try {
+    const { type, email, mobile, whatsappNumber } = req.body;
+
+    if (!type || !email || !mobile || !whatsappNumber) {
+      return res.status(400).json({
+        message: 'Type, email, mobile, and whatsappNumber are required'
+      });
+    }
+
+    const newCredential = new Credential({
+      type,
+      email,
+      mobile,
+      whatsappNumber
+    });
+
+    await newCredential.save();
+
+    return res.status(201).json({
+      message: 'Credential added successfully',
+      credential: newCredential
+    });
+
+  } catch (error) {
+    console.error('Error adding credential:', error);
+    return res.status(500).json({
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+
+// Get all credentials
+exports.getAllCredentials = async (req, res) => {
+  try {
+    const credentials = await Credential.find();
+    return res.status(200).json({ credentials });
+  } catch (error) {
+    console.error('Error fetching credentials:', error);
+    return res.status(500).json({ message: 'Server error', error: error.message });
+  }
+};
+
+// Update a credential
+exports.updateCredential = async (req, res) => {
+  try {
+    const { credentialId } = req.params;
+    const { type, email, mobile, whatsappNumber } = req.body;
+
+    const updateData = {};
+
+    if (type) updateData.type = type;
+    if (email) updateData.email = email;
+    if (mobile) updateData.mobile = mobile;
+    if (whatsappNumber) updateData.whatsappNumber = whatsappNumber;
+
+    const updatedCredential = await Credential.findByIdAndUpdate(
+      credentialId,
+      updateData,
+      { new: true }
+    );
+
+    if (!updatedCredential) {
+      return res.status(404).json({ message: 'Credential not found' });
+    }
+
+    return res.status(200).json({
+      message: 'Credential updated successfully',
+      credential: updatedCredential
+    });
+
+  } catch (error) {
+    console.error('Error updating credential:', error);
+    return res.status(500).json({
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+
+// Delete a credential
+exports.deleteCredential = async (req, res) => {
+  try {
+    const { credentialId } = req.params;
+
+    const deletedCredential = await Credential.findByIdAndDelete(credentialId);
+
+    if (!deletedCredential) {
+      return res.status(404).json({ message: 'Credential not found' });
+    }
+
+    return res.status(200).json({ message: 'Credential deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting credential:', error);
+    return res.status(500).json({ message: 'Server error', error: error.message });
   }
 };

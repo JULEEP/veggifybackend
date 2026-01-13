@@ -28,9 +28,22 @@ const vendorPaymentSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'completed', 'failed'],
+    enum: ['pending', 'completed', 'failed', 'pending_verification'],
     default: 'pending'
   },
+
+   // 🧾 Bank Transfer Info
+    bankDetails: {
+      accountName: String,
+      accountNumber: String,
+      bankName: String,
+      ifscCode: String,
+    },
+
+   // Price fields
+  amount: { type: Number },       // base price (before GST)
+  gstAmount: { type: Number },    // 18% GST amount
+  totalAmount: { type: Number },  // total paid (base + GST)
   razorpayPaymentId: {
     type: String
   }

@@ -5,29 +5,51 @@ const AmbassadorWithdrawalSchema = new Schema({
   ambassadorId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Ambassador',
+    required: true
   },
   amount: {
     type: Number,
-    min: 0,
+    required: true,
+    min: 100
+  },
+  processingFee: {
+    type: Number,
+    required: true,
+    default: 0
+  },
+  netAmount: {
+    type: Number,
+    required: true
   },
   status: {
     type: String,
-    enum: ['pending', 'accepted', 'rejected'],
+    enum: ['pending', 'accepted', 'rejected', 'processing', 'completed'],
     default: 'pending',
   },
   accountDetails: {
     accountNumber: {
       type: String,
+      required: true
     },
     ifscCode: {
       type: String,
+      required: true
     },
     bankName: {
       type: String,
+      required: true
     },
     accountHolderName: {
       type: String,
+      required: true
     },
+    branchName: {
+      type: String
+    },
+    accountType: {
+      type: String,
+      enum: ['savings', 'current', 'salary']
+    }
   },
   upiId: {
     type: String,
@@ -48,6 +70,12 @@ const AmbassadorWithdrawalSchema = new Schema({
     type: Date,
     default: null,
   },
+  paymentReference: {
+    type: String
+  },
+  remarks: {
+    type: String
+  }
 });
 
 const AmbassadorWithdrawal = mongoose.model('AmbassadorWithdrawal', AmbassadorWithdrawalSchema);

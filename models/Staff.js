@@ -14,6 +14,13 @@ const staffSchema = new mongoose.Schema({
   role: {
     type: String,
   },
+   aadharCardFront: {
+    type: String, // Cloudinary URL
+    required: [true, 'Aadhar Card Front is required']
+  },
+  aadharCardBack: {
+    type: String // Cloudinary URL (optional)
+  },
   gender: {
     type: String,
   },

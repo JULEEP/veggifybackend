@@ -706,6 +706,73 @@ const razorpay = new Razorpay({
 
 
 
+const axios = require('axios');
+const adminModel = require("../models/adminModel");
+
+// Helper function to fetch charges from API
+const fetchCharges = async () => {
+  try {
+    const response = await axios.get('http://31.97.206.144:5051/api/admin/allcharge');
+    if (response.data.success) {
+      return response.data.data;
+    }
+    return [];
+  } catch (error) {
+    console.error('Error fetching charges:', error);
+    // Return default charges if API fails
+    return [
+      {
+        type: 'delivery_charge',
+        amount: 40,
+        chargeType: 'fixed',
+        deliveryMethod: 'per_km',
+        perKmRate: 39.99,
+        displayLabel: 'Delivery Charge',
+        unit: '₹',
+        isActive: true
+      },
+      {
+        type: 'gst_on_delivery',
+        amount: 18,
+        chargeType: 'percentage',
+        deliveryMethod: 'flat_rate',
+        displayLabel: 'GST on Delivery Charges',
+        unit: '%',
+        isActive: true
+      },
+      {
+        type: 'packing_charges',
+        amount: 20,
+        chargeType: 'fixed',
+        displayLabel: 'Packing Charges',
+        unit: '₹',
+        isActive: true
+      },
+      {
+        type: 'gst_charges',
+        amount: 5,
+        chargeType: 'percentage',
+        displayLabel: 'GST Charges',
+        unit: '%',
+        isActive: true
+      },
+      {
+        type: 'platform_charge',
+        amount: 10,
+        chargeType: 'percentage',
+        displayLabel: 'Platform Charge',
+        unit: '%',
+        isActive: true
+      }
+    ];
+  }
+};
+
+
+
+
+
+
 exports.createOrder = async (req, res) => {
   try {
     const { userId, paymentMethod, addressId, transactionId } = req.body;
@@ -723,42 +790,102 @@ exports.createOrder = async (req, res) => {
     if (paymentMethod === "Online" && !transactionId)
       return res.status(400).json({ success: false, message: "transactionId is required for Online payment." });
 
-    // ✅ Fetch cart
-    const cart = await Cart.findOne({ userId }).populate('products.restaurantProductId');
+    // ✅ Fetch cart with all charge calculations
+    const cart = await Cart.findOne({ userId })
+      .populate('products.restaurantProductId')
+      .populate('restaurantId', 'restaurantName locationName');
+    
     if (!cart || !cart.products.length)
       return res.status(404).json({ success: false, message: "Cart is empty." });
+
+    console.log('Cart data for order:', {
+      subTotal: cart.subTotal,
+      deliveryCharge: cart.deliveryCharge,
+      gstCharges: cart.gstCharges,
+      platformCharge: cart.platformCharge,
+      gstOnDelivery: cart.gstOnDelivery,
+      finalAmount: cart.finalAmount,
+      amountSavedOnOrder: cart.amountSavedOnOrder,
+      isDeliveryFree: cart.isDeliveryFree,
+      distance: cart.distance,
+      perKmRate: cart.perKmRate,
+      freeDeliveryThreshold: cart.freeDeliveryThreshold,
+      chargeCalculations: cart.chargeCalculations
+    });
 
     // ✅ Fetch user & address
     const user = await User.findOne(
       { _id: userId, "addresses._id": addressId },
-      { name: 1, email: 1, location: 1, addresses: { $elemMatch: { _id: addressId } } }
+      { 
+        name: 1, 
+        email: 1, 
+        mobile: 1, 
+        location: 1, 
+        addresses: { $elemMatch: { _id: addressId } } 
+      }
     );
+    
     if (!user)
       return res.status(404).json({ success: false, message: "User or address not found." });
 
     const selectedAddress = user.addresses[0];
 
     // ✅ Restaurant info
-    const restaurant = await Restaurant.findById(cart.restaurantId, "restaurantName location");
+    const restaurant = await Restaurant.findById(
+      cart.restaurantId, 
+      "restaurantName locationName location phoneNumber notifications"
+    ); 
+    
     if (!restaurant)
       return res.status(404).json({ success: false, message: "Restaurant not found." });
 
-    // ✅ Clean products (already formatted in cart)
-    const cleanProducts = cart.products;
+    // ✅ Get current charges from API for snapshot ONLY
+    let appliedChargesSnapshot = {};
+    try {
+      const allCharges = await fetchCharges();
+      const activeCharges = allCharges.filter(charge => charge.isActive === true);
+      
+      // Extract specific charges
+      const deliveryChargeObj = activeCharges.find(c => c.type === 'delivery_charge');
+      const gstChargesObj = activeCharges.find(c => c.type === 'gst_charges');
+      const platformChargeObj = activeCharges.find(c => c.type === 'platform_charge');
+      const gstOnDeliveryObj = activeCharges.find(c => c.type === 'gst_on_delivery');
 
-    // ✅ Calculate totals and GST
-    const subTotal = cart.subTotal;
-    const gstAmount = +(subTotal * 0.05).toFixed(2);
-    const deliveryCharge = cart.deliveryCharge;
-    const totalItems = cart.totalItems;
-    const couponDiscount = cart.couponDiscount || 0;
-    const appliedCoupon = cart.appliedCoupon || null;
-    const distanceKm = cart.distanceKm || 0;
-    // Inside createOrder after calculating totals
-const platformCharge = cart.platformCharge || 0;
+      appliedChargesSnapshot = {
+        gstCharges: gstChargesObj || null,
+        platformCharge: platformChargeObj || null,
+        deliveryCharge: deliveryChargeObj || null,
+        gstOnDelivery: gstOnDeliveryObj || null
+      };
+    } catch (error) {
+      console.log('Charges API error (using cart data only):', error.message);
+      // API fail hua to bhi chalega, cart se hi data hai
+    }
 
-const totalPayable = +(subTotal + gstAmount + deliveryCharge + platformCharge - couponDiscount).toFixed(2);
-    //const totalPayable = +(subTotal + gstAmount + deliveryCharge - couponDiscount).toFixed(2);
+    // ✅ Clean products from cart
+    const cleanProducts = cart.products.map(product => ({
+      restaurantProductId: product.restaurantProductId,
+      recommendedId: product.recommendedId,
+      quantity: product.quantity,
+      isHalfPlate: product.isHalfPlate,
+      isFullPlate: product.isFullPlate,
+      name: product.name,
+      price: product.price,
+      originalPrice: product.originalPrice || product.price,
+      image: product.image,
+      discountPercent: product.discountPercent,
+      discountAmount: product.discountAmount
+    }));
+
+    // ✅ Prepare product summary for notification
+    const productSummary = cart.products.map(product => ({
+      name: product.name,
+      quantity: product.quantity,
+      price: product.price,
+      total: product.price * product.quantity
+    }));
+
+    const totalItemsCount = cart.totalItems;
 
     // ✅ Payment status logic
     let paymentStatus = paymentMethod === "COD" ? "Pending" : "Paid";
@@ -776,7 +903,6 @@ const totalPayable = +(subTotal + gstAmount + deliveryCharge + platformCharge - 
           finalTransactionId = captured.id;
         }
 
-        // ✅ Always Paid for online
         paymentStatus = "Paid";
       } catch (err) {
         return res.status(500).json({
@@ -787,11 +913,12 @@ const totalPayable = +(subTotal + gstAmount + deliveryCharge + platformCharge - 
       }
     }
 
-    // ✅ Create order
-    const order = await Order.create({
+    // ✅ Create order with all charge details (DIRECT from cart)
+    const orderData = {
       userId,
       cartId: cart._id,
       restaurantId: cart.restaurantId,
+      restaurantName: restaurant.restaurantName,
       restaurantLocation: restaurant.location,
       deliveryAddress: selectedAddress,
       paymentMethod,
@@ -799,47 +926,238 @@ const totalPayable = +(subTotal + gstAmount + deliveryCharge + platformCharge - 
       transactionId: finalTransactionId,
       razorpayPaymentDetails,
       orderStatus: "Pending",
-      totalItems,
-      subTotal,
-      gstAmount,
-      deliveryCharge,
-      couponDiscount,
-      appliedCoupon,
-      platformCharge,
-      totalPayable,
+      
+      // ✅ All charge fields DIRECT from cart
+      subTotal: cart.subTotal,
+      totalItems: cart.totalItems,
+      totalDiscount: cart.totalDiscount,
+      gstCharges: cart.gstCharges,
+      platformCharge: cart.platformCharge,
+      deliveryCharge: cart.deliveryCharge,
+      gstOnDelivery: cart.gstOnDelivery,
+      couponDiscount: cart.couponDiscount || 0,
+      totalPayable: cart.finalAmount,
+      distanceKm: cart.distance,
+      isDeliveryFree: cart.isDeliveryFree,
+      freeDeliveryThreshold: cart.freeDeliveryThreshold,
+      perKmRate: cart.perKmRate,
+      
+      // ✅ नया field: amountSavedOnOrder
+      amountSavedOnOrder: cart.amountSavedOnOrder || 0,
+      
+      // ✅ Charge calculations DIRECT from cart
+      chargeCalculations: cart.chargeCalculations || {},
+      
+      // ✅ Applied charges snapshot
+      appliedCharges: appliedChargesSnapshot,
+      
+      // ✅ Products
       products: cleanProducts,
-      distanceKm
-    });
+      
+      // ✅ Applied coupon
+      appliedCoupon: cart.appliedCoupon || null,
+      
+      // ✅ Delivery status
+      deliveryStatus: "Pending"
+    };
+
+    const order = await Order.create(orderData);
+
+    // ✅ Send Notification to Restaurant
+    try {
+      const notification = {
+        type: 'order_placed',
+        title: '🎉 New Order Received!',
+        message: `New order #${order.orderNumber || order._id.toString().slice(-6)} has been placed`,
+        orderId: order._id,
+        userId: user._id,
+        isRead: false,
+        data: {
+          orderId: order._id,
+          orderNumber: order.orderNumber || order._id.toString().slice(-6),
+          customerName: user.name || 'Customer',
+          customerPhone: user.mobile || 'N/A',
+          totalAmount: order.totalPayable,
+          paymentMethod: order.paymentMethod,
+          paymentStatus: order.paymentStatus,
+          itemCount: totalItemsCount,
+          products: productSummary,
+          deliveryAddress: {
+            street: selectedAddress.street,
+            city: selectedAddress.city,
+            state: selectedAddress.state,
+            country: selectedAddress.country,
+            postalCode: selectedAddress.postalCode
+          },
+          timestamp: new Date().toISOString()
+        }
+      };
+
+      // Add notification to restaurant
+      await Restaurant.findByIdAndUpdate(
+        cart.restaurantId,
+        {
+          $push: {
+            notifications: {
+              $each: [notification],
+              $position: 0,
+              $slice: 50
+            }
+          }
+        }
+      );
+      
+    } catch (notifError) {
+      console.error('Notification sending failed:', notifError.message);
+    }
+
+    // ✅ Prepare charge breakdown for response (DIRECT from cart)
+    const gstRate = cart.chargeCalculations?.gstOnFood?.rate || 5;
+    const platformRate = cart.chargeCalculations?.platformCharge?.rate || 10;
+    const gstOnDeliveryRate = cart.chargeCalculations?.gstOnDelivery?.rate || 18;
+    const baseDeliveryAmount = cart.chargeCalculations?.deliveryCharge?.baseAmount || 40;
+    
+    // ✅ FIX: Platform charge calculation - check if it's percentage or fixed
+    let platformChargeInfo;
+    if (appliedChargesSnapshot.platformCharge?.chargeType === 'percentage') {
+      platformChargeInfo = {
+        rate: `${platformRate}%`,
+        amount: order.platformCharge,
+        calculation: `${order.subTotal} × ${platformRate}% = ${order.platformCharge}`
+      };
+    } else {
+      platformChargeInfo = {
+        rate: `Fixed`,
+        amount: order.platformCharge,
+        calculation: `Fixed amount: ₹${order.platformCharge}`
+      };
+    }
+
+    const chargeBreakdown = {
+      subTotal: order.subTotal,
+      itemDiscount: order.totalDiscount,
+      savings: {
+        amountSavedOnOrder: order.amountSavedOnOrder,
+        description: `You saved ₹${order.amountSavedOnOrder} on this order`
+      },
+      gstOnFood: {
+        rate: `${gstRate}%`,
+        amount: order.gstCharges,
+        calculation: `${order.subTotal} × ${gstRate}% = ${order.gstCharges}`
+      },
+      platformCharge: platformChargeInfo,
+      deliveryCharge: {
+        baseAmount: baseDeliveryAmount,
+        distance: order.distanceKm,
+        perKmRate: order.perKmRate,
+        distanceCharge: cart.chargeCalculations?.deliveryCharge?.distanceCharge || 0,
+        totalDeliveryCharge: order.deliveryCharge,
+        isFreeDelivery: order.isDeliveryFree,
+        freeDeliveryThreshold: order.freeDeliveryThreshold,
+        freeDeliveryApplied: cart.chargeCalculations?.deliveryCharge?.freeDeliveryApplied || false,
+        calculation: cart.chargeCalculations?.deliveryCharge?.freeDeliveryApplied ? 
+          `Free delivery (Order > ₹${order.freeDeliveryThreshold})` : 
+          order.distanceKm > 0 && order.perKmRate > 0 ? 
+            `${order.distanceKm}km × ₹${order.perKmRate} = ₹${order.deliveryCharge}` :
+            `Flat charge: ₹${order.deliveryCharge}`
+      },
+      gstOnDelivery: {
+        rate: `${gstOnDeliveryRate}%`,
+        amount: order.gstOnDelivery,
+        calculation: order.deliveryCharge > 0 ? 
+          `₹${order.deliveryCharge} × ${gstOnDeliveryRate}% = ₹${order.gstOnDelivery}` :
+          `Not applicable (Free delivery)`
+      },
+      couponDiscount: {
+        amount: order.couponDiscount,
+        applied: order.couponDiscount > 0
+      },
+      grandTotal: {
+        amount: order.totalPayable,
+        calculation: `${order.subTotal} + ${order.gstCharges} + ${order.platformCharge} + ${order.deliveryCharge} + ${order.gstOnDelivery} - ${order.couponDiscount} = ${order.totalPayable}`
+      }
+    };
+
+    // ✅ Clear cart (simple reset)
+    await Cart.findOneAndUpdate(
+      { userId },
+      { 
+        products: [],
+        subTotal: 0,
+        totalItems: 0,
+        totalDiscount: 0,
+        deliveryCharge: 0,
+        gstCharges: 0,
+        gstOnDelivery: 0,
+        platformCharge: 0,
+        finalAmount: 0,
+        amountSavedOnOrder: 0,
+        distance: 0,
+        perKmRate: 0,
+        freeDeliveryThreshold: 399, // Changed to 399
+        isDeliveryFree: false,
+        restaurantId: null,
+        chargeCalculations: {},
+        appliedCoupon: null,
+        couponDiscount: 0
+      }
+    );
 
     // ✅ Populate order for response
     const populatedOrder = await Order.findById(order._id)
-      .populate("restaurantId", "restaurantName")
+      .populate("restaurantId", "restaurantName locationName")
       .populate("userId", "name email");
-
-    // ✅ Clear cart
-    await Cart.findOneAndUpdate(
-      { userId },
-      { products: [], subTotal: 0, deliveryCharge: 0, couponDiscount: 0, gstAmount: 0, finalAmount: 0, totalItems: 0, appliedCoupon: null }
-    );
 
     return res.status(201).json({
       success: true,
       message: "Order created successfully",
-      data: populatedOrder,
-      razorpayPaymentDetails
+      data: {
+        ...populatedOrder.toObject(),
+        chargeBreakdown
+      },
+      razorpayPaymentDetails,
+      summary: {
+        itemsTotal: order.subTotal,
+        totalDiscount: order.totalDiscount,
+        amountSavedOnOrder: order.amountSavedOnOrder,
+        charges: {
+          gstOnFood: order.gstCharges,
+          platformCharge: order.platformCharge,
+          deliveryCharge: order.deliveryCharge,
+          gstOnDelivery: order.gstOnDelivery
+        },
+        couponDiscount: order.couponDiscount,
+        grandTotal: order.totalPayable,
+        itemsCount: order.totalItems,
+        isDeliveryFree: order.isDeliveryFree,
+        distanceKm: order.distanceKm,
+        perKmRate: order.perKmRate
+      },
+      appliedCharges: appliedChargesSnapshot,
+      savingsInfo: {
+        amountSavedOnOrder: order.amountSavedOnOrder,
+        totalOriginalAmount: order.subTotal + order.amountSavedOnOrder,
+        savingsPercentage: order.amountSavedOnOrder > 0 ? 
+          Number(((order.amountSavedOnOrder / (order.subTotal + order.amountSavedOnOrder)) * 100).toFixed(1)) : 0
+      },
+      notificationSent: true,
+      restaurantNotified: {
+        restaurantId: restaurant._id,
+        restaurantName: restaurant.restaurantName,
+        notificationType: 'order_placed'
+      }
     });
 
   } catch (error) {
-    console.error("createOrder error:", error);
+    console.error("createOrder Error:", error);
+    
     return res.status(500).json({
       success: false,
-      message: "Server error",
-      error: error.message,
+      message: error.message,
+      error: error.stack
     });
   }
 };
-
-
 // -------------------------
 // GET ALL ORDERS
 // -------------------------
@@ -1200,8 +1518,8 @@ exports.getOrderByUserIdAndOrderId = async (req, res) => {
       });
     }
 
-    // Check if the order status is "Accepted", "Rider Accepted", or "Picked"
-    if (order.orderStatus !== "Accepted" && order.orderStatus !== "Rider Accepted" && order.orderStatus !== "Picked") {
+    // Check if the order status allows viewing
+    if (!["Accepted", "Rider Accepted", "Picked"].includes(order.orderStatus)) {
       return res.status(400).json({
         success: false,
         message: "Order has not been accepted, rider has not accepted, or the order has not been picked yet. Please wait for acceptance before viewing details."
@@ -1219,17 +1537,31 @@ exports.getOrderByUserIdAndOrderId = async (req, res) => {
       ? deliveryTime.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true })
       : "";
 
+    // Full response including all charges and products
     const result = {
-      orderId: order._id, // Order ID
+      orderId: order._id,
       message: "Your Order Details",
       restaurantName: order.restaurantId?.restaurantName || "Unknown Restaurant",
       restaurantLocation: order.restaurantId?.locationName || "Unknown Location",
 
       orderDetails: {
         totalItems: order.totalItems || 0,
-        subTotal: `₹${order.subTotal.toFixed(2)}`,
-        deliveryCharge: `₹${order.deliveryCharge.toFixed(2)}`,
-        totalPayable: `₹${order.totalPayable.toFixed(2)}`
+        subTotal: `₹${(Number(order.subTotal) || 0).toFixed(2)}`,
+        deliveryCharge: `₹${(Number(order.deliveryCharge) || 0).toFixed(2)}`,
+        totalPayable: `₹${(Number(order.totalPayable) || 0).toFixed(2)}`,
+        gstCharges: `₹${(Number(order.gstCharges) || 0).toFixed(2)}`,
+        packingCharges: `₹${(Number(order.packingCharges) || 0).toFixed(2)}`,
+        gstOnDelivery: `₹${(Number(order.gstOnDelivery) || 0).toFixed(2)}`,
+        platformCharge: `₹${(Number(order.platformCharge) || 0).toFixed(2)}`,
+        couponDiscount: `₹${(Number(order.couponDiscount) || 0).toFixed(2)}`,
+        totalDiscount: `₹${(Number(order.totalDiscount) || 0).toFixed(2)}`,
+        distanceKm: order.distanceKm || 0,
+        isDeliveryFree: order.isDeliveryFree || false,
+        freeDeliveryThreshold: order.freeDeliveryThreshold || 0,
+        perKmRate: order.perKmRate || 0,
+        products: order.products || [],
+        appliedCharges: order.appliedCharges || {},
+        chargeCalculations: order.chargeCalculations || {}
       },
 
       deliveryFlow: {
@@ -1243,22 +1575,29 @@ exports.getOrderByUserIdAndOrderId = async (req, res) => {
         }
       },
 
-   riderDetails:
-  (order.deliveryStatus === "Rider Accepted" || order.orderStatus === "Picked")
-    ? {
-        id: order.deliveryBoyId?._id || "N/A",
-        name: order.deliveryBoyId?.fullName || "Delivery Boy",
-        contact: order.deliveryBoyId?.mobileNumber || "N/A",
-        profileImage: order.deliveryBoyId?.profileImage || "default-profile-image.jpg", // Apply default only if profileImage is missing
-      }
-    : null
+      riderDetails: (order.deliveryStatus === "Rider Accepted" || order.orderStatus === "Picked")
+        ? {
+            id: order.deliveryBoyId?._id || "N/A",
+            name: order.deliveryBoyId?.fullName || "Delivery Boy",
+            contact: order.deliveryBoyId?.mobileNumber || "N/A",
+            profileImage: order.deliveryBoyId?.profileImage || "default-profile-image.jpg"
+          }
+        : null,
 
+      paymentMethod: order.paymentMethod,
+      paymentStatus: order.paymentStatus,
+      deliveryStatus: order.deliveryStatus,
+      transactionId: order.transactionId,
+      acceptedAt: order.acceptedAt,
+      createdAt: order.createdAt,
+      updatedAt: order.updatedAt
     };
 
     return res.status(200).json({
       success: true,
       data: result
     });
+
   } catch (error) {
     console.error("getOrderByUserIdAndOrderId error:", error);
     return res.status(500).json({
@@ -1268,7 +1607,6 @@ exports.getOrderByUserIdAndOrderId = async (req, res) => {
     });
   }
 };
-
 
 
 
@@ -2011,85 +2349,1291 @@ exports.getRiderPickedOrders = async (req, res) => {
 
 
 
+// exports.markOrderAsDelivered = async (req, res) => {
+//   try {
+//     const { deliveryBoyId, orderId, paymentType } = req.body;
+
+//     console.log('🔵 MARK ORDER AS DELIVERED STARTED');
+//     console.log('📦 Order ID:', orderId);
+//     console.log('🚴 Delivery Boy ID:', deliveryBoyId);
+//     console.log('💰 Payment Type:', paymentType);
+
+//     // Validate the delivery boy
+//     const deliveryBoy = await DeliveryBoy.findById(deliveryBoyId);
+//     if (!deliveryBoy) {
+//       console.log('❌ Delivery boy not found:', deliveryBoyId);
+//       return res.status(404).json({
+//         success: false,
+//         message: "Delivery boy not found.",
+//       });
+//     }
+//     console.log('✅ Delivery boy found:', deliveryBoy._id, '-', deliveryBoy.name);
+
+//     // Validate the order
+//     const order = await Order.findById(orderId).populate('restaurantId');
+//     if (!order) {
+//       console.log('❌ Order not found:', orderId);
+//       return res.status(404).json({
+//         success: false,
+//         message: "Order not found.",
+//       });
+//     }
+//     console.log('✅ Order found:', order._id);
+//     console.log('📊 Order Details:', {
+//       orderStatus: order.orderStatus,
+//       deliveryStatus: order.deliveryStatus,
+//       userId: order.userId,
+//       subTotal: order.subTotal,
+//       deliveryCharge: order.deliveryCharge,
+//       totalPayable: order.totalPayable
+//     });
+
+//     // Ensure the order is in "Picked" status before proceeding to "Delivered"
+//     if (order.orderStatus !== "Picked" || order.deliveryStatus !== "Picked") {
+//       console.log('❌ Order status check failed:', {
+//         orderStatus: order.orderStatus,
+//         deliveryStatus: order.deliveryStatus,
+//         required: 'Picked'
+//       });
+//       return res.status(400).json({
+//         success: false,
+//         message: "Order is not in 'Picked' status.",
+//       });
+//     }
+//     console.log('✅ Order is in "Picked" status');
+
+//     // Mark order as delivered and update statuses
+//     order.orderStatus = "Delivered";
+//     order.deliveryStatus = "Delivered";
+//     console.log('📈 Order status updated to "Delivered"');
+
+//     // Store the paymentType in the order
+//     if (paymentType) {
+//       order.paymentType = paymentType;
+//       console.log('💰 Payment type added to order:', paymentType);
+//     }
+
+//     // Handle payment for COD orders (without UPI ID)
+//     if (order.paymentMethod === "COD") {
+//       order.paymentStatus = "Paid";
+//       console.log('💵 COD order - Payment status set to "Paid"');
+//     } else {
+//       order.paymentStatus = "Completed";
+//       console.log('💳 Non-COD order - Payment status set to "Completed"');
+//     }
+
+//     // ========== DISTRIBUTE PAYMENT TO ADMIN AND RESTAURANT ==========
+//     console.log('\n💸 PAYMENT DISTRIBUTION STARTED');
+    
+//     // 1. Find the restaurant
+//     const restaurant = await Restaurant.findById(order.restaurantId);
+//     if (!restaurant) {
+//       console.log('❌ Restaurant not found for order:', order.restaurantId);
+//       return res.status(404).json({
+//         success: false,
+//         message: "Restaurant not found.",
+//       });
+//     }
+//     console.log('✅ Restaurant found:', restaurant._id, '-', restaurant.restaurantName);
+
+//     // 2. **FIXED: Now always use 20% commission from subtotal**
+//     const commissionPercentage = 20; // FIXED 20% commission
+    
+//     // 3. **CHANGED: Calculate commission from SUBTOTAL, not totalPayable**
+//     const subtotal = order.subTotal || order.totalAmount || 0;
+    
+//     // Delivery charge alag se rahega
+//     const deliveryCharge = order.deliveryCharge || 0;
+//     const totalPayable = order.totalPayable || 0;
+    
+//     // Calculate amounts based on SUBTOTAL
+//     const adminCommission = (subtotal * commissionPercentage) / 100;
+//     const restaurantAmount = subtotal - adminCommission;
+    
+//     console.log("📊 Payment Distribution Details:", {
+//       subtotal: subtotal.toFixed(2),
+//       deliveryCharge: deliveryCharge.toFixed(2),
+//       totalPayable: totalPayable.toFixed(2),
+//       commissionPercentage: `${commissionPercentage}%`,
+//       adminCommission: adminCommission.toFixed(2),
+//       restaurantAmount: restaurantAmount.toFixed(2)
+//     });
+
+//     // 4. Update Admin wallet (add commission) - FIXED
+//     const admin = await adminModel.findOne();
+    
+//     if (admin) {
+//       console.log('👑 Admin found:', admin._id);
+      
+//       // CRITICAL FIX: Check if walletBalance exists, if not create it
+//       if (admin.walletBalance === undefined) {
+//         admin.walletBalance = 0;
+//         console.log('⚠️ Admin wallet balance was undefined, set to 0');
+//       }
+      
+//       const adminBalanceBefore = admin.walletBalance;
+      
+//       // Now add commission
+//       admin.walletBalance = admin.walletBalance + adminCommission;
+      
+//       console.log('💰 Admin wallet updated:', {
+//         before: adminBalanceBefore.toFixed(2),
+//         added: adminCommission.toFixed(2),
+//         after: admin.walletBalance.toFixed(2)
+//       });
+      
+//       // Create transaction object
+//       const transactionObj = {
+//         amount: adminCommission,
+//         dateAdded: new Date().toISOString(),
+//         type: "commission",
+//         orderId: orderId.toString(),
+//         restaurantId: restaurant._id.toString(),
+//         restaurantName: restaurant.restaurantName,
+//         subtotal: subtotal,
+//         commissionPercentage: commissionPercentage,
+//         description: `Commission from order #${orderId.toString().substring(0, 8)} (20% of subtotal)`
+//       };
+      
+//       // Initialize if not exists
+//       if (!admin.walletTransactions || !Array.isArray(admin.walletTransactions)) {
+//         admin.walletTransactions = [];
+//         console.log('📝 Admin wallet transactions array initialized');
+//       }
+      
+//       // Admin ke liye JSON string push karo
+//       admin.walletTransactions.push(JSON.stringify(transactionObj));
+//       console.log('📋 Admin transaction added:', transactionObj.description);
+      
+//       // Mark fields as modified
+//       admin.markModified('walletBalance');
+//       admin.markModified('walletTransactions');
+      
+//       await admin.save();
+//       console.log('💾 Admin saved successfully');
+//     } else {
+//       console.log('❌ Admin not found in database');
+//     }
+
+//     // 5. Update Restaurant wallet (add restaurant's share)
+//     console.log('\n🏪 RESTAURANT PAYMENT PROCESSING');
+    
+//     // Check and initialize restaurant wallet fields
+//     if (restaurant.walletBalance === undefined) {
+//       restaurant.walletBalance = 0;
+//       console.log('⚠️ Restaurant wallet balance was undefined, set to 0');
+//     }
+//     if (restaurant.totalEarnings === undefined) {
+//       restaurant.totalEarnings = 0;
+//       console.log('⚠️ Restaurant totalEarnings was undefined, set to 0');
+//     }
+//     if (restaurant.totalCommissionPaid === undefined) {
+//       restaurant.totalCommissionPaid = 0;
+//       console.log('⚠️ Restaurant totalCommissionPaid was undefined, set to 0');
+//     }
+    
+//     const restaurantBalanceBefore = restaurant.walletBalance;
+//     const totalEarningsBefore = restaurant.totalEarnings;
+//     const totalCommissionBefore = restaurant.totalCommissionPaid;
+    
+//     restaurant.walletBalance = restaurant.walletBalance + restaurantAmount;
+//     restaurant.totalEarnings = restaurant.totalEarnings + restaurantAmount;
+//     restaurant.totalCommissionPaid = restaurant.totalCommissionPaid + adminCommission;
+    
+//     console.log('🏪 Restaurant wallet updated:', {
+//       walletBalance: {
+//         before: restaurantBalanceBefore.toFixed(2),
+//         added: restaurantAmount.toFixed(2),
+//         after: restaurant.walletBalance.toFixed(2)
+//       },
+//       totalEarnings: {
+//         before: totalEarningsBefore.toFixed(2),
+//         added: restaurantAmount.toFixed(2),
+//         after: restaurant.totalEarnings.toFixed(2)
+//       },
+//       totalCommissionPaid: {
+//         before: totalCommissionBefore.toFixed(2),
+//         added: adminCommission.toFixed(2),
+//         after: restaurant.totalCommissionPaid.toFixed(2)
+//       }
+//     });
+    
+//     // Initialize if not exists
+//     if (!restaurant.walletTransactions || !Array.isArray(restaurant.walletTransactions)) {
+//       restaurant.walletTransactions = [];
+//       console.log('📝 Restaurant wallet transactions array initialized');
+//     }
+    
+//     // Restaurant ke liye transaction object
+//     const restaurantTransaction = {
+//       amount: restaurantAmount,
+//       dateAdded: new Date().toISOString(),
+//       type: "order_payment",
+//       orderId: orderId.toString(),
+//       subtotal: subtotal,
+//       commissionDeducted: adminCommission,
+//       commissionPercentage: commissionPercentage,
+//       netAmount: restaurantAmount,
+//       description: `Payment for order #${orderId.toString().substring(0, 8)} (80% of subtotal)`
+//     };
+    
+//     // Restaurant ke liye JSON string push karo
+//     restaurant.walletTransactions.push(JSON.stringify(restaurantTransaction));
+//     console.log('📋 Restaurant transaction added:', restaurantTransaction.description);
+    
+//     await restaurant.save();
+//     console.log('💾 Restaurant saved successfully');
+
+//     // 6. Update order with commission details
+//     order.adminCommission = adminCommission;
+//     order.restaurantPayout = restaurantAmount;
+//     order.commissionPercentage = commissionPercentage;
+//     order.commissionAppliedOn = "subtotal"; // Indicate commission was applied on subtotal
+//     console.log('📋 Order commission details updated');
+
+//     // ========== NEW: REFERRAL REWARD LOGIC ==========
+//     console.log('\n🎁 REFERRAL REWARD PROCESSING STARTED');
+//     let referralRewardDetails = null;
+
+//     // Find the user who placed this order
+//     const user = await User.findById(order.userId);
+    
+//     if (user) {
+//       console.log('👤 Order user found:', user._id, '-', user.name || user.email);
+//       console.log('🔍 Checking user.referredBy field:', user.referredBy);
+      
+//       if (user.referredBy) {
+//         console.log('🎯 User has a referrer! Referrer CODE:', user.referredBy);
+//         console.log('📧 User email:', user.email);
+//         console.log('📞 User phone:', user.phone);
+        
+//         const referralCommissionPercentage = 6; // 6% of admin commission
+//         const userFixedReward = 20; // ₹20 fixed reward for user referrals
+        
+//         // Calculate reward amounts
+//         const referralRewardFromCommission = (adminCommission * referralCommissionPercentage) / 100;
+        
+//         console.log('📐 Referral calculations:', {
+//           adminCommission: adminCommission.toFixed(2),
+//           referralPercentage: `${referralCommissionPercentage}%`,
+//           referralRewardFromCommission: referralRewardFromCommission.toFixed(2),
+//           userFixedReward: userFixedReward.toFixed(2)
+//         });
+        
+//         // Get the referral code from user
+//         const referralCode = user.referredBy;
+        
+//         console.log('🔎 Looking for referrer with CODE:', referralCode);
+        
+//         // Try to find as Ambassador first (searching by referralCode field)
+//         let referrer = await Ambassador.findOne({ referralCode: referralCode });
+//         let referrerType = "ambassador";
+        
+//         if (referrer) {
+//           console.log('🎖️ Referrer found as AMBASSADOR:', referrer._id);
+//           console.log('📛 Ambassador name:', referrer.name);
+//           console.log('📞 Ambassador phone:', referrer.phone);
+//           console.log('🔑 Ambassador referral code:', referrer.referralCode);
+//         } else {
+//           console.log('❌ Not found as Ambassador, trying Restaurant...');
+          
+//           // If not found as Ambassador, try as Restaurant (searching by referralCode field)
+//           referrer = await Restaurant.findOne({ referralCode: referralCode });
+//           referrerType = "restaurant";
+          
+//           if (referrer) {
+//             console.log('🏪 Referrer found as RESTAURANT:', referrer._id);
+//             console.log('🏬 Restaurant name:', referrer.restaurantName);
+//             console.log('🔑 Restaurant referral code:', referrer.referralCode);
+//           } else {
+//             console.log('❌ Not found as Restaurant, trying User...');
+            
+//             // If still not found, try as User (searching by referralCode field)
+//             referrer = await User.findOne({ referralCode: referralCode });
+//             referrerType = "user";
+            
+//             if (referrer) {
+//               console.log('👤 Referrer found as USER:', referrer._id);
+//               console.log('📛 User name:', referrer.name);
+//               console.log('📞 User phone:', referrer.phone);
+//               console.log('🔑 User referral code:', referrer.referralCode);
+//             } else {
+//               console.log('❌ Referrer not found in any collection with referralCode:', referralCode);
+//               console.log('ℹ️ Searching in: Ambassador.referralCode, Restaurant.referralCode, User.referralCode');
+//             }
+//           }
+//         }
+        
+//         if (referrer) {
+//           console.log(`✅ Referrer confirmed as ${referrerType.toUpperCase()}:`, referrer._id);
+//           console.log(`🔑 Referrer code: ${referrer.referralCode}`);
+          
+//           let rewardAmount = 0;
+//           let rewardDescription = "";
+          
+//           // Determine reward based on referrer type
+//           if (referrerType === "ambassador" || referrerType === "restaurant") {
+//             // Ambassador or Restaurant gets 6% of admin commission
+//             rewardAmount = referralRewardFromCommission;
+//             rewardDescription = `6% of admin commission for referring user ${user._id} (${user.name || user.email})`;
+//             console.log(`💰 ${referrerType.toUpperCase()} reward: ${rewardAmount.toFixed(2)} (6% of admin commission)`);
+//           } else if (referrerType === "user") {
+//             // User gets fixed ₹20 reward
+//             rewardAmount = userFixedReward;
+//             rewardDescription = `₹20 fixed reward for referring user ${user._id} (${user.name || user.email})`;
+//             console.log(`💰 USER reward: ${rewardAmount.toFixed(2)} (Fixed ₹20)`);
+//           }
+          
+//           // Update referrer's wallet
+//           const referrerWalletBefore = referrer.walletBalance || 0;
+          
+//           if (referrer.walletBalance === undefined) {
+//             referrer.walletBalance = 0;
+//             console.log('⚠️ Referrer wallet balance was undefined, set to 0');
+//           }
+          
+//           referrer.walletBalance = referrer.walletBalance + rewardAmount;
+          
+//           console.log(`💰 Referrer wallet updated (${referrerType}):`, {
+//             before: referrerWalletBefore.toFixed(2),
+//             added: rewardAmount.toFixed(2),
+//             after: referrer.walletBalance.toFixed(2)
+//           });
+          
+//           // Initialize wallet transactions if not exists
+//           if (!referrer.walletTransactions || !Array.isArray(referrer.walletTransactions)) {
+//             referrer.walletTransactions = [];
+//             console.log('📝 Referrer wallet transactions array initialized');
+//           }
+          
+//           // Add transaction record
+//           const referralTransaction = {
+//             amount: rewardAmount,
+//             dateAdded: new Date(),
+//             type: "referral_reward",
+//             orderId: orderId,
+//             referredUserId: user._id,
+//             referredUserName: user.name || user.email,
+//             referredUserCode: user.referralCode || 'No code',
+//             orderAmount: subtotal,
+//             referralCodeUsed: referralCode,
+//             description: rewardDescription
+//           };
+          
+//           // Check the model type to determine how to store the transaction
+//           if (referrerType === "user") {
+//             // For User model, store as proper object
+//             referrer.walletTransactions.push(referralTransaction);
+//             console.log('📋 User referral transaction added as object');
+//           } else {
+//             // For Ambassador/Restaurant, store as JSON string
+//             referrer.walletTransactions.push(JSON.stringify(referralTransaction));
+//             console.log('📋 Ambassador/Restaurant referral transaction added as JSON string');
+//           }
+          
+//           // Save the referrer
+//           await referrer.save();
+//           console.log(`💾 Referrer (${referrerType}) saved successfully`);
+          
+//           // Deduct the reward from admin's wallet
+//           if (admin) {
+//             const adminBalanceBeforeDeduction = admin.walletBalance;
+//             admin.walletBalance = admin.walletBalance - rewardAmount;
+            
+//             console.log('👑 Admin wallet deduction for referral:', {
+//               before: adminBalanceBeforeDeduction.toFixed(2),
+//               deducted: rewardAmount.toFixed(2),
+//               after: admin.walletBalance.toFixed(2),
+//               referrerType: referrerType,
+//               referrerId: referrer._id,
+//               referrerCode: referrer.referralCode
+//             });
+            
+//             // Add a transaction record for the deduction
+//             const adminDeductionTransaction = {
+//               amount: -rewardAmount,
+//               dateAdded: new Date().toISOString(),
+//               type: "referral_payout",
+//               orderId: orderId.toString(),
+//               referrerId: referrer._id.toString(),
+//               referrerType: referrerType,
+//               referrerName: referrer.name || referrer.restaurantName || referrer._id,
+//               referrerCode: referrer.referralCode,
+//               referredUserId: user._id.toString(),
+//               referredUserName: user.name || user.email,
+//               referralCodeUsed: referralCode,
+//               description: `Referral reward paid to ${referrerType} "${referrer.name || referrer.restaurantName || referrer._id}" (code: ${referrer.referralCode}) for order #${orderId.toString().substring(0, 8)}`
+//             };
+            
+//             admin.walletTransactions.push(JSON.stringify(adminDeductionTransaction));
+//             console.log('📋 Admin deduction transaction added');
+            
+//             admin.markModified('walletBalance');
+//             admin.markModified('walletTransactions');
+//             await admin.save();
+//             console.log('💾 Admin saved after referral deduction');
+//           }
+          
+//           // Update order with referral info
+//           order.referredBy = referralCode; // Store the referral code
+//           order.referredById = referrer._id; // Store the actual referrer ID
+//           order.referrerType = referrerType;
+//           order.referralRewardPaid = rewardAmount;
+//           order.referredUserName = user.name || user.email;
+//           order.referrerName = referrer.name || referrer.restaurantName || referrer._id;
+//           order.referrerCode = referrer.referralCode; // Store the referrer's code
+          
+//           console.log('📋 Order updated with referral info:', {
+//             referredByCode: referralCode,
+//             referredById: referrer._id,
+//             referrerType: referrerType,
+//             referralRewardPaid: rewardAmount.toFixed(2),
+//             referredUserName: user.name || user.email,
+//             referrerName: referrer.name || referrer.restaurantName || referrer._id,
+//             referrerCode: referrer.referralCode
+//           });
+          
+//           // Prepare response details
+//           referralRewardDetails = {
+//             referrerType: referrerType,
+//             referrerId: referrer._id,
+//             referrerCode: referrer.referralCode,
+//             referrerName: referrer.name || referrer.restaurantName || referrer._id,
+//             rewardAmount: rewardAmount,
+//             rewardSource: referrerType === "user" ? "fixed ₹20" : "6% of admin commission",
+//             deductedFromAdmin: true,
+//             adminWalletAfterDeduction: admin ? admin.walletBalance : null,
+//             referredUserId: user._id,
+//             referredUserName: user.name || user.email,
+//             referralCodeUsed: referralCode
+//           };
+          
+//           console.log(`🎁 Referral reward PROCESSED: ₹${rewardAmount.toFixed(2)} to ${referrerType} "${referrer.name || referrer.restaurantName || referrer._id}" (code: ${referrer.referralCode})`);
+//         } else {
+//           console.log('⚠️ Referrer code found in user.referredBy but no matching referrer found in database');
+//           console.log('📝 Store this info in order for manual investigation');
+          
+//           // Even if referrer not found, store the code in order for investigation
+//           order.referredBy = referralCode;
+//           order.referrerType = "unknown";
+//           order.referralRewardPaid = 0;
+//           order.referredUserName = user.name || user.email;
+//           order.referralError = "Referrer code found but referrer not in database";
+          
+//           console.log('📋 Order updated with referral error info');
+//         }
+//       } else {
+//         console.log('ℹ️ No referrer found for this user (user.referredBy is null/undefined)');
+//       }
+//     } else {
+//       console.log('❌ User not found for order.userId:', order.userId);
+//     }
+
+//     // ========== UPDATE DELIVERY BOY WALLET ==========
+//     console.log('\n🚴 DELIVERY BOY PAYMENT PROCESSING');
+    
+//     const deliveryBoyBalanceBefore = deliveryBoy.walletBalance || 0;
+    
+//     // Update the delivery boy's wallet
+//     deliveryBoy.walletBalance = (deliveryBoy.walletBalance || 0) + deliveryCharge;
+    
+//     console.log('💰 Delivery boy wallet updated:', {
+//       before: deliveryBoyBalanceBefore.toFixed(2),
+//       added: deliveryCharge.toFixed(2),
+//       after: deliveryBoy.walletBalance.toFixed(2),
+//       deliveryBoyName: deliveryBoy.name
+//     });
+
+//     // Initialize if not exists
+//     if (!deliveryBoy.walletTransactions || !Array.isArray(deliveryBoy.walletTransactions)) {
+//       deliveryBoy.walletTransactions = [];
+//       console.log('📝 Delivery boy wallet transactions array initialized');
+//     }
+    
+//     // DeliveryBoy ke liye PROPER OBJECT push karo (JSON string nahi)
+//     const deliveryTransaction = {
+//       amount: deliveryCharge,
+//       dateAdded: new Date(),
+//       type: "delivery",
+//       orderId: orderId,
+//       description: `Delivery charge for order #${orderId.toString().substring(0, 8)}`
+//     };
+    
+//     // Push as proper object
+//     deliveryBoy.walletTransactions.push(deliveryTransaction);
+//     console.log('📋 Delivery boy transaction added:', deliveryTransaction.description);
+
+//     // **Update the delivery boy's currentOrderStatus to 'Delivered'**
+//     deliveryBoy.currentOrderStatus = "Delivered";
+
+//     // Set the delivery boy's currentOrder to false (mark as available again)
+//     deliveryBoy.currentOrder = false;
+    
+//     console.log('🚴 Delivery boy status updated:', {
+//       currentOrderStatus: "Delivered",
+//       currentOrder: false,
+//       available: true
+//     });
+
+//     // Save the updated order and delivery boy
+//     await order.save();
+//     console.log('💾 Order saved with all updates');
+    
+//     await deliveryBoy.save();
+//     console.log('💾 Delivery boy saved with all updates');
+
+//     console.log('\n✅ ALL PROCESSES COMPLETED SUCCESSFULLY');
+//     console.log('📊 FINAL SUMMARY:');
+//     console.log('- Order marked as Delivered');
+//     console.log('- Payment distributed: Admin, Restaurant, Delivery Boy');
+//     if (referralRewardDetails) {
+//       console.log('- Referral reward processed:', {
+//         type: referralRewardDetails.referrerType,
+//         name: referralRewardDetails.referrerName,
+//         code: referralRewardDetails.referrerCode,
+//         amount: referralRewardDetails.rewardAmount.toFixed(2)
+//       });
+//     } else {
+//       console.log('- No referral reward processed');
+//     }
+
+//     return res.status(200).json({
+//       success: true,
+//       message: "Order marked as 'Delivered', payment status updated, and funds distributed.",
+//       data: {
+//         order,
+//         paymentDistribution: {
+//           subtotal: subtotal,
+//           deliveryCharge: deliveryCharge,
+//           totalPayable: totalPayable,
+//           commissionPercentage: `${commissionPercentage}%`,
+//           commissionAppliedOn: "subtotal",
+//           adminCommission: adminCommission,
+//           restaurantAmount: restaurantAmount,
+//           deliveryCharge: deliveryCharge,
+//           distribution: {
+//             admin: `${commissionPercentage}% of subtotal`,
+//             restaurant: `${100 - commissionPercentage}% of subtotal`,
+//             deliveryBoy: "100% of delivery charge"
+//           }
+//         },
+//         referralReward: referralRewardDetails,
+//         adminUpdated: admin ? {
+//           walletBalance: admin.walletBalance,
+//           hasWalletBalanceField: admin.walletBalance !== undefined
+//         } : null,
+//         logs: {
+//           userFound: !!user,
+//           hadReferrer: !!(user && user.referredBy),
+//           referrerType: referralRewardDetails?.referrerType || 'none',
+//           referrerCode: referralRewardDetails?.referrerCode || 'none',
+//           rewardAmount: referralRewardDetails?.rewardAmount || 0
+//         }
+//       },
+//     });
+//   } catch (error) {
+//     console.error("❌❌❌ ERROR marking order as delivered:", error);
+//     console.error("Error stack:", error.stack);
+//     return res.status(500).json({
+//       success: false,
+//       message: "Server error.",
+//       error: error.message,
+//     });
+//   }
+// };
+
+
+
+
+
+
 exports.markOrderAsDelivered = async (req, res) => {
   try {
     const { deliveryBoyId, orderId, paymentType } = req.body;
 
+    console.log('🔵 MARK ORDER AS DELIVERED STARTED');
+    console.log('📦 Order ID:', orderId);
+    console.log('🚴 Delivery Boy ID:', deliveryBoyId);
+    console.log('💰 Payment Type:', paymentType);
+
     // Validate the delivery boy
     const deliveryBoy = await DeliveryBoy.findById(deliveryBoyId);
     if (!deliveryBoy) {
+      console.log('❌ Delivery boy not found:', deliveryBoyId);
       return res.status(404).json({
         success: false,
         message: "Delivery boy not found.",
       });
     }
+    console.log('✅ Delivery boy found:', deliveryBoy._id, '-', deliveryBoy.name);
 
     // Validate the order
-    const order = await Order.findById(orderId);
+    const order = await Order.findById(orderId).populate('restaurantId');
     if (!order) {
+      console.log('❌ Order not found:', orderId);
       return res.status(404).json({
         success: false,
         message: "Order not found.",
       });
     }
+    console.log('✅ Order found:', order._id);
+    console.log('📊 Order Details:', {
+      orderStatus: order.orderStatus,
+      deliveryStatus: order.deliveryStatus,
+      userId: order.userId,
+      subTotal: order.subTotal,
+      deliveryCharge: order.deliveryCharge,
+      totalPayable: order.totalPayable
+    });
 
     // Ensure the order is in "Picked" status before proceeding to "Delivered"
     if (order.orderStatus !== "Picked" || order.deliveryStatus !== "Picked") {
+      console.log('❌ Order status check failed:', {
+        orderStatus: order.orderStatus,
+        deliveryStatus: order.deliveryStatus,
+        required: 'Picked'
+      });
       return res.status(400).json({
         success: false,
         message: "Order is not in 'Picked' status.",
       });
     }
+    console.log('✅ Order is in "Picked" status');
 
     // Mark order as delivered and update statuses
     order.orderStatus = "Delivered";
     order.deliveryStatus = "Delivered";
+    console.log('📈 Order status updated to "Delivered"');
 
     // Store the paymentType in the order
     if (paymentType) {
-      order.paymentType = paymentType;  // Store payment type in order
+      order.paymentType = paymentType;
+      console.log('💰 Payment type added to order:', paymentType);
     }
 
     // Handle payment for COD orders (without UPI ID)
     if (order.paymentMethod === "COD") {
-      order.paymentStatus = "Paid";  // Update payment status to Paid
+      order.paymentStatus = "Paid";
+      console.log('💵 COD order - Payment status set to "Paid"');
     } else {
-      // For other payment methods, mark as completed
       order.paymentStatus = "Completed";
+      console.log('💳 Non-COD order - Payment status set to "Completed"');
     }
 
-    // Update the delivery boy's wallet
+    // ========== DISTRIBUTE PAYMENT TO ADMIN AND RESTAURANT ==========
+    console.log('\n💸 PAYMENT DISTRIBUTION STARTED');
+    
+    // 1. Find the restaurant
+    const restaurant = await Restaurant.findById(order.restaurantId);
+    if (!restaurant) {
+      console.log('❌ Restaurant not found for order:', order.restaurantId);
+      return res.status(404).json({
+        success: false,
+        message: "Restaurant not found.",
+      });
+    }
+    console.log('✅ Restaurant found:', restaurant._id, '-', restaurant.restaurantName);
+
+    // 2. **FIXED: Now always use 20% commission from subtotal**
+    const commissionPercentage = 20; // FIXED 20% commission
+    
+    // 3. **CHANGED: Calculate commission from SUBTOTAL, not totalPayable**
+    const subtotal = order.subTotal || order.totalAmount || 0;
+    
+    // Delivery charge alag se rahega
     const deliveryCharge = order.deliveryCharge || 0;
-    const today = new Date();
-    const dateAdded = today.toISOString();
-
-    deliveryBoy.walletBalance = (deliveryBoy.walletBalance || 0) + deliveryCharge;
-
-    // Add transaction history
-    deliveryBoy.walletTransactions.push({
-      amount: deliveryCharge,
-      dateAdded: dateAdded,
-      type: "delivery",
-      orderId: orderId,
+    const totalPayable = order.totalPayable || 0;
+    
+    // Calculate amounts based on SUBTOTAL
+    const adminCommission = (subtotal * commissionPercentage) / 100;
+    const restaurantAmount = subtotal - adminCommission;
+    
+    console.log("📊 Payment Distribution Details:", {
+      subtotal: subtotal.toFixed(2),
+      deliveryCharge: deliveryCharge.toFixed(2),
+      totalPayable: totalPayable.toFixed(2),
+      commissionPercentage: `${commissionPercentage}%`,
+      adminCommission: adminCommission.toFixed(2),
+      restaurantAmount: restaurantAmount.toFixed(2)
     });
 
+    // 4. Update Admin wallet (add commission) - FIXED
+    const admin = await adminModel.findOne();
+    
+    if (admin) {
+      console.log('👑 Admin found:', admin._id);
+      
+      // CRITICAL FIX: Check if walletBalance exists, if not create it
+      if (admin.walletBalance === undefined) {
+        admin.walletBalance = 0;
+        console.log('⚠️ Admin wallet balance was undefined, set to 0');
+      }
+      
+      const adminBalanceBefore = admin.walletBalance;
+      
+      // Now add commission
+      admin.walletBalance = admin.walletBalance + adminCommission;
+      
+      console.log('💰 Admin wallet updated:', {
+        before: adminBalanceBefore.toFixed(2),
+        added: adminCommission.toFixed(2),
+        after: admin.walletBalance.toFixed(2)
+      });
+      
+      // Create transaction object
+      const transactionObj = {
+        amount: adminCommission,
+        dateAdded: new Date().toISOString(),
+        type: "commission",
+        orderId: orderId.toString(),
+        restaurantId: restaurant._id.toString(),
+        restaurantName: restaurant.restaurantName,
+        subtotal: subtotal,
+        commissionPercentage: commissionPercentage,
+        description: `Commission from order #${orderId.toString().substring(0, 8)} (20% of subtotal)`
+      };
+      
+      // Initialize if not exists
+      if (!admin.walletTransactions || !Array.isArray(admin.walletTransactions)) {
+        admin.walletTransactions = [];
+        console.log('📝 Admin wallet transactions array initialized');
+      }
+      
+      // Admin ke liye JSON string push karo
+      admin.walletTransactions.push(JSON.stringify(transactionObj));
+      console.log('📋 Admin transaction added:', transactionObj.description);
+      
+      // Mark fields as modified
+      admin.markModified('walletBalance');
+      admin.markModified('walletTransactions');
+      
+      await admin.save();
+      console.log('💾 Admin saved successfully');
+    } else {
+      console.log('❌ Admin not found in database');
+    }
+
+    // 5. Update Restaurant wallet (add restaurant's share)
+    console.log('\n🏪 RESTAURANT PAYMENT PROCESSING');
+    
+    // Check and initialize restaurant wallet fields
+    if (restaurant.walletBalance === undefined) {
+      restaurant.walletBalance = 0;
+      console.log('⚠️ Restaurant wallet balance was undefined, set to 0');
+    }
+    if (restaurant.totalEarnings === undefined) {
+      restaurant.totalEarnings = 0;
+      console.log('⚠️ Restaurant totalEarnings was undefined, set to 0');
+    }
+    if (restaurant.totalCommissionPaid === undefined) {
+      restaurant.totalCommissionPaid = 0;
+      console.log('⚠️ Restaurant totalCommissionPaid was undefined, set to 0');
+    }
+    
+    const restaurantBalanceBefore = restaurant.walletBalance;
+    const totalEarningsBefore = restaurant.totalEarnings;
+    const totalCommissionBefore = restaurant.totalCommissionPaid;
+    
+    restaurant.walletBalance = restaurant.walletBalance + restaurantAmount;
+    restaurant.totalEarnings = restaurant.totalEarnings + restaurantAmount;
+    restaurant.totalCommissionPaid = restaurant.totalCommissionPaid + adminCommission;
+    
+    console.log('🏪 Restaurant wallet updated:', {
+      walletBalance: {
+        before: restaurantBalanceBefore.toFixed(2),
+        added: restaurantAmount.toFixed(2),
+        after: restaurant.walletBalance.toFixed(2)
+      },
+      totalEarnings: {
+        before: totalEarningsBefore.toFixed(2),
+        added: restaurantAmount.toFixed(2),
+        after: restaurant.totalEarnings.toFixed(2)
+      },
+      totalCommissionPaid: {
+        before: totalCommissionBefore.toFixed(2),
+        added: adminCommission.toFixed(2),
+        after: restaurant.totalCommissionPaid.toFixed(2)
+      }
+    });
+    
+    // Initialize if not exists
+    if (!restaurant.walletTransactions || !Array.isArray(restaurant.walletTransactions)) {
+      restaurant.walletTransactions = [];
+      console.log('📝 Restaurant wallet transactions array initialized');
+    }
+    
+    // Restaurant ke liye transaction object
+    const restaurantTransaction = {
+      amount: restaurantAmount,
+      dateAdded: new Date().toISOString(),
+      type: "order_payment",
+      orderId: orderId.toString(),
+      subtotal: subtotal,
+      commissionDeducted: adminCommission,
+      commissionPercentage: commissionPercentage,
+      netAmount: restaurantAmount,
+      description: `Payment for order #${orderId.toString().substring(0, 8)} (80% of subtotal)`
+    };
+    
+    // Restaurant ke liye JSON string push karo
+    restaurant.walletTransactions.push(JSON.stringify(restaurantTransaction));
+    console.log('📋 Restaurant transaction added:', restaurantTransaction.description);
+    
+    await restaurant.save();
+    console.log('💾 Restaurant saved successfully');
+
+    // 6. Update order with commission details
+    order.adminCommission = adminCommission;
+    order.restaurantPayout = restaurantAmount;
+    order.commissionPercentage = commissionPercentage;
+    order.commissionAppliedOn = "subtotal"; // Indicate commission was applied on subtotal
+    console.log('📋 Order commission details updated');
+
+    // ========== NEW: REFERRAL REWARD LOGIC ==========
+    console.log('\n🎁 REFERRAL REWARD PROCESSING STARTED');
+    let referralRewardDetails = null;
+
+    // Find the user who placed this order
+    const user = await User.findById(order.userId);
+    
+    if (user) {
+      console.log('👤 Order user found:', user._id, '-', user.name || user.email);
+      console.log('🔍 Checking user.referredBy field:', user.referredBy);
+      
+      if (user.referredBy) {
+        console.log('🎯 User has a referrer! Referrer CODE:', user.referredBy);
+        console.log('📧 User email:', user.email);
+        console.log('📞 User phone:', user.phone);
+        
+        // Check if this is user's first order
+        const userOrderCount = await Order.countDocuments({ userId: user._id });
+        const isFirstOrder = userOrderCount === 1; // Yeh order hi pehla order hai
+        
+        console.log('📊 User order count:', userOrderCount);
+        console.log('🌟 Is this first order?', isFirstOrder);
+        
+        if (isFirstOrder) {
+          console.log('🎉 FIRST ORDER DETECTED - Applying referral rewards');
+          
+          // Get referral reward settings from referralRewardSchema
+          const referralRewardSetting = await ReferralReward.findOne({ 
+            userType: "user" 
+          });
+          
+          let userRewardValue = 20; // Default fallback value
+          
+          if (referralRewardSetting) {
+            console.log('🎯 Referral reward setting found:', {
+              userType: referralRewardSetting.userType,
+              rewardType: referralRewardSetting.rewardType,
+              rewardValue: referralRewardSetting.rewardValue
+            });
+            
+            // Set reward value based on schema
+            userRewardValue = referralRewardSetting.rewardValue || 20;
+            console.log('💰 Using reward value from schema:', userRewardValue);
+          } else {
+            console.log('⚠️ No referral reward setting found, using default:', userRewardValue);
+          }
+          
+          const referralCommissionPercentage = 6; // 6% of admin commission
+          
+          // Calculate reward amounts
+          const referralRewardFromCommission = (adminCommission * referralCommissionPercentage) / 100;
+          
+          console.log('📐 Referral calculations:', {
+            adminCommission: adminCommission.toFixed(2),
+            referralPercentage: `${referralCommissionPercentage}%`,
+            referralRewardFromCommission: referralRewardFromCommission.toFixed(2),
+            userFixedReward: userRewardValue.toFixed(2)
+          });
+          
+          // Get the referral code from user
+          const referralCode = user.referredBy;
+          
+          console.log('🔎 Looking for referrer with CODE:', referralCode);
+          
+          // Try to find as Ambassador first (searching by referralCode field)
+          let referrer = await Ambassador.findOne({ referralCode: referralCode });
+          let referrerType = "ambassador";
+          
+          if (referrer) {
+            console.log('🎖️ Referrer found as AMBASSADOR:', referrer._id);
+            console.log('📛 Ambassador name:', referrer.name);
+            console.log('📞 Ambassador phone:', referrer.phone);
+            console.log('🔑 Ambassador referral code:', referrer.referralCode);
+          } else {
+            console.log('❌ Not found as Ambassador, trying Restaurant...');
+            
+            // If not found as Ambassador, try as Restaurant (searching by referralCode field)
+            referrer = await Restaurant.findOne({ referralCode: referralCode });
+            referrerType = "restaurant";
+            
+            if (referrer) {
+              console.log('🏪 Referrer found as RESTAURANT:', referrer._id);
+              console.log('🏬 Restaurant name:', referrer.restaurantName);
+              console.log('🔑 Restaurant referral code:', referrer.referralCode);
+            } else {
+              console.log('❌ Not found as Restaurant, trying User...');
+              
+              // If still not found, try as User (searching by referralCode field)
+              referrer = await User.findOne({ referralCode: referralCode });
+              referrerType = "user";
+              
+              if (referrer) {
+                console.log('👤 Referrer found as USER:', referrer._id);
+                console.log('📛 User name:', referrer.name);
+                console.log('📞 User phone:', referrer.phone);
+                console.log('🔑 User referral code:', referrer.referralCode);
+              } else {
+                console.log('❌ Referrer not found in any collection with referralCode:', referralCode);
+                console.log('ℹ️ Searching in: Ambassador.referralCode, Restaurant.referralCode, User.referralCode');
+              }
+            }
+          }
+          
+          if (referrer) {
+            console.log(`✅ Referrer confirmed as ${referrerType.toUpperCase()}:`, referrer._id);
+            console.log(`🔑 Referrer code: ${referrer.referralCode}`);
+            
+            let rewardAmount = 0;
+            let rewardDescription = "";
+            
+            // Determine reward based on referrer type
+            if (referrerType === "ambassador" || referrerType === "restaurant") {
+              // Ambassador or Restaurant gets 6% of admin commission
+              rewardAmount = referralRewardFromCommission;
+              rewardDescription = `6% of admin commission for referring user ${user._id} (${user.name || user.email})`;
+              console.log(`💰 ${referrerType.toUpperCase()} reward: ${rewardAmount.toFixed(2)} (6% of admin commission)`);
+            } else if (referrerType === "user") {
+              // User gets value from referralRewardSchema (₹50 or whatever is set)
+              rewardAmount = userRewardValue;
+              rewardDescription = `₹${userRewardValue} reward from referral system for referring user ${user._id} (${user.name || user.email})`;
+              console.log(`💰 USER reward: ${rewardAmount.toFixed(2)} (From referralRewardSchema)`);
+            }
+            
+            // Update referrer's wallet
+            const referrerWalletBefore = referrer.walletBalance || 0;
+            
+            if (referrer.walletBalance === undefined) {
+              referrer.walletBalance = 0;
+              console.log('⚠️ Referrer wallet balance was undefined, set to 0');
+            }
+            
+            referrer.walletBalance = referrer.walletBalance + rewardAmount;
+            
+            console.log(`💰 Referrer wallet updated (${referrerType}):`, {
+              before: referrerWalletBefore.toFixed(2),
+              added: rewardAmount.toFixed(2),
+              after: referrer.walletBalance.toFixed(2)
+            });
+            
+            // Initialize wallet transactions if not exists
+            if (!referrer.walletTransactions || !Array.isArray(referrer.walletTransactions)) {
+              referrer.walletTransactions = [];
+              console.log('📝 Referrer wallet transactions array initialized');
+            }
+            
+            // Add transaction record
+            const referralTransaction = {
+              amount: rewardAmount,
+              dateAdded: new Date(),
+              type: "referral_reward",
+              orderId: orderId,
+              referredUserId: user._id,
+              referredUserName: user.name || user.email,
+              referredUserCode: user.referralCode || 'No code',
+              orderAmount: subtotal,
+              referralCodeUsed: referralCode,
+              description: rewardDescription,
+              isFirstOrder: true,
+              rewardSource: referrerType === "user" ? "referralRewardSchema" : "6% commission"
+            };
+            
+            // Check the model type to determine how to store the transaction
+            if (referrerType === "user") {
+              // For User model, store as proper object
+              referrer.walletTransactions.push(referralTransaction);
+              console.log('📋 User referral transaction added as object');
+            } else {
+              // For Ambassador/Restaurant, store as JSON string
+              referrer.walletTransactions.push(JSON.stringify(referralTransaction));
+              console.log('📋 Ambassador/Restaurant referral transaction added as JSON string');
+            }
+            
+            // Save the referrer
+            await referrer.save();
+            console.log(`💾 Referrer (${referrerType}) saved successfully`);
+            
+            // **IMPORTANT: GIVE REWARD TO THE NEW USER WHO PLACED THE ORDER**
+            console.log('\n🎁 REWARDING THE NEW USER WHO PLACED THE ORDER');
+            const newUserReward = userRewardValue; // Same amount from referralRewardSchema
+            
+            if (user.walletBalance === undefined) {
+              user.walletBalance = 0;
+              console.log('⚠️ User wallet balance was undefined, set to 0');
+            }
+            
+            const userWalletBefore = user.walletBalance;
+            user.walletBalance = user.walletBalance + newUserReward;
+            
+            console.log('👤 New user wallet updated:', {
+              before: userWalletBefore.toFixed(2),
+              added: newUserReward.toFixed(2),
+              after: user.walletBalance.toFixed(2),
+              userName: user.name || user.email
+            });
+            
+            // Initialize user wallet transactions if not exists
+            if (!user.walletTransactions || !Array.isArray(user.walletTransactions)) {
+              user.walletTransactions = [];
+              console.log('📝 User wallet transactions array initialized');
+            }
+            
+            // Add transaction record for new user
+            const newUserTransaction = {
+              amount: newUserReward,
+              dateAdded: new Date(),
+              type: "referral_signup_bonus",
+              orderId: orderId,
+              description: `Welcome bonus of ₹${newUserReward} for completing first order with referral code ${referralCode}`,
+              isFirstOrder: true,
+              referrerCode: referralCode,
+              referrerType: referrerType
+            };
+            
+            // User ke liye proper object push karo
+            user.walletTransactions.push(newUserTransaction);
+            console.log('📋 New user bonus transaction added');
+            
+            // Save the user
+            await user.save();
+            console.log('💾 New user saved with bonus');
+            
+            // Deduct the reward from admin's wallet
+            if (admin) {
+              // **Deduct BOTH: referrer reward + new user reward**
+              const totalDeduction = rewardAmount + newUserReward;
+              const adminBalanceBeforeDeduction = admin.walletBalance;
+              admin.walletBalance = admin.walletBalance - totalDeduction;
+              
+              console.log('👑 Admin wallet deduction for referrals:', {
+                before: adminBalanceBeforeDeduction.toFixed(2),
+                referrerDeduction: rewardAmount.toFixed(2),
+                newUserDeduction: newUserReward.toFixed(2),
+                totalDeduction: totalDeduction.toFixed(2),
+                after: admin.walletBalance.toFixed(2),
+                referrerType: referrerType,
+                referrerId: referrer._id,
+                referrerCode: referrer.referralCode
+              });
+              
+              // Add a transaction record for the deduction
+              const adminDeductionTransaction = {
+                amount: -totalDeduction,
+                dateAdded: new Date().toISOString(),
+                type: "referral_payout",
+                orderId: orderId.toString(),
+                referrerId: referrer._id.toString(),
+                referrerType: referrerType,
+                referrerName: referrer.name || referrer.restaurantName || referrer._id,
+                referrerCode: referrer.referralCode,
+                referredUserId: user._id.toString(),
+                referredUserName: user.name || user.email,
+                referralCodeUsed: referralCode,
+                referrerReward: rewardAmount,
+                newUserReward: newUserReward,
+                description: `Referral rewards paid: ₹${rewardAmount.toFixed(2)} to ${referrerType} "${referrer.name || referrer.restaurantName || referrer._id}" + ₹${newUserReward.toFixed(2)} to new user "${user.name || user.email}" for first order #${orderId.toString().substring(0, 8)}`
+              };
+              
+              admin.walletTransactions.push(JSON.stringify(adminDeductionTransaction));
+              console.log('📋 Admin deduction transaction added');
+              
+              admin.markModified('walletBalance');
+              admin.markModified('walletTransactions');
+              await admin.save();
+              console.log('💾 Admin saved after referral deduction');
+            }
+            
+            // Update order with referral info
+            order.referredBy = referralCode; // Store the referral code
+            order.referredById = referrer._id; // Store the actual referrer ID
+            order.referrerType = referrerType;
+            order.referralRewardPaid = rewardAmount;
+            order.newUserRewardPaid = newUserReward;
+            order.referredUserName = user.name || user.email;
+            order.referrerName = referrer.name || referrer.restaurantName || referrer._id;
+            order.referrerCode = referrer.referralCode; // Store the referrer's code
+            order.isFirstOrder = true; // Mark as first order
+            
+            console.log('📋 Order updated with referral info:', {
+              referredByCode: referralCode,
+              referredById: referrer._id,
+              referrerType: referrerType,
+              referrerRewardPaid: rewardAmount.toFixed(2),
+              newUserRewardPaid: newUserReward.toFixed(2),
+              referredUserName: user.name || user.email,
+              referrerName: referrer.name || referrer.restaurantName || referrer._id,
+              referrerCode: referrer.referralCode,
+              isFirstOrder: true
+            });
+            
+            // Prepare response details
+            referralRewardDetails = {
+              referrerType: referrerType,
+              referrerId: referrer._id,
+              referrerCode: referrer.referralCode,
+              referrerName: referrer.name || referrer.restaurantName || referrer._id,
+              rewardAmount: rewardAmount,
+              newUserReward: newUserReward,
+              rewardSource: referrerType === "user" ? "referralRewardSchema" : "6% of admin commission",
+              deductedFromAdmin: true,
+              adminWalletAfterDeduction: admin ? admin.walletBalance : null,
+              referredUserId: user._id,
+              referredUserName: user.name || user.email,
+              referralCodeUsed: referralCode,
+              isFirstOrder: true,
+              userOrderCount: userOrderCount
+            };
+            
+            console.log(`🎁 FIRST ORDER referral rewards PROCESSED:`);
+            console.log(`   ₹${rewardAmount.toFixed(2)} to ${referrerType} "${referrer.name || referrer.restaurantName || referrer._id}" (code: ${referrer.referralCode})`);
+            console.log(`   ₹${newUserReward.toFixed(2)} to new user "${user.name || user.email}"`);
+          } else {
+            console.log('⚠️ Referrer code found in user.referredBy but no matching referrer found in database');
+            console.log('📝 Store this info in order for manual investigation');
+            
+            // Even if referrer not found, store the code in order for investigation
+            order.referredBy = referralCode;
+            order.referrerType = "unknown";
+            order.referralRewardPaid = 0;
+            order.referredUserName = user.name || user.email;
+            order.referralError = "Referrer code found but referrer not in database";
+            order.isFirstOrder = true;
+            
+            console.log('📋 Order updated with referral error info');
+          }
+        } else {
+          console.log('ℹ️ Not user\'s first order. Skipping referral rewards.');
+          console.log('ℹ️ Only first orders qualify for referral rewards.');
+        }
+      } else {
+        console.log('ℹ️ No referrer found for this user (user.referredBy is null/undefined)');
+      }
+    } else {
+      console.log('❌ User not found for order.userId:', order.userId);
+    }
+
+    // ========== UPDATE DELIVERY BOY WALLET ==========
+    console.log('\n🚴 DELIVERY BOY PAYMENT PROCESSING');
+    
+    const deliveryBoyBalanceBefore = deliveryBoy.walletBalance || 0;
+    
+    // Update the delivery boy's wallet
+    deliveryBoy.walletBalance = (deliveryBoy.walletBalance || 0) + deliveryCharge;
+    
+    console.log('💰 Delivery boy wallet updated:', {
+      before: deliveryBoyBalanceBefore.toFixed(2),
+      added: deliveryCharge.toFixed(2),
+      after: deliveryBoy.walletBalance.toFixed(2),
+      deliveryBoyName: deliveryBoy.name
+    });
+
+    // Initialize if not exists
+    if (!deliveryBoy.walletTransactions || !Array.isArray(deliveryBoy.walletTransactions)) {
+      deliveryBoy.walletTransactions = [];
+      console.log('📝 Delivery boy wallet transactions array initialized');
+    }
+    
+    // DeliveryBoy ke liye PROPER OBJECT push karo (JSON string nahi)
+    const deliveryTransaction = {
+      amount: deliveryCharge,
+      dateAdded: new Date(),
+      type: "delivery",
+      orderId: orderId,
+      description: `Delivery charge for order #${orderId.toString().substring(0, 8)}`
+    };
+    
+    // Push as proper object
+    deliveryBoy.walletTransactions.push(deliveryTransaction);
+    console.log('📋 Delivery boy transaction added:', deliveryTransaction.description);
+
     // **Update the delivery boy's currentOrderStatus to 'Delivered'**
-    deliveryBoy.currentOrderStatus = "Delivered";  // Set the delivery boy's current order status
+    deliveryBoy.currentOrderStatus = "Delivered";
 
     // Set the delivery boy's currentOrder to false (mark as available again)
     deliveryBoy.currentOrder = false;
+    
+    console.log('🚴 Delivery boy status updated:', {
+      currentOrderStatus: "Delivered",
+      currentOrder: false,
+      available: true
+    });
 
     // Save the updated order and delivery boy
     await order.save();
+    console.log('💾 Order saved with all updates');
+    
     await deliveryBoy.save();
+    console.log('💾 Delivery boy saved with all updates');
+
+    console.log('\n✅ ALL PROCESSES COMPLETED SUCCESSFULLY');
+    console.log('📊 FINAL SUMMARY:');
+    console.log('- Order marked as Delivered');
+    console.log('- Payment distributed: Admin, Restaurant, Delivery Boy');
+    if (referralRewardDetails) {
+      console.log('- FIRST ORDER referral rewards processed:', {
+        referrerType: referralRewardDetails.referrerType,
+        referrerName: referralRewardDetails.referrerName,
+        referrerCode: referralRewardDetails.referrerCode,
+        referrerReward: referralRewardDetails.rewardAmount.toFixed(2),
+        newUserReward: referralRewardDetails.newUserReward.toFixed(2),
+        totalPaid: (referralRewardDetails.rewardAmount + referralRewardDetails.newUserReward).toFixed(2)
+      });
+    } else {
+      console.log('- No referral reward processed (not first order or no referrer)');
+    }
 
     return res.status(200).json({
       success: true,
-      message: "Order marked as 'Delivered', payment status updated, and delivery charge added to rider's wallet.",
-      data: order,
+      message: "Order marked as 'Delivered', payment status updated, and funds distributed.",
+      data: {
+        order,
+        paymentDistribution: {
+          subtotal: subtotal,
+          deliveryCharge: deliveryCharge,
+          totalPayable: totalPayable,
+          commissionPercentage: `${commissionPercentage}%`,
+          commissionAppliedOn: "subtotal",
+          adminCommission: adminCommission,
+          restaurantAmount: restaurantAmount,
+          deliveryCharge: deliveryCharge,
+          distribution: {
+            admin: `${commissionPercentage}% of subtotal`,
+            restaurant: `${100 - commissionPercentage}% of subtotal`,
+            deliveryBoy: "100% of delivery charge"
+          }
+        },
+        referralReward: referralRewardDetails,
+        adminUpdated: admin ? {
+          walletBalance: admin.walletBalance,
+          hasWalletBalanceField: admin.walletBalance !== undefined
+        } : null,
+        logs: {
+          userFound: !!user,
+          hadReferrer: !!(user && user.referredBy),
+          userOrderCount: userOrderCount || 0,
+          isFirstOrder: !!(referralRewardDetails && referralRewardDetails.isFirstOrder),
+          referrerType: referralRewardDetails?.referrerType || 'none',
+          referrerCode: referralRewardDetails?.referrerCode || 'none',
+          referrerReward: referralRewardDetails?.rewardAmount || 0,
+          newUserReward: referralRewardDetails?.newUserReward || 0
+        }
+      },
     });
   } catch (error) {
-    console.error("Error marking order as delivered:", error);
+    console.error("❌❌❌ ERROR marking order as delivered:", error);
+    console.error("Error stack:", error.stack);
     return res.status(500).json({
       success: false,
       message: "Server error.",
@@ -2097,9 +3641,6 @@ exports.markOrderAsDelivered = async (req, res) => {
     });
   }
 };
-
-
-
 // Controller to generate UPI QR code
 exports.generateUPIQRCode = async (req, res) => {
    try {
@@ -2690,5 +4231,210 @@ exports.deleteRestaurantReview = async (req, res) => {
   } catch (err) {
     console.error("Delete Review Error:", err);
     return res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+
+
+// Cancel Order
+exports.cancelOrder = async (req, res) => {
+  const { userId, orderId } = req.params;
+
+  try {
+    // Validate ObjectIds
+    if (!mongoose.Types.ObjectId.isValid(userId) || !mongoose.Types.ObjectId.isValid(orderId)) {
+      return res.status(400).json({ success: false, message: "Invalid userId or orderId" });
+    }
+
+    // Fetch order
+    const order = await Order.findOne({ _id: orderId, userId }).populate('userId', 'name email');
+
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Order not found" });
+    }
+
+    // Check if order is already cancelled
+    if (order.orderStatus === "Cancelled") {
+      return res.status(400).json({ success: false, message: "Order is already cancelled", data: order });
+    }
+
+    // Check cancellation time (1.5 minutes = 90,000ms)
+    const now = new Date();
+    const orderTime = new Date(order.createdAt);
+    const diffMs = now - orderTime;
+
+    if (diffMs > 90 * 1000) {
+      return res.status(400).json({ success: false, message: "Cancellation time exceeded (1.5 minutes)", data: order });
+    }
+
+    let refundDetails = null;
+
+    // Process refund if payment method is online and paymentStatus is Paid
+    if (order.paymentMethod === "Online" && order.paymentStatus === "Paid") {
+      if (!order.transactionId) {
+        return res.status(500).json({ success: false, message: "Transaction ID missing. Cannot process refund.", data: order });
+      }
+
+      try {
+        const refund = await razorpay.payments.refund(order.transactionId, {
+          amount: Math.round(order.totalPayable * 100), // amount in paise
+        });
+        refundDetails = {
+          refundId: refund.id,
+          status: refund.status,
+          amount: refund.amount / 100, // convert back to rupees
+          currency: refund.currency,
+        };
+        console.log("Refund processed:", refundDetails);
+      } catch (err) {
+        console.error("Refund failed:", err);
+        return res.status(500).json({ success: false, message: "Refund failed", error: err.message, data: order });
+      }
+    }
+
+    // Update order status
+    order.orderStatus = "Cancelled";
+    await order.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Order cancelled successfully",
+      data: {
+        orderId: order._id,
+        orderStatus: order.orderStatus,
+        totalPayable: order.totalPayable,
+        paymentMethod: order.paymentMethod,
+        paymentStatus: order.paymentStatus,
+        refunded: refundDetails ? true : false,
+        refundDetails: refundDetails,
+        user: order.userId,
+        products: order.products,
+        cancelledAt: new Date(),
+      },
+    });
+
+  } catch (error) {
+    console.error("cancelOrder error:", error);
+    return res.status(500).json({ success: false, message: "Server error", error: error.message });
+  }
+};
+
+
+
+
+exports.getOrdersByRestaurant = async (req, res) => {
+  try {
+    const ordersByRestaurant = await Order.aggregate([
+      {
+        // Join restaurant details
+        $lookup: {
+          from: "restaurants", // collection name in MongoDB
+          localField: "restaurantId",
+          foreignField: "_id",
+          as: "restaurant",
+        },
+      },
+      {
+        $unwind: "$restaurant",
+      },
+      {
+        // Optionally join user info
+        $lookup: {
+          from: "users",
+          localField: "userId",
+          foreignField: "_id",
+          as: "user",
+        },
+      },
+      { $unwind: "$user" },
+      {
+        // Join cart details
+        $lookup: {
+          from: "carts",
+          localField: "cartId",
+          foreignField: "_id",
+          as: "cart",
+        },
+      },
+      { $unwind: "$cart" },
+      {
+        // Populate products inside cart
+        $lookup: {
+          from: "restaurantproducts",
+          localField: "cart.products.restaurantProductId",
+          foreignField: "_id",
+          as: "productsDetails",
+        },
+      },
+      {
+        // Group by restaurant
+        $group: {
+          _id: "$restaurant._id",
+          restaurantName: { $first: "$restaurant.restaurantName" },
+          locationName: { $first: "$restaurant.locationName" },
+          orders: { $push: "$$ROOT" }, // all orders for this restaurant
+          totalOrders: { $sum: 1 },
+        },
+      },
+      {
+        $sort: { restaurantName: 1 }, // optional: sort by name
+      },
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      message: "Orders grouped by restaurant fetched successfully.",
+      data: ordersByRestaurant,
+    });
+  } catch (error) {
+    console.error("getOrdersByRestaurant error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
+  }
+};
+
+
+
+exports.getOrdersByPaymentStatus = async (req, res) => {
+  try {
+    // Hardcoded payment status (e.g., "Paid")
+    const paymentStatus = "Paid"; // You can change this to any status you want
+
+    // Fetch orders with hardcoded payment status
+    const ordersByPayment = await Order.find({ paymentStatus: paymentStatus })
+      .populate("restaurantId", "restaurantName locationName description") // Populate restaurant fields
+      .populate("userId", "name email mobile") // Populate user fields
+      .populate("cartId", "products") // Optionally populate cart (or remove this if not needed)
+      .populate({
+        path: "cartId",
+        populate: {
+          path: "products.restaurantProductId",
+          select: "name price image", // Specify fields to populate for products
+        },
+      })
+      .sort({ createdAt: -1 }); // Sort by creation date (latest first)
+
+    if (ordersByPayment.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: `No orders found with ${paymentStatus} status.`,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `Orders with ${paymentStatus} status fetched successfully.`,
+      data: ordersByPayment,
+    });
+  } catch (error) {
+    console.error("getOrdersByPaymentStatus error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
   }
 };

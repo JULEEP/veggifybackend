@@ -23,6 +23,14 @@ const restaurantSchema = new mongoose.Schema(
         ref: 'Category' // Reference to the Category model
       }
     ],
+     aadharCardFront: {
+    public_id: String,
+    url: String
+  },
+  aadharCardBack: {
+    public_id: String,
+    url: String
+  },
       reviews: [
     {
       userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", },
@@ -31,6 +39,36 @@ const restaurantSchema = new mongoose.Schema(
       createdAt: { type: Date, default: Date.now }
     }
   ],
+
+  // restaurantSchema में notifications array add करें:
+notifications: [{
+  type: {
+    type: String,
+    default: 'order_placed'
+  },
+  title: String,
+  message: String,
+  orderId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Order'
+  },
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  isRead: {
+    type: Boolean,
+    default: false
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  },
+  data: {
+    type: mongoose.Schema.Types.Mixed,
+    default: {}
+  }
+}],
     startingPrice: {
       type: Number,
     },
@@ -100,6 +138,60 @@ otp: {
   expiresAt: Date
 },
 
+ resetPasswordOTP: {
+    code: String,
+    expiresAt: Date
+  },
+
+
+   commissionPercentage: {
+    type: Number,
+    default: 10
+  },
+  walletBalance: {
+    type: Number,
+    default: 0
+  },
+  totalEarnings: {
+    type: Number,
+    default: 0
+  },
+  totalCommissionPaid: {
+    type: Number,
+    default: 0
+  },
+  // CHANGE HERE: String array
+  walletTransactions: [{
+    type: String
+  }],
+
+   myAccounts: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'VendorAccount'
+  }],
+
+ myPlans: [
+    {
+      planId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "VendorPlan",
+      },
+      purchaseDate: Date,
+      expiryDate: Date,
+      isPurchased: {
+        type: Boolean,
+        default: false,
+      },
+    },
+  ],
+
+   discount: { // ✅ ADDED DISCOUNT FIELD
+    type: Number,
+    min: 0,
+    max: 100,
+    default: 0
+  },
+
 
  // NEW DOCUMENTS - Declaration Form & Vendor Agreement
   declarationForm: {
@@ -109,6 +201,16 @@ otp: {
       type: Date,
       default: Date.now
     }
+  },
+
+   // UPDATED: Separate Aadhar card front and back
+  aadharCardFront: {
+    public_id: String,
+    url: String
+  },
+  aadharCardBack: {
+    public_id: String,
+    url: String
   },
   
   vendorAgreement: {

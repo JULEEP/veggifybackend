@@ -7,6 +7,7 @@ const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
 const notificationModel = require("../models/notificationModel");
 const Withdrawal = require("../models/Withdrawal");
+const orderModel = require("../models/orderModel");
 
 
 // Haversine formula
@@ -783,23 +784,62 @@ exports.getDailyStats = async (req, res) => {
 
 exports.getAllDeliveryBoys = async (req, res) => {
   try {
-    const deliveryBoys = await DeliveryBoy.find(); // Fetch all delivery boys from the database
+    // Fetch all delivery boys from the database
+    const deliveryBoys = await DeliveryBoy.find();
 
     if (deliveryBoys.length === 0) {
       return res.status(404).json({ message: "No delivery boys found." });
     }
 
+    // Fetch delivery boy orders and their details
+    const deliveryBoysWithOrders = [];
+
+    for (const boy of deliveryBoys) {
+      // Get the count of orders for this delivery boy
+      const orders = await Order.find({ deliveryBoyId: boy._id })
+        .populate({
+          path: "restaurantId",
+          select: "restaurantName",  // Only select restaurantName
+          match: { status: "active" } // Ensure restaurant is active (if applicable)
+        })
+        .sort({ createdAt: -1 });
+
+      // Count of total orders assigned to this delivery boy
+      const orderCount = orders.length;
+
+      // Extract the basic details of each order
+      const orderDetails = orders.map(order => {
+        // If the restaurant data is not populated, set the restaurantName as 'Unknown Restaurant'
+        const restaurantName = order.restaurantId ? order.restaurantId.restaurantName : "Unknown Restaurant";
+        
+        return {
+          orderId: order._id,
+          restaurantName: restaurantName,  // Show restaurant name or 'Unknown'
+          orderStatus: order.orderStatus,
+          totalPayable: order.totalPayable,
+          deliveryStatus: order.deliveryStatus,
+          paymentStatus: order.paymentStatus,
+          createdAt: order.createdAt,
+        };
+      });
+
+      // Push the delivery boy data along with their order count and order details
+      deliveryBoysWithOrders.push({
+        ...boy.toObject(), // Convert mongoose document to plain object
+        totalOrders: orderCount, // Add totalOrders field
+        orders: orderDetails, // Add the orders with basic details
+      });
+    }
+
     res.status(200).json({
       message: "Delivery boys fetched successfully.",
-      data: deliveryBoys
+      data: deliveryBoysWithOrders,
     });
   } catch (error) {
     console.error("Error fetching delivery boys:", error);
     res.status(500).json({ message: "Server Error", error: error.message });
   }
 };
-
-
 
 exports.getAllActiveDeliveryBoys = async (req, res) => {
   try {

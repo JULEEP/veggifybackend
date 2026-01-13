@@ -9,6 +9,8 @@ const Amount = require("../models/Amount");
 const AmbassadorPayment = require("../models/AmbassadorPayment");
 const Razorpay = require('razorpay'); // ✅ Import Razorpay
 const AmbassadorPlan = require("../models/AmbassadorPlan");
+const AmbassadorAccount = require("../models/AmbassadorAccount");
+const nodemailer = require("nodemailer");
 dotenv.config();
 
 // Cloudinary Configuration
@@ -26,19 +28,101 @@ exports.createAmbassador = async (req, res) => {
     console.log("Uploaded files:", req.files);
 
     // ========================
-    // Step 1: Generate referral code
+    // Step 1: Validate required fields including password
+    // ========================
+    if (!formData.password) {
+      return res.status(400).json({
+        success: false,
+        message: "Password is required.",
+      });
+    }
+
+    if (formData.password.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: "Password must be at least 6 characters long.",
+      });
+    }
+
+    // ========================
+    // Step 2: Validate other required fields
+    // ========================
+    if (!formData.fullName || !formData.email || !formData.mobileNumber || 
+        !formData.city || !formData.area || !formData.whyVeggyfy) {
+      return res.status(400).json({
+        success: false,
+        message: "Please fill all required fields: Full Name, Email, Mobile Number, City, Area, and Why Veggyfy.",
+      });
+    }
+
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(formData.email)) {
+      return res.status(400).json({
+        success: false,
+        message: "Please enter a valid email address.",
+      });
+    }
+
+    // Validate mobile number format
+    const mobileRegex = /^[6-9]\d{9}$/;
+    if (!mobileRegex.test(formData.mobileNumber)) {
+      return res.status(400).json({
+        success: false,
+        message: "Please enter a valid 10-digit mobile number starting with 6-9.",
+      });
+    }
+
+    // ========================
+    // Step 3: Validate required documents
+    // ========================
+    if (!req.files || !req.files.aadharCardFront || !req.files.panCard) {
+      return res.status(400).json({
+        success: false,
+        message: "Aadhar Card Front and PAN Card are required for verification.",
+      });
+    }
+
+    // ========================
+    // Step 4: Check if ambassador already exists
+    // ========================
+    const existingAmbassador = await Ambassador.findOne({
+      $or: [
+        { email: formData.email.toLowerCase() },
+        { mobileNumber: formData.mobileNumber }
+      ]
+    });
+
+    if (existingAmbassador) {
+      const field = existingAmbassador.email === formData.email.toLowerCase() ? 'email' : 'mobile number';
+      return res.status(400).json({
+        success: false,
+        message: `Ambassador with this ${field} already exists.`,
+      });
+    }
+
+    // ========================
+    // Step 5: Generate referral code
     // ========================
     const ambassadorCount = await Ambassador.countDocuments();
     const referralCode = `VEGGYFYAMB${(ambassadorCount + 1).toString().padStart(2, '0')}`;
 
     // ========================
-    // Step 2: Handle file uploads (Profile Image, Aadhar Card, PAN Card)
+    // Step 6: Hash the password
+    // ========================
+    const bcrypt = require('bcrypt');
+    const saltRounds = 10;
+    const hashedPassword = await bcrypt.hash(formData.password, saltRounds);
+
+    // ========================
+    // Step 7: Handle file uploads
     // ========================
     let uploadedImageUrl = "";
-    let uploadedAadharUrl = "";
+    let uploadedAadharFrontUrl = "";
+    let uploadedAadharBackUrl = "";
     let uploadedPanUrl = "";
 
-    // Handle Profile Image
+    // Handle Profile Image (Optional)
     if (req.files && req.files.profileImage) {
       const profileImage = req.files.profileImage;
 
@@ -55,85 +139,83 @@ exports.createAmbassador = async (req, res) => {
       }
     }
 
-    // Handle Aadhar Card - REQUIRED
-    if (req.files && req.files.aadharCard) {
-      const aadharCard = req.files.aadharCard;
-
-      // Check if file is image or PDF
-      if (aadharCard.mimetype.startsWith('image') || aadharCard.mimetype === 'application/pdf') {
-        const result = await cloudinary.uploader.upload(aadharCard.tempFilePath, {
-          folder: "veggyfy/ambassadors/documents/aadhar",
-          resource_type: aadharCard.mimetype === 'application/pdf' ? 'raw' : 'image'
-        });
-        uploadedAadharUrl = result.secure_url;
-      } else {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid file type for Aadhar Card. Only images and PDF are allowed.",
-        });
-      }
+    // Handle Aadhar Card Front - REQUIRED
+    const aadharCardFront = req.files.aadharCardFront;
+    if (aadharCardFront.mimetype.startsWith('image') || aadharCardFront.mimetype === 'application/pdf') {
+      const result = await cloudinary.uploader.upload(aadharCardFront.tempFilePath, {
+        folder: "veggyfy/ambassadors/documents/aadhar/front",
+        resource_type: aadharCardFront.mimetype === 'application/pdf' ? 'raw' : 'image'
+      });
+      uploadedAadharFrontUrl = result.secure_url;
     } else {
       return res.status(400).json({
         success: false,
-        message: "Aadhar Card is required for verification.",
+        message: "Invalid file type for Aadhar Card Front. Only images and PDF are allowed.",
       });
+    }
+
+    // Handle Aadhar Card Back - OPTIONAL
+    if (req.files && req.files.aadharCardBack) {
+      const aadharCardBack = req.files.aadharCardBack;
+      if (aadharCardBack.mimetype.startsWith('image') || aadharCardBack.mimetype === 'application/pdf') {
+        const result = await cloudinary.uploader.upload(aadharCardBack.tempFilePath, {
+          folder: "veggyfy/ambassadors/documents/aadhar/back",
+          resource_type: aadharCardBack.mimetype === 'application/pdf' ? 'raw' : 'image'
+        });
+        uploadedAadharBackUrl = result.secure_url;
+      } else {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid file type for Aadhar Card Back. Only images and PDF are allowed.",
+        });
+      }
     }
 
     // Handle PAN Card - REQUIRED
-    if (req.files && req.files.panCard) {
-      const panCard = req.files.panCard;
-
-      // Check if file is image or PDF
-      if (panCard.mimetype.startsWith('image') || panCard.mimetype === 'application/pdf') {
-        const result = await cloudinary.uploader.upload(panCard.tempFilePath, {
-          folder: "veggyfy/ambassadors/documents/pan",
-          resource_type: panCard.mimetype === 'application/pdf' ? 'raw' : 'image'
-        });
-        uploadedPanUrl = result.secure_url;
-      } else {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid file type for PAN Card. Only images and PDF are allowed.",
-        });
-      }
+    const panCard = req.files.panCard;
+    if (panCard.mimetype.startsWith('image') || panCard.mimetype === 'application/pdf') {
+      const result = await cloudinary.uploader.upload(panCard.tempFilePath, {
+        folder: "veggyfy/ambassadors/documents/pan",
+        resource_type: panCard.mimetype === 'application/pdf' ? 'raw' : 'image'
+      });
+      uploadedPanUrl = result.secure_url;
     } else {
       return res.status(400).json({
         success: false,
-        message: "PAN Card is required for verification.",
+        message: "Invalid file type for PAN Card. Only images and PDF are allowed.",
       });
     }
 
     // ========================
-    // Step 3: Check if ambassador already exists with same email or mobile
+    // Step 8: Validate Commission Percentage
     // ========================
-    const existingAmbassador = await Ambassador.findOne({
-      $or: [
-        { email: formData.email },
-        { mobileNumber: formData.mobileNumber }
-      ]
-    });
-
-    if (existingAmbassador) {
-      return res.status(400).json({
-        success: false,
-        message: "Ambassador with this email or mobile number already exists.",
-      });
+    if (formData.commissionPercentage) {
+      const commission = parseFloat(formData.commissionPercentage);
+      if (isNaN(commission) || commission < 0 || commission > 100) {
+        return res.status(400).json({
+          success: false,
+          message: "Commission percentage must be a number between 0 and 100.",
+        });
+      }
     }
 
     // ========================
-    // Step 4: Create Ambassador document with KYC documents
+    // Step 9: Create Ambassador document with password
     // ========================
     const newAmbassador = new Ambassador({
       // Personal Information
-      fullName: formData.fullName,
-      email: formData.email,
-      mobileNumber: formData.mobileNumber,
-      dateOfBirth: formData.dateOfBirth || "",
-      gender: formData.gender || "",
+      fullName: formData.fullName.trim(),
+      email: formData.email.toLowerCase().trim(),
+      mobileNumber: formData.mobileNumber.trim(),
+      dateOfBirth: formData.dateOfBirth || null,
+      gender: formData.gender || null,
+      
+      // Account Credentials
+      password: hashedPassword,
       
       // Location Information
-      city: formData.city,
-      area: formData.area,
+      city: formData.city.trim(),
+      area: formData.area.trim(),
       pincode: formData.pincode || "",
       
       // Social Media
@@ -142,33 +224,39 @@ exports.createAmbassador = async (req, res) => {
       twitter: formData.twitter || "",
       
       // Ambassador Specific
-      whyVeggyfy: formData.whyVeggyfy,
+      whyVeggyfy: formData.whyVeggyfy.trim(),
       marketingIdeas: formData.marketingIdeas || "",
       targetAudience: formData.targetAudience || "",
       expectedCommission: formData.expectedCommission || "",
+      commissionPercentage: formData.commissionPercentage ? parseFloat(formData.commissionPercentage) : null,
       
       // Referral & Status
       referralCode: referralCode,
-      referredBy: formData.referredBy || null,
-      status: formData.status || "pending",
+      referredBy: formData.referredBy ? formData.referredBy.trim() : null,
+      status: "pending",
       
       // Files
       profileImage: uploadedImageUrl || "",
-      aadharCard: uploadedAadharUrl,
+      aadharCardFront: uploadedAadharFrontUrl,
+      aadharCardBack: uploadedAadharBackUrl || null,
       panCard: uploadedPanUrl,
       
       // Wallet
       wallet: 0,
       
       // KYC Status
-      kycStatus: "pending", // pending, approved, rejected
-      kycSubmittedAt: new Date()
+      kycStatus: "pending",
+      kycSubmittedAt: new Date(),
+      
+      // Account Status
+      isActive: true,
+      lastLogin: null
     });
 
     await newAmbassador.save();
 
     // ========================
-    // Step 5: Referral Logic
+    // Step 10: Referral Logic
     // ========================
     if (formData.referredBy && formData.referredBy.trim() !== "") {
       const code = formData.referredBy.trim();
@@ -221,18 +309,7 @@ exports.createAmbassador = async (req, res) => {
     }
 
     // ========================
-    // Step 6: Send confirmation email (optional)
-    // ========================
-    try {
-      // You can add email sending logic here
-      console.log(`Ambassador application received from: ${formData.email}`);
-    } catch (emailError) {
-      console.error("Email sending failed:", emailError);
-      // Don't fail the request if email fails
-    }
-
-    // ========================
-    // Step 7: Response
+    // Step 11: Response
     // ========================
     res.status(201).json({
       success: true,
@@ -242,6 +319,7 @@ exports.createAmbassador = async (req, res) => {
         fullName: newAmbassador.fullName,
         email: newAmbassador.email,
         referralCode: newAmbassador.referralCode,
+        commissionPercentage: newAmbassador.commissionPercentage,
         status: newAmbassador.status,
         kycStatus: newAmbassador.kycStatus,
         appliedAt: newAmbassador.createdAt
@@ -251,73 +329,205 @@ exports.createAmbassador = async (req, res) => {
   } catch (err) {
     console.error("❌ Error creating ambassador:", err);
     
-    // Clean up uploaded files if error occurred
-    try {
-      // You can add cleanup logic for Cloudinary files if needed
-    } catch (cleanupError) {
-      console.error("Cleanup error:", cleanupError);
+    // Handle duplicate key errors
+    if (err.code === 11000) {
+      const field = Object.keys(err.keyPattern)[0];
+      const message = field === 'email' 
+        ? 'Email already registered' 
+        : field === 'mobileNumber' 
+          ? 'Mobile number already registered'
+          : 'Referral code already exists';
+      
+      return res.status(400).json({ 
+        success: false, 
+        message 
+      });
+    }
+    
+    // Handle validation errors
+    if (err.name === 'ValidationError') {
+      const messages = Object.values(err.errors).map(error => error.message);
+      return res.status(400).json({
+        success: false,
+        message: messages.join(', ')
+      });
     }
 
     res.status(500).json({
       success: false,
       message: "Server error while creating ambassador",
-      error: err.message,
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined,
     });
   }
 };
 
 
+const sendEmail = async (to, subject, html) => {
+  try {
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS
+      }
+    });
+
+    await transporter.sendMail({
+      from: `VEGIFFY! <${process.env.EMAIL_USER}>`,
+      to,
+      subject,
+      html
+    });
+
+    return true;
+  } catch (error) {
+    console.log("Email Send Error:", error);
+    return false;
+  }
+};
+
 exports.loginAmbassador = async (req, res) => {
   try {
-    const { mobileNumber } = req.body;
+    const { email, password } = req.body;
 
-    // Check if the mobile number was provided in the request body
-    if (!mobileNumber) {
+    if (!email || !password) {
       return res.status(400).json({
         success: false,
-        message: "Mobile number is required.",
+        message: "Email and password are required",
       });
     }
 
-    // Find the ambassador by mobile number
-    const ambassador = await Ambassador.findOne({ mobileNumber });
+    const ambassador = await Ambassador.findOne({
+      email: email.toLowerCase(),
+    });
 
-    // If the ambassador doesn't exist
     if (!ambassador) {
-      return res.status(404).json({
+      return res.status(401).json({
         success: false,
-        message: "Ambassador not found with this mobile number.",
+        message: "Account not found",
       });
     }
 
-    // ✅ Step: Return ambassador details (excluding sensitive info like password)
+    if (ambassador.status !== "active") {
+      return res.status(403).json({
+        success: false,
+        message: "Account not approved yet",
+        status: ambassador.status,
+      });
+    }
+
+    // 🔐 Generate 4-digit OTP
+    const otpCode = Math.floor(1000 + Math.random() * 9000).toString();
+
+    // 💾 Save OTP
+    ambassador.otp = {
+      code: otpCode,
+      expiresAt: new Date(Date.now() + 5 * 60 * 1000), // 5 min
+    };
+    await ambassador.save();
+
+    // 📧 Email HTML
+    const html = `
+      <div style="font-family: Arial, sans-serif;">
+        <h2>VEGIFFY Ambassador Login OTP</h2>
+        <p>Your login OTP is:</p>
+        <h1 style="letter-spacing:5px;">${otpCode}</h1>
+        <p>This OTP is valid for 5 minutes.</p>
+        <p>If you did not request this, please ignore.</p>
+      </div>
+    `;
+
+    // 📤 Send Email using existing helper
+    const emailSent = await sendEmail(
+      ambassador.email,
+      "VEGIFFY - Login OTP",
+      html
+    );
+
+    if (!emailSent) {
+      return res.status(500).json({
+        success: false,
+        message: "Failed to send OTP email",
+      });
+    }
+
     res.status(200).json({
       success: true,
-      message: "Login successful",
-      data: {
-        ambassadorId: ambassador._id, // Adding ambassador ID
+      message: "OTP sent successfully to your email",
+      ambassadorId: ambassador._id,
+      otp: otpCode, // ⚠️ remove in production
+    });
+
+  } catch (error) {
+    console.error("Ambassador login error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  }
+};
+
+
+
+exports.verifyAmbassadorOtp = async (req, res) => {
+  try {
+    const { ambassadorId, otp } = req.body;
+
+    if (!ambassadorId || !otp) {
+      return res.status(400).json({
+        success: false,
+        message: "ambassadorId and otp are required",
+      });
+    }
+
+    const ambassador = await Ambassador.findById(ambassadorId);
+
+    if (!ambassador || !ambassador.otp) {
+      return res.status(404).json({
+        success: false,
+        message: "OTP not found",
+      });
+    }
+
+    if (ambassador.otp.code !== otp) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid OTP",
+      });
+    }
+
+    if (new Date() > ambassador.otp.expiresAt) {
+      return res.status(401).json({
+        success: false,
+        message: "OTP expired",
+      });
+    }
+
+    // ✅ Clear OTP after verification
+    ambassador.otp = null;
+    await ambassador.save();
+
+    res.status(200).json({
+      success: true,
+      message: "OTP verified successfully. Login complete.",
+      ambassador: {
+        id: ambassador._id,
         fullName: ambassador.fullName,
         email: ambassador.email,
         mobileNumber: ambassador.mobileNumber,
         city: ambassador.city,
         area: ambassador.area,
-        instagram: ambassador.instagram,
-        facebook: ambassador.facebook,
-        twitter: ambassador.twitter,
-        profileImage: ambassador.profileImage,
         status: ambassador.status,
       },
     });
-  } catch (err) {
-    console.error("❌ Error logging in ambassador:", err);
+  } catch (error) {
+    console.error("Verify ambassador OTP error:", error);
     res.status(500).json({
       success: false,
       message: "Server error",
-      error: err.message,
     });
   }
 };
-
 
 
 
@@ -388,7 +598,18 @@ exports.updateAmbassador = async (req, res) => {
       });
     }
 
-    // ✅ Step 2: Handle profile image upload (if provided)
+    // ✅ Step 2: Validate Commission Percentage (NEW)
+    if (formData.commissionPercentage !== undefined) {
+      const commission = parseFloat(formData.commissionPercentage);
+      if (isNaN(commission) || commission < 0 || commission > 100) {
+        return res.status(400).json({
+          success: false,
+          message: "Commission percentage must be a number between 0 and 100.",
+        });
+      }
+    }
+
+    // ✅ Step 3: Handle profile image upload (if provided)
     let uploadedImageUrl = ambassador.profileImage;
 
     if (req.files && req.files.profileImage) {
@@ -424,7 +645,55 @@ exports.updateAmbassador = async (req, res) => {
       console.log("ℹ️ No new profile image uploaded. Keeping old image.");
     }
 
-    // ✅ Step 3: Update all provided fields
+    // ✅ Step 4: Handle Aadhar Card upload (if provided)
+    if (req.files && req.files.aadharCard) {
+      console.log("📄 Aadhar Card found, uploading to Cloudinary...");
+
+      const aadharCard = req.files.aadharCard;
+
+      // Check if file is image or PDF
+      if (aadharCard.mimetype.startsWith('image') || aadharCard.mimetype === 'application/pdf') {
+        const result = await cloudinary.uploader.upload(aadharCard.tempFilePath, {
+          folder: "veggyfy/ambassadors/documents/aadhar",
+          resource_type: aadharCard.mimetype === 'application/pdf' ? 'raw' : 'image'
+        });
+        
+        ambassador.aadharCard = result.secure_url;
+        ambassador.kycStatus = "under_review"; // Set to under review when new document uploaded
+        console.log("✅ Aadhar Card uploaded successfully");
+      } else {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid file type for Aadhar Card. Only images and PDF are allowed.",
+        });
+      }
+    }
+
+    // ✅ Step 5: Handle PAN Card upload (if provided)
+    if (req.files && req.files.panCard) {
+      console.log("📄 PAN Card found, uploading to Cloudinary...");
+
+      const panCard = req.files.panCard;
+
+      // Check if file is image or PDF
+      if (panCard.mimetype.startsWith('image') || panCard.mimetype === 'application/pdf') {
+        const result = await cloudinary.uploader.upload(panCard.tempFilePath, {
+          folder: "veggyfy/ambassadors/documents/pan",
+          resource_type: panCard.mimetype === 'application/pdf' ? 'raw' : 'image'
+        });
+        
+        ambassador.panCard = result.secure_url;
+        ambassador.kycStatus = "under_review"; // Set to under review when new document uploaded
+        console.log("✅ PAN Card uploaded successfully");
+      } else {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid file type for PAN Card. Only images and PDF are allowed.",
+        });
+      }
+    }
+
+    // ✅ Step 6: Update all provided fields
     const updatableFields = [
       "fullName",
       "email",
@@ -441,27 +710,62 @@ exports.updateAmbassador = async (req, res) => {
       "marketingIdeas",
       "targetAudience",
       "expectedCommission",
+      "commissionPercentage", // NEW: Added commission field
       "referralCode",
       "status",
+      "kycStatus", // Allow updating KYC status
+      "kycRejectionReason" // Allow updating rejection reason
     ];
 
     updatableFields.forEach((field) => {
-      if (formData[field]) {
+      if (formData[field] !== undefined) {
         ambassador[field] = formData[field];
         console.log(`✅ Updated field: ${field} → ${formData[field]}`);
       }
     });
 
+    // ✅ Step 7: Extra logic for status and KYC updates
+    if (formData.status && formData.status.toLowerCase() === "active") {
+      ambassador.kycStatus = "verified";
+      ambassador.kycVerifiedAt = new Date();
+      console.log("✅ Status is 'active', kycStatus set to 'verified'");
+    }
+
+    if (formData.kycStatus === "verified") {
+      ambassador.kycVerifiedAt = new Date();
+      console.log("✅ KYC verified, timestamp updated");
+    }
+
+    if (formData.kycStatus === "rejected" && formData.kycRejectionReason) {
+      ambassador.kycRejectionReason = formData.kycRejectionReason;
+      console.log("✅ KYC rejected with reason:", formData.kycRejectionReason);
+    }
+
+    // ✅ Step 8: Update profile image
     ambassador.profileImage = uploadedImageUrl;
 
-    // ✅ Step 4: Save updated data
+    // ✅ Step 9: Save updated data
     await ambassador.save();
     console.log("💾 Ambassador saved successfully.");
+
+    // ✅ Step 10: Prepare response data
+    const responseData = {
+      _id: ambassador._id,
+      fullName: ambassador.fullName,
+      email: ambassador.email,
+      mobileNumber: ambassador.mobileNumber,
+      commissionPercentage: ambassador.commissionPercentage, // NEW: Include in response
+      status: ambassador.status,
+      kycStatus: ambassador.kycStatus,
+      referralCode: ambassador.referralCode,
+      profileImage: ambassador.profileImage,
+      updatedAt: ambassador.updatedAt
+    };
 
     res.status(200).json({
       success: true,
       message: "Ambassador details updated successfully!",
-      data: ambassador,
+      data: responseData,
     });
   } catch (err) {
     console.error("❌ Error updating ambassador:", err);
@@ -472,7 +776,6 @@ exports.updateAmbassador = async (req, res) => {
     });
   }
 };
-
 
 
 exports.deleteAmbassador = async (req, res) => {
@@ -827,61 +1130,53 @@ exports.getTransactionHistoryAndWalletByAmbassador = async (req, res) => {
 
 exports.getTop10Ambassadors = async (req, res) => {
   try {
-    const { ambassadorId } = req.params; // The ambassadorId to check from which ambassador to start
-    
-    // Step 1: Fetch the ambassador's data to use as the reference point for ranking
-    const referenceAmbassador = await Ambassador.findById(ambassadorId);
+    const { ambassadorId } = req.params; // fetch from URL
 
-    if (!referenceAmbassador) {
+    // Step 1: Find the current ambassador
+    const currentAmbassador = await Ambassador.findById(ambassadorId);
+
+    if (!currentAmbassador) {
       return res.status(404).json({
         success: false,
         message: 'Ambassador not found',
       });
     }
 
-    // Step 2: Sort the ambassadors based on total commission or any other criteria
+    // Step 2: Aggregate ambassadors with user count
     const ambassadors = await Ambassador.aggregate([
-      // Add total commission for each ambassador
       {
         $addFields: {
-          totalCommission: { $sum: "$transactionHistory.commission" },  // Assuming commission is stored in transactionHistory
+          userCount: { $size: { $ifNull: ["$users", []] } } // count number of users
         }
       },
-      // Sort the ambassadors by total commission (descending order)
       {
-        $sort: { totalCommission: -1 }
-      },
-      // Limit the result to the top 10 ambassadors
-      {
-        $limit: 10
+        $sort: { userCount: -1 } // descending
       }
     ]);
 
-    // Step 3: Find the current ambassador's rank based on total commission
-    let ambassadorRank = 0;
+    // Step 3: Find current ambassador's rank
+    let currentRank = 0;
     for (let i = 0; i < ambassadors.length; i++) {
       if (ambassadors[i]._id.toString() === ambassadorId) {
-        ambassadorRank = i + 1; // Rank is 1-based
+        currentRank = i + 1; // 1-based rank
         break;
       }
     }
 
-    // Step 4: If no ambassador found in the result, default to 'Not Ranked'
-    if (ambassadorRank === 0) {
-      ambassadorRank = 'Not Ranked';
-    }
+    if (currentRank === 0) currentRank = "Not Ranked";
 
-    // Step 5: Return the top 10 ambassadors and the current ambassador's rank
+    // Step 4: Return top 10 ambassadors + current rank
     return res.status(200).json({
       success: true,
-      message: "Top 10 ambassadors fetched successfully.",
+      message: "Top 10 ambassadors fetched based on user count.",
       data: {
-        topAmbassadors: ambassadors,
-        currentAmbassadorRank: ambassadorRank, // Show where the given ambassador ranks
+        topAmbassadors: ambassadors.slice(0, 10),
+        currentAmbassadorRank: currentRank,
       },
     });
+
   } catch (error) {
-    console.error("getTop10Ambassadors error:", error);
+    console.error("getTop10AmbassadorsByUsers error:", error);
     return res.status(500).json({
       success: false,
       message: "Server error",
@@ -893,12 +1188,40 @@ exports.getTop10Ambassadors = async (req, res) => {
 
 
 
-// Request Withdrawal - Create a new withdrawal request
+// Request Withdrawal - Create a new withdrawal request with 2% fee
 exports.requestAmbassadorWithdrawal = async (req, res) => {
   try {
     const { ambassadorId } = req.params;
-    const { amount, accountDetails, upiId } = req.body; // Amount to withdraw, account details, UPI ID
+    const { amount, accountDetails, upiId } = req.body;
     
+    // Validate input
+    if (!amount || isNaN(amount) || parseFloat(amount) <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide a valid positive amount'
+      });
+    }
+
+    const amountValue = parseFloat(amount);
+
+    // Check minimum withdrawal
+    if (amountValue < 100) {
+      return res.status(400).json({
+        success: false,
+        message: 'Minimum withdrawal amount is ₹100'
+      });
+    }
+
+    // Validate account details
+    if (!accountDetails || !accountDetails.accountNumber || 
+        !accountDetails.bankName || !accountDetails.accountHolderName || 
+        !accountDetails.ifscCode) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide complete account details'
+      });
+    }
+
     // Step 1: Find the ambassador by ID
     const ambassador = await Ambassador.findById(ambassadorId);
     if (!ambassador) {
@@ -909,29 +1232,68 @@ exports.requestAmbassadorWithdrawal = async (req, res) => {
     }
 
     // Step 2: Check if the ambassador has sufficient balance
-    if (ambassador.wallet < amount) {
+    if (ambassador.wallet < amountValue) {
       return res.status(400).json({
         success: false,
         message: 'Insufficient balance in wallet.',
       });
     }
 
-    // Step 3: Create a withdrawal request with detailed account information
+    // Calculate processing fee (2%)
+    const processingFee = (amountValue * 2) / 100;
+    const netAmount = amountValue - processingFee;
+
+    // Step 3: Deduct amount from wallet immediately
+    ambassador.wallet -= amountValue;
+    await ambassador.save();
+
+    // Step 4: Create a withdrawal request with detailed account information
     const withdrawalRequest = new AmbassadorWithdrawal({
       ambassadorId,
-      amount,
+      amount: amountValue,
+      processingFee: processingFee,
+      netAmount: netAmount,
       status: 'pending',
-      accountDetails, // Add account details object
-      upiId, // Add UPI ID
+      accountDetails,
+      upiId,
+      requestedAt: new Date()
     });
     
     await withdrawalRequest.save();
 
-    // Step 4: Return the created withdrawal request
+    // Step 5: Create wallet transaction record
+    const transaction = new AmbassadorTransaction({
+      ambassadorId,
+      type: 'debit',
+      amount: amountValue,
+      description: `Withdrawal request #${withdrawalRequest._id.toString().slice(-8)}`,
+      transactionType: 'withdrawal',
+      balanceAfter: ambassador.wallet,
+      status: 'pending',
+      referenceId: withdrawalRequest._id
+    });
+
+    await transaction.save();
+
+    // Step 6: Return the created withdrawal request
     return res.status(200).json({
       success: true,
       message: 'Withdrawal request created successfully. Awaiting approval.',
-      data: withdrawalRequest,
+      data: {
+        withdrawalRequest: {
+          _id: withdrawalRequest._id,
+          amount: withdrawalRequest.amount,
+          processingFee: withdrawalRequest.processingFee,
+          netAmount: withdrawalRequest.netAmount,
+          status: withdrawalRequest.status,
+          accountDetails: withdrawalRequest.accountDetails,
+          requestedAt: withdrawalRequest.requestedAt
+        },
+        ambassador: {
+          _id: ambassador._id,
+          wallet: ambassador.wallet
+        }
+      },
     });
 
   } catch (error) {
@@ -943,7 +1305,6 @@ exports.requestAmbassadorWithdrawal = async (req, res) => {
     });
   }
 };
-
 
 
 // Process Withdrawal (Accept or Reject)
@@ -1124,102 +1485,382 @@ exports.getAllWithdrawalRequests = async (req, res) => {
 
 
 
+// const razorpay = new Razorpay({
+//  key_id: 'rzp_test_BxtRNvflG06PTV',
+//  key_secret: 'RecEtdcenmR7Lm4AIEwo4KFr',
+// });
+
 const razorpay = new Razorpay({
- key_id: 'rzp_test_BxtRNvflG06PTV',
- key_secret: 'RecEtdcenmR7Lm4AIEwo4KFr',
+ key_id: 'rzp_live_RppTI8LWcKMPyz',
+ key_secret: 'K4LC6Csyw5CAYNF1fibZiLsB',
 });
 
 
+// assuming you already updated AmbassadorPayment schema to include baseAmount, gstAmount, totalAmount
+
 exports.capturePayment = async (req, res) => {
   try {
-    const { ambassadorId } = req.params; // ambassadorId from URL params
-    const { planId, transactionId } = req.body; // Only planId and transactionId from body
+    console.log("🔔 [Ambassador Payment Capture]");
 
-    if (!planId || !transactionId) {
-      return res.status(400).json({ message: "planId and transactionId are required" });
+    const { ambassadorId } = req.params;
+    const {
+      planId,
+      transactionId,
+      paymentMethod = "razorpay",
+      bankDetails,
+      discount = 0
+    } = req.body;
+
+    // 1️⃣ Basic validation
+    if (!ambassadorId || !planId) {
+      return res.status(400).json({
+        success: false,
+        message: "ambassadorId and planId are required",
+      });
     }
 
-    // 1️⃣ Fetch the plan
+    // 2️⃣ Fetch ambassador
+    const ambassador = await Ambassador.findById(ambassadorId);
+    if (!ambassador) {
+      return res.status(404).json({
+        success: false,
+        message: "Ambassador not found",
+      });
+    }
+
+    // 3️⃣ Check active plan
+    const now = new Date();
+    const activePlan = ambassador.purchasedPlans.find(
+      (p) => p.isActive && new Date(p.expiryDate) > now
+    );
+
+    if (activePlan) {
+      return res.status(400).json({
+        success: false,
+        message: "You already have an active plan",
+      });
+    }
+
+    // 4️⃣ Fetch plan
     const plan = await AmbassadorPlan.findById(planId);
-    if (!plan) return res.status(404).json({ message: "Plan not found" });
-
-    // 2️⃣ Capture the payment manually with Razorpay
-    const capturedPayment = await razorpay.payments.capture(transactionId, plan.price * 100, "INR");
-    if (!capturedPayment || capturedPayment.status !== "captured") {
-      return res.status(400).json({ message: "Payment capture failed" });
+    if (!plan) {
+      return res.status(404).json({
+        success: false,
+        message: "Plan not found",
+      });
     }
 
-    // 3️⃣ Find existing payment or create a new one
-    let payment = await AmbassadorPayment.findOne({ ambassadorId, planId });
+    // 5️⃣ Price calculation
+    const baseAmount = plan.price;
+    const discountAmount = discount ? (baseAmount * discount) / 100 : 0;
+    const discountedPrice = baseAmount - discountAmount;
+    const gstAmount = (discountedPrice * 18) / 100;
+    const totalAmount = discountedPrice + gstAmount;
 
     const purchaseDate = new Date();
-    const expiryDate = new Date(purchaseDate.getTime() + plan.validity * 365 * 24 * 60 * 60 * 1000); // validity in years
+    const expiryDate = new Date(
+      purchaseDate.getTime() + plan.validity * 365 * 24 * 60 * 60 * 1000
+    );
 
-    if (!payment) {
-      // Create new payment record
-      payment = new AmbassadorPayment({
+    /* ===========================
+       🏦 BANK TRANSFER FLOW
+    ============================ */
+    if (paymentMethod === "bank_transfer" || paymentMethod === "bank") {
+      if (!bankDetails) {
+        return res.status(400).json({
+          success: false,
+          message: "Bank details are required for bank transfer",
+        });
+      }
+
+const bankTransactionId = `BANK_${Date.now()}_${ambassador.fullName.replace(/\s+/g, "_")}`;
+
+      const payment = new AmbassadorPayment({
         ambassadorId,
         planId,
-        transactionId,
+        transactionId: bankTransactionId,
+        paymentMethod: "bank_transfer",
         isPurchased: true,
+        isActive: false,
         planPurchaseDate: purchaseDate,
         expiryDate,
+        baseAmount,
+        discount,
+        discountAmount,
+        discountedPrice,
+        gstAmount,
+        totalAmount,
+        paymentStatus: "pending_verification",
+        status: "pending",                     // ✅ new field
+        bankDetails,
+        submittedAt: purchaseDate,
+        verifiedAt: null,
+        verifiedBy: null,
       });
-    } else {
-      // Update existing payment record
-      payment.transactionId = transactionId;
-      payment.isPurchased = true;
-      payment.planPurchaseDate = purchaseDate;
-      payment.expiryDate = expiryDate;
+
+      await payment.save();
+
+      ambassador.purchasedPlans.push({
+        planId,
+        purchaseDate,
+        expiryDate,
+        transactionId: bankTransactionId,
+        baseAmount,
+        discount,
+        discountAmount,
+        discountedPrice,
+        gstAmount,
+        totalAmount,
+        isActive: false,
+        isPurchased: true,
+        paymentStatus: "pending_verification",
+         status: "pending",                     // ✅ new field
+        planName: plan.name,
+        planValidity: plan.validity,
+        planBenefits: plan.benefits,
+        bankDetails,
+      });
+
+      ambassador.isPlanActive = false;
+      await ambassador.save();
+
+      return res.status(200).json({
+        success: true,
+        message: "Bank payment submitted. Plan will activate after verification.",
+        data: {
+          paymentId: payment._id,
+          status: "pending_verification",
+        },
+      });
     }
+
+    /* ===========================
+       💳 RAZORPAY FLOW
+    ============================ */
+    if (!transactionId) {
+      return res.status(400).json({
+        success: false,
+        message: "transactionId is required for Razorpay",
+      });
+    }
+
+    const paymentDetails = await razorpay.payments.fetch(transactionId);
+
+    if (paymentDetails.captured) {
+      return res.status(400).json({
+        success: false,
+        message: "Payment already captured",
+      });
+    }
+
+    const capturedPayment = await razorpay.payments.capture(
+      transactionId,
+      totalAmount * 100,
+      "INR"
+    );
+
+    // Save payment
+    const payment = new AmbassadorPayment({
+      ambassadorId,
+      planId,
+      transactionId,
+      razorpayPaymentId: capturedPayment.id,
+      paymentMethod: paymentDetails.method || "razorpay",
+      isPurchased: true,
+      isActive: true,
+      planPurchaseDate: purchaseDate,
+      expiryDate,
+      baseAmount,
+      discount,
+      discountAmount,
+      discountedPrice,
+      gstAmount,
+      totalAmount,
+      paymentStatus: "completed",
+       status: "completed",                     // ✅ new field
+      verifiedAt: purchaseDate,
+      verifiedBy: "system",
+    });
 
     await payment.save();
 
-    res.status(200).json({
+    ambassador.purchasedPlans.push({
+      planId,
+      purchaseDate,
+      expiryDate,
+      transactionId,
+      razorpayPaymentId: capturedPayment.id,
+      baseAmount,
+      discount,
+      discountAmount,
+      discountedPrice,
+      gstAmount,
+      totalAmount,
+      isActive: true,
+      isPurchased: true,
+      paymentStatus: "completed",
+      planName: plan.name,
+      planValidity: plan.validity,
+      planBenefits: plan.benefits,
+    });
+
+    ambassador.isPlanActive = true;
+    ambassador.currentPlanId = planId;
+    ambassador.currentPlanExpiry = expiryDate;
+    ambassador.lastPaymentDate = purchaseDate;
+
+    await ambassador.save();
+
+    return res.status(200).json({
       success: true,
       message: "Payment captured successfully, plan activated",
-      data: payment,
     });
 
   } catch (err) {
-    console.error('❌ Error capturing payment:', err);
-    res.status(500).json({
+    console.error("❌ Ambassador payment error:", err);
+    return res.status(500).json({
       success: false,
-      message: 'Server error',
+      message: "Server error",
       error: err.message,
     });
   }
 };
 
 
+exports.updateAmbassadorPaymentStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    if (!id) return res.status(400).json({ success: false, message: "Payment id is required" });
+    if (!status) return res.status(400).json({ success: false, message: "Status is required" });
+
+    const payment = await AmbassadorPayment.findById(id);
+    if (!payment) return res.status(404).json({ success: false, message: "Payment not found" });
+
+    payment.status = status;
+
+    // ✅ Admin verification logic
+    let emailToSend = false;
+    if (status === "completed" || status === "verified") {
+      payment.verifiedAt = new Date();
+      payment.verifiedBy = "admin";
+      payment.isActive = true;
+      payment.paymentStatus = "completed";
+      emailToSend = true;
+    }
+
+    await payment.save();
+
+    // Update ambassador plan if needed
+    const ambassador = await Ambassador.findById(payment.ambassadorId);
+    if (ambassador) {
+      const planIndex = ambassador.purchasedPlans.findIndex(p => p._id.toString() === id);
+      if (planIndex !== -1) {
+        ambassador.purchasedPlans[planIndex].status = status;
+        ambassador.purchasedPlans[planIndex].isActive = status === "completed" || status === "verified";
+        ambassador.purchasedPlans[planIndex].paymentStatus = status === "completed" ? "completed" : ambassador.purchasedPlans[planIndex].paymentStatus;
+        ambassador.isPlanActive = ambassador.purchasedPlans[planIndex].isActive;
+      }
+      await ambassador.save();
+    }
+
+    // ✅ Send Email to Ambassador if payment verified
+    if (emailToSend && ambassador?.email) {
+      const subject = `Ambassador Payment Status Update - ${status.toUpperCase()}`;
+      const html = `
+      <div style="font-family: Arial, sans-serif; background:#f9f9f9; padding:20px;">
+        <div style="max-width:600px; margin:auto; background:#ffffff; padding:25px; border-radius:8px;">
+          <h2 style="color:#2e7d32; text-align:center;">🎉 Hello ${ambassador.fullName}!</h2>
+          <p style="font-size:15px; color:#333;">
+            Your payment for plan <strong>${payment.planId?.name || ""}</strong> has been <strong>verified</strong>.
+          </p>
+          <p style="font-size:15px; color:#333;">
+            ✅ Your plan is now <strong>ACTIVE</strong> and you can access all benefits.
+          </p>
+          <div style="background:#f1f8e9; padding:15px; border-radius:6px; margin:20px 0;">
+            <p style="margin:0; font-size:14px;"><strong>Plan Status:</strong> Active</p>
+            <p style="margin:6px 0 0; font-size:14px;"><strong>Access:</strong> Ambassador Dashboard Enabled</p>
+          </div>
+          <p style="font-size:14px; color:#555;">If you need assistance, contact our support team.</p>
+          <p style="margin-top:30px; font-size:14px; color:#333;">Regards,<br/><strong>Team</strong></p>
+        </div>
+      </div>
+      `;
+      await sendEmail(ambassador.email, subject, html);
+    }
+
+    return res.status(200).json({ success: true, message: "Payment status updated and email sent if verified", data: payment });
+
+  } catch (err) {
+    console.error("❌ Error updating ambassador payment status:", err);
+    return res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+
+exports.deleteAmbassadorPayment = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!id) return res.status(400).json({ success: false, message: "Payment id is required" });
+
+    const payment = await AmbassadorPayment.findById(id);
+    if (!payment) return res.status(404).json({ success: false, message: "Payment not found" });
+
+    const ambassador = await Ambassador.findById(payment.ambassadorId);
+
+    await AmbassadorPayment.findByIdAndDelete(id);
+
+    if (ambassador) {
+      ambassador.purchasedPlans = ambassador.purchasedPlans.filter(p => p._id.toString() !== id);
+      ambassador.isPlanActive = ambassador.purchasedPlans.some(p => p.isActive);
+      await ambassador.save();
+    }
+
+    return res.status(200).json({ success: true, message: "Ambassador payment deleted successfully", data: payment });
+  } catch (err) {
+    console.error("❌ Error deleting ambassador payment:", err);
+    return res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
 
 exports.getMyPlans = async (req, res) => {
   try {
-    const { ambassadorId } = req.params; // Get ambassadorId from URL params
+    const { ambassadorId } = req.params;
 
     if (!ambassadorId) {
-      return res.status(400).json({ message: "Ambassador ID is required" });
+      return res.status(400).json({
+        success: false,
+        message: "Ambassador ID is required",
+      });
     }
 
-    // Fetch all payments for this ambassador and populate the plan
-    const payments = await AmbassadorPayment.find({ ambassadorId })
-      .populate('planId'); // Populate the plan details
+    // ✅ Sirf completed payments lao
+    const payments = await AmbassadorPayment.find({
+      ambassadorId,
+      paymentStatus: "completed",
+    }).populate("planId");
 
     if (!payments || payments.length === 0) {
-      return res.status(404).json({ message: "No plans found for this ambassador" });
+      return res.status(404).json({
+        success: false,
+        message: "No active/completed plans found for this ambassador",
+        data: [],
+      });
     }
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: "Ambassador plans fetched successfully",
+      message: "Ambassador completed plans fetched successfully",
       data: payments,
     });
 
   } catch (err) {
-    console.error('❌ Error fetching ambassador plans:', err);
-    res.status(500).json({
+    console.error("❌ Error fetching ambassador plans:", err);
+    return res.status(500).json({
       success: false,
-      message: 'Server error',
+      message: "Server error",
       error: err.message,
     });
   }
@@ -1412,3 +2053,257 @@ function getAchievements(earnings, users, orders) {
   
   return achievements;
 }
+
+
+
+exports.createAccount = async (req, res) => {
+  try {
+    const { ambassadorId, ...accountData } = req.body;
+
+    // Validate ambassador exists
+    const ambassador = await Ambassador.findById(ambassadorId);
+    if (!ambassador) {
+      return res.status(404).json({
+        success: false,
+        message: 'Ambassador not found'
+      });
+    }
+
+    // Create new account
+    const account = new AmbassadorAccount({
+      ambassadorId,
+      ...accountData
+    });
+
+    await account.save();
+
+    res.status(201).json({
+      success: true,
+      message: 'Account added successfully',
+      data: account
+    });
+  } catch (error) {
+    console.error('Error creating account:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+exports.getAllAccounts = async (req, res) => {
+  try {
+    const { ambassadorId } = req.params;
+
+    const accounts = await AmbassadorAccount.find({ ambassadorId })
+      .sort({ isPrimary: -1, createdAt: -1 });
+
+    res.json({
+      success: true,
+      message: 'Accounts fetched successfully',
+      data: accounts
+    });
+  } catch (error) {
+    console.error('Error fetching accounts:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+exports.updateAccount = async (req, res) => {
+  try {
+    const { accountId } = req.params;
+    const updateData = req.body;
+
+    const account = await AmbassadorAccount.findById(accountId);
+    if (!account) {
+      return res.status(404).json({
+        success: false,
+        message: 'Account not found'
+      });
+    }
+
+    // Update account
+    Object.assign(account, updateData);
+    await account.save();
+
+    res.json({
+      success: true,
+      message: 'Account updated successfully',
+      data: account
+    });
+  } catch (error) {
+    console.error('Error updating account:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+exports.deleteAccount = async (req, res) => {
+  try {
+    const { accountId } = req.params;
+
+    const account = await AmbassadorAccount.findById(accountId);
+    if (!account) {
+      return res.status(404).json({
+        success: false,
+        message: 'Account not found'
+      });
+    }
+
+    // Check if it's the primary account
+    if (account.isPrimary) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot delete primary account. Please set another account as primary first.'
+      });
+    }
+
+    await account.deleteOne();
+
+    res.json({
+      success: true,
+      message: 'Account deleted successfully'
+    });
+  } catch (error) {
+    console.error('Error deleting account:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+
+exports.forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: "Email is required",
+      });
+    }
+
+    const ambassador = await Ambassador.findOne({
+      email: email.toLowerCase(),
+    });
+
+    if (!ambassador) {
+      return res.status(400).json({
+        success: false,
+        message: "Account not found with this email",
+      });
+    }
+
+    // 🔐 Generate 4-digit OTP
+    const otpCode = Math.floor(1000 + Math.random() * 9000).toString();
+
+    // 💾 Save OTP
+    ambassador.resetOTP = otpCode;
+    ambassador.resetOTPExpires = new Date(Date.now() + 5 * 60 * 1000); // 5 min
+    await ambassador.save();
+
+    // 📧 Email HTML
+    const html = `
+      <div style="font-family: Arial, sans-serif;">
+        <h2>VEGIFFY Password Reset OTP</h2>
+        <p>Your password reset OTP is:</p>
+        <h1 style="letter-spacing:5px;">${otpCode}</h1>
+        <p>This OTP is valid for 5 minutes.</p>
+        <p>If you did not request this, please ignore this email.</p>
+      </div>
+    `;
+
+    // 📤 Send email using existing helper
+    const emailSent = await sendEmail(
+      ambassador.email,
+      "VEGIFFY - Password Reset OTP",
+      html
+    );
+
+    if (!emailSent) {
+      return res.status(500).json({
+        success: false,
+        message: "Failed to send OTP email",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Password reset OTP sent to your email",
+      email: ambassador.email,
+      otp: otpCode, // ⚠️ testing only, production me hata dena
+    });
+
+  } catch (error) {
+    console.error("Forgot password error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  }
+};
+
+
+
+exports.resetPassword = async (req, res) => {
+  try {
+    const { email, otp, newPassword } = req.body;
+
+    if (!email || !otp || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email, OTP and new password are required'
+      });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password must be at least 6 characters long'
+      });
+    }
+
+    const admin = await Ambassador.findOne({
+      email,
+      resetOTP: otp,
+      resetOTPExpires: { $gt: Date.now() }
+    });
+
+    if (!admin) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid or expired OTP'
+      });
+    }
+
+    // Direct password save (no hash)
+    admin.password = newPassword;
+    admin.resetOTP = undefined;
+    admin.resetOTPExpires = undefined;
+
+    await admin.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Password reset successfully'
+    });
+
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};

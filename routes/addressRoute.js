@@ -7,6 +7,7 @@ const {createNotification,getAllNotifications,markAsRead,deleteNotification} = r
 const controller = require('../controllers/orderControler');
 const enquiryController = require("../controllers/enquirycontroller");
 
+
 const upload = require("../utils/up2");
 
 
@@ -31,6 +32,7 @@ router.put('/editprodutreview', controller.editProductReview);
 router.delete('/deleteproductreview', controller.deleteProductReview);
 router.get("/getsingleproduct/:productId", controller.getSingleProduct);
 router.get('/orders', controller.getAllOrders);
+router.get('/resturantorders', controller.getOrdersByRestaurant);
 router.get('/userorders/:userId', controller.getOrdersByUserId);
 router.get('/userpreviousorders/:userId', controller.getPreviousOrdersByUserId);
 router.get("/acceptedorders/:userId", controller.getAcceptedOrdersByUserId);
@@ -39,6 +41,9 @@ router.put('/orders/:orderId', controller.updateOrderByUserId);
 router.delete('/orders/user/:userId/:orderId', controller.deleteOrderByUserId);
 
 router.get("/search", controller.searchRestaurantsAndProducts);
+
+router.get("/orderspayment", controller.getOrdersByPaymentStatus);
+
 
 
 // Vendor accepts order
@@ -68,6 +73,9 @@ router.get('/orders/today/:userId', controller.getTodaysBookingsByUserId);
 // Get orders by status
 router.get('/orders/:userId/:status', controller.getOrdersByStatus);
 router.get('/delivered-orders/:deliveryBoyId', controller.getAllDeliveredOrders);
+
+
+router.put('/cancel-order/:userId/:orderId', controller.cancelOrder);
 
 
 
@@ -122,6 +130,7 @@ router.put("/editrestureview", controller.editRestaurantReview);
 
 // Delete review
 router.delete("/deleterestureview", controller.deleteRestaurantReview);
+
 
 
 

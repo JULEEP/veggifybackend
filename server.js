@@ -53,6 +53,17 @@ mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log('✅ MongoDB Connected'))
   .catch((err) => console.error('MongoDB Error:', err));
 
+
+
+  // CORS setup for specific origin
+app.use(cors({
+  origin: ['https://veegify-web.web.app', 'http://localhost:3000', 'https://panel.vegiffyy.com', 'https://vendor.vegiffyy.com'],  // Allow both URLs
+  methods: ['GET', 'POST'],
+  credentials: true
+}));
+
+
+
 // Define Routes
 app.use('/api', addressRoutes);
 app.use('/api', authRoutes);
@@ -140,6 +151,6 @@ io.on('connection', (socket) => {
 // Start the server
 const PORT = process.env.PORT || 5050;
 server.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+console.log(`🚀 Server running at http://localhost:${PORT}`);
   console.log(`🔌 Socket.IO server is ready`);
 });

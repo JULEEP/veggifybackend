@@ -227,6 +227,7 @@ exports.getRecommendedByRestaurantId = async (req, res) => {
     }
 
     const restaurantStatus = restaurant.status || "unknown";
+    const restaurantImage = restaurant.image?.url || "";
 
     // Calculate totalRatings and totalReviews
     let totalRatings = 0;
@@ -273,6 +274,7 @@ exports.getRecommendedByRestaurantId = async (req, res) => {
           recommendedList.push({
             productId: product._id,
             restaurantName: product.restaurantName,
+            restaurantImage,  // ✅ Include restaurant image
             locationName: product.locationName,
             type: product.type,
             rating: product.rating,
@@ -332,6 +334,7 @@ exports.getRecommendedByRestaurantId = async (req, res) => {
       success: true,
       totalRecommendedItems: recommendedList.length,
       restaurantStatus,  // <-- TOP LEVEL after totalRecommendedItems
+      restaurantImage,   // ✅ Include restaurant image top-level
       recommendedProducts: recommendedList,
       restaurantReviews: restaurant.reviews || [],
       totalRatings,
@@ -350,12 +353,17 @@ exports.getRecommendedByRestaurantId = async (req, res) => {
 
 
 
+
 exports.updateRestaurantProduct = async (req, res) => {
   try {
-    const { productId } = req.params;
+    const { productId, recommendedId } = req.params;
 
     if (!productId || !mongoose.Types.ObjectId.isValid(productId)) {
       return res.status(400).json({ success: false, message: "Valid productId is required." });
+    }
+
+    if (!recommendedId || !mongoose.Types.ObjectId.isValid(recommendedId)) {
+      return res.status(400).json({ success: false, message: "Valid recommendedId is required." });
     }
 
     // Fetch existing product
@@ -364,95 +372,60 @@ exports.updateRestaurantProduct = async (req, res) => {
       return res.status(404).json({ success: false, message: "Restaurant Product not found." });
     }
 
-    // Start with existing product data
-    let updateData = { ...existingProduct.toObject() };
-
-    // Update only the fields that are provided in request
-    if (req.body.type) {
-      updateData.type = JSON.parse(req.body.type);
-    }
-
-    if (req.body.status) {
-      updateData.status = req.body.status;
-    }
-
-    if (req.body.viewCount) {
-      updateData.viewCount = parseInt(req.body.viewCount);
-    }
-
-    // Handle recommended updates - only update provided fields
-    if (req.body.recommended) {
-      let recommendedUpdates = [];
-      if (typeof req.body.recommended === "string") {
-        recommendedUpdates = JSON.parse(req.body.recommended);
-      } else if (Array.isArray(req.body.recommended)) {
-        recommendedUpdates = req.body.recommended;
-      }
-
-      // Image upload handling
-      let recommendedFiles = [];
-      if (req.files && req.files.recommendedImages) {
-        recommendedFiles = Array.isArray(req.files.recommendedImages)
-          ? req.files.recommendedImages
-          : [req.files.recommendedImages];
-      }
-
-      // Update only the fields that are provided in recommended
-      updateData.recommended = await Promise.all(
-        existingProduct.recommended.map(async (existingItem, index) => {
-          const itemUpdate = recommendedUpdates[index] || {};
-          let imageUrl = existingItem.image;
-
-          // Handle image upload if new image provided
-          if (recommendedFiles[index]) {
-            try {
-              imageUrl = await uploadToCloudinary(
-                recommendedFiles[index],
-                "restaurant-recommended"
-              );
-            } catch (err) {
-              console.error("Cloudinary Upload Error:", err);
-            }
-          }
-
-          return {
-            ...existingItem.toObject(),
-
-            ...(itemUpdate.name && { name: itemUpdate.name }),
-            ...(itemUpdate.price && { price: parseFloat(itemUpdate.price) }),
-            ...(itemUpdate.halfPlatePrice && { halfPlatePrice: parseFloat(itemUpdate.halfPlatePrice) }),
-            ...(itemUpdate.fullPlatePrice && { fullPlatePrice: parseFloat(itemUpdate.fullPlatePrice) }),
-            ...(itemUpdate.discount && { discount: parseFloat(itemUpdate.discount) }),
-            ...(itemUpdate.tags && { tags: Array.isArray(itemUpdate.tags) ? itemUpdate.tags : [] }),
-            ...(itemUpdate.content && { content: itemUpdate.content }),
-            ...(itemUpdate.category && { category: itemUpdate.category }),
-            ...(itemUpdate.preparationTime && { preparationTime: itemUpdate.preparationTime }),
-
-            // ⭐ FIXED HERE — update regardless of active/inactive
-            ...(itemUpdate.status !== undefined && { status: itemUpdate.status }),
-
-            ...(imageUrl !== existingItem.image && { image: imageUrl }),
-          };
-
-        })
-      );
-    }
-
-    // Update product
-    const updatedProduct = await RestaurantProduct.findByIdAndUpdate(
-      productId,
-      { $set: updateData },
-      { new: true, runValidators: true }
+    // Find the specific recommended item
+    const existingItemIndex = existingProduct.recommended.findIndex(
+      (item) => item._id.toString() === recommendedId
     );
+
+    if (existingItemIndex === -1) {
+      return res.status(404).json({ success: false, message: "Recommended item not found." });
+    }
+
+    let itemUpdate = {};
+    if (req.body.recommended) {
+      itemUpdate = typeof req.body.recommended === "string" ? JSON.parse(req.body.recommended) : req.body.recommended;
+    }
+
+    // Handle image upload
+    let imageUrl = existingProduct.recommended[existingItemIndex].image;
+    if (req.files && req.files.recommendedImage) {
+      try {
+        imageUrl = await uploadToCloudinary(req.files.recommendedImage, "restaurant-recommended");
+      } catch (err) {
+        console.error("Cloudinary Upload Error:", err);
+      }
+    }
+
+    // Update only provided fields
+    const updatedItem = {
+      ...existingProduct.recommended[existingItemIndex].toObject(),
+      ...(itemUpdate.name && { name: itemUpdate.name }),
+      ...(itemUpdate.price !== undefined && { price: parseFloat(itemUpdate.price) }),
+      ...(itemUpdate.halfPlatePrice !== undefined && { halfPlatePrice: parseFloat(itemUpdate.halfPlatePrice) }),
+      ...(itemUpdate.fullPlatePrice !== undefined && { fullPlatePrice: parseFloat(itemUpdate.fullPlatePrice) }),
+      ...(itemUpdate.discount !== undefined && { discount: parseFloat(itemUpdate.discount) }),
+      ...(itemUpdate.tags && { tags: Array.isArray(itemUpdate.tags) ? itemUpdate.tags : [] }),
+      ...(itemUpdate.content && { content: itemUpdate.content }),
+      ...(itemUpdate.category && { category: itemUpdate.category }),
+      ...(itemUpdate.preparationTime && { preparationTime: itemUpdate.preparationTime }),
+      ...(itemUpdate.status !== undefined && { status: itemUpdate.status }),
+      ...(imageUrl !== existingProduct.recommended[existingItemIndex].image && { image: imageUrl }),
+    };
+
+    // Update the specific item
+    existingProduct.recommended[existingItemIndex] = updatedItem;
+
+    // Save product
+    const updatedProduct = await existingProduct.save();
 
     return res.status(200).json({
       success: true,
-      message: "Restaurant Product updated successfully",
+      message: "Recommended item updated successfully",
       data: updatedProduct,
     });
 
   } catch (error) {
-    console.error("❌ Update Restaurant Product Error:", error);
+    console.error("❌ Update Recommended Item Error:", error);
     return res.status(500).json({
       success: false,
       message: "Server Error",
@@ -513,5 +486,241 @@ exports.deleteRecommendedByProductId = async (req, res) => {
   } catch (error) {
     console.error("Delete Recommended Error:", error);
     res.status(500).json({ success: false, message: "Server Error", error: error.message });
+  }
+};
+
+
+exports.getAllRestaurantProductsBySearch = async (req, res) => {
+  try {
+    const { search } = req.query;
+    console.log("Search Query Received:", search);
+
+    // If no search query, return all restaurant products
+    if (!search || search.trim() === '') {
+      console.log("No search query, returning all restaurant products");
+      const allProducts = await RestaurantProduct.find()
+        .sort({ createdAt: -1 })
+        .populate('categoryId', 'name')
+        .populate({
+          path: 'restaurantId',
+          select: 'restaurantName email phone locationName description rating image walletBalance status mobile commission',
+          model: 'Restaurant'
+        });
+      
+      return res.status(200).json({ 
+        success: true, 
+        data: allProducts,
+        total: allProducts.length,
+        message: "All restaurant products fetched successfully"
+      });
+    }
+    
+    const searchTerm = search.trim().toLowerCase();
+    const searchRegex = new RegExp(searchTerm, 'i'); // Case-insensitive regex
+    
+    console.log("Searching for:", searchTerm);
+    
+    // Pehle restaurant khud search karo (Restaurant model se)
+    const Restaurant = mongoose.model('Restaurant');
+    const restaurants = await Restaurant.find({
+      $or: [
+        { restaurantName: searchRegex },
+        { locationName: searchRegex },
+        { description: searchRegex },
+        { email: searchRegex },
+        { mobile: searchRegex }
+      ]
+    }).select('restaurantName email phone locationName description rating image walletBalance status mobile commission');
+    
+    console.log("Found restaurants:", restaurants.length);
+    
+    // Ab restaurant products search karo
+    const searchQuery = {
+      $or: [
+        // Restaurant details (string fields)
+        { restaurantName: searchRegex },
+        { locationName: searchRegex },
+        
+        // Recommended items string fields
+        { 'recommended.name': searchRegex },
+        { 'recommended.tags': searchRegex },
+        { 'recommended.content': searchRegex },
+        { 'recommended.preparationTime': searchRegex },
+        { 'recommended.status': searchRegex },
+        
+        // Menu items string fields
+        { 'menu.name': searchRegex },
+        { 'menu.status': searchRegex },
+        
+        // Reviews (string field)
+        { 'recommended.reviews.comment': searchRegex },
+        
+        // Time and distance (string fields)
+        { 'timeAndKm.time': searchRegex },
+        { 'timeAndKm.distance': searchRegex },
+        
+        // Status (string field)
+        { status: searchRegex }
+      ]
+    };
+    
+    // Restaurant products find karo with restaurant details
+    const restaurantProducts = await RestaurantProduct.find(searchQuery)
+      .sort({ createdAt: -1 })
+      .populate('categoryId', 'name')
+      .populate({
+        path: 'restaurantId',
+        select: 'restaurantName email phone locationName description rating image walletBalance status mobile commission',
+        model: 'Restaurant'
+      });
+    
+    console.log("Found restaurant products:", restaurantProducts.length);
+    
+    // Combined results banayenge
+    let results = [];
+    
+    // 1. Pehle restaurant details add karo (agar koi restaurant mila)
+    if (restaurants.length > 0) {
+      restaurants.forEach(restaurant => {
+        results.push({
+          type: 'restaurant',
+          data: restaurant.toObject(),
+          restaurantDetails: restaurant.toObject(),
+          relevanceScore: 10, // Highest score for direct restaurant match
+          searchMatch: true
+        });
+      });
+    }
+    
+    // 2. Phir restaurant products add karo
+    if (restaurantProducts.length > 0) {
+      restaurantProducts.forEach(product => {
+        // Check if this product's restaurant already added
+        const restaurantExists = results.some(r => 
+          r.type === 'restaurant' && 
+          r.data._id.toString() === product.restaurantId?._id?.toString()
+        );
+        
+        // Calculate relevance score for product
+        const productData = product.toObject();
+        let relevanceScore = 0;
+        
+        // Check exact matches in important fields
+        if (productData.restaurantName?.toLowerCase().includes(searchTerm)) {
+          relevanceScore += 5;
+        }
+        if (productData.locationName?.toLowerCase().includes(searchTerm)) {
+          relevanceScore += 4;
+        }
+        
+        // Check in recommended items
+        if (productData.recommended && Array.isArray(productData.recommended)) {
+          productData.recommended.forEach(item => {
+            if (item.name?.toLowerCase().includes(searchTerm)) relevanceScore += 3;
+            if (item.content?.toLowerCase().includes(searchTerm)) relevanceScore += 2;
+            if (item.tags && Array.isArray(item.tags)) {
+              if (item.tags.some(tag => tag.toLowerCase().includes(searchTerm))) {
+                relevanceScore += 3;
+              }
+            }
+          });
+        }
+        
+        // Check in menu items
+        if (productData.menu && Array.isArray(productData.menu)) {
+          productData.menu.forEach(item => {
+            if (item.name?.toLowerCase().includes(searchTerm)) relevanceScore += 2;
+          });
+        }
+        
+        // Add restaurant details to product if not already in results
+        let restaurantDetails = null;
+        if (product.restaurantId) {
+          restaurantDetails = product.restaurantId.toObject ? product.restaurantId.toObject() : product.restaurantId;
+        }
+        
+        results.push({
+          type: 'product',
+          data: productData,
+          restaurantDetails: restaurantDetails,
+          relevanceScore: relevanceScore,
+          searchMatch: relevanceScore > 0
+        });
+      });
+    }
+    
+    // Sort by relevance score (highest first)
+    results.sort((a, b) => b.relevanceScore - a.relevanceScore);
+    
+    // Filter out items with no match (relevanceScore === 0)
+    const filteredResults = results.filter(item => item.relevanceScore > 0);
+    
+    console.log("Total filtered results:", filteredResults.length);
+    
+    if (filteredResults.length === 0) {
+      return res.status(200).json({
+        success: true,
+        data: [],
+        total: 0,
+        searchQuery: searchTerm,
+        message: `No restaurants or products found matching "${searchTerm}"`
+      });
+    }
+    
+    // Group results by restaurant for better organization
+    const groupedResults = {};
+    filteredResults.forEach(item => {
+      if (item.type === 'restaurant') {
+        const restaurantId = item.data._id.toString();
+        if (!groupedResults[restaurantId]) {
+          groupedResults[restaurantId] = {
+            restaurant: item.data,
+            products: []
+          };
+        }
+      }
+    });
+    
+    // Add products to their respective restaurants
+    filteredResults.forEach(item => {
+      if (item.type === 'product' && item.restaurantDetails) {
+        const restaurantId = item.restaurantDetails._id?.toString();
+        if (restaurantId && groupedResults[restaurantId]) {
+          groupedResults[restaurantId].products.push(item.data);
+        } else if (restaurantId) {
+          // Agar restaurant group nahi bana hai, toh banao
+          groupedResults[restaurantId] = {
+            restaurant: item.restaurantDetails,
+            products: [item.data]
+          };
+        }
+      }
+    });
+    
+    // Convert grouped results to array
+    const finalResults = Object.values(groupedResults);
+    
+    res.status(200).json({ 
+      success: true, 
+      data: finalResults,
+      total: finalResults.length,
+      searchQuery: searchTerm,
+      searchPerformed: true,
+      message: `Found ${finalResults.length} restaurants/products matching "${searchTerm}"`,
+      breakdown: {
+        restaurants: results.filter(r => r.type === 'restaurant').length,
+        products: results.filter(r => r.type === 'product').length,
+        groupedResults: finalResults.length
+      }
+    });
+    
+  } catch (error) {
+    console.error("Search Restaurant Products Error:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: "Server Error",
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 };

@@ -67,6 +67,11 @@ const orderSchema = new mongoose.Schema(
     status: { type: String, enum: ['active', 'pending', 'inactive'], }
   }],
 
+  amountSavedOnOrder: {
+    type: Number,
+    default: 0
+  },
+
   // ✅ Location of the restaurant (for pickup)
   restaurantLocation: {
     type: {
@@ -148,6 +153,80 @@ const orderSchema = new mongoose.Schema(
       default: 0
     }, 
     distanceKm: { type: Number, default: 0 },
+
+    // Add these fields:
+totalDiscount: { type: Number, default: 0 },
+gstCharges: { type: Number, default: 0 },
+packingCharges: { type: Number, default: 0 },
+platformCharge: { type: Number, default: 0 },
+gstOnDelivery: { type: Number, default: 0 },
+isDeliveryFree: { type: Boolean, default: false },
+freeDeliveryThreshold: { type: Number, default: 199 },
+perKmRate: { type: Number, default: 0 },
+chargeCalculations: { type: mongoose.Schema.Types.Mixed, default: {} },
+finalAmount: { type: Number, default: 0 }, // Alias for totalPayable
+
+// In products array, make sure originalPrice is there:
+originalPrice: { type: Number, default: 0 },
+
+    chargeCalculations: {
+  deliveryCharge: {
+    baseAmount: { type: Number, default: 0 },
+    distanceCharge: { type: Number, default: 0 },
+    freeDeliveryApplied: { type: Boolean, default: false }
+  },
+  gstOnFood: {
+    rate: { type: Number, default: 0 },
+    amount: { type: Number, default: 0 }
+  },
+  packingCharges: {
+    rate: { type: Number, default: 0 },
+    amount: { type: Number, default: 0 }
+  },
+  platformCharge: {
+    rate: { type: Number, default: 0 },
+    amount: { type: Number, default: 0 }
+  },
+  gstOnDelivery: {
+    rate: { type: Number, default: 0 },
+    amount: { type: Number, default: 0 }
+  }
+},
+
+appliedCharges: {
+  gstCharges: {
+    type: { type: String, default: 'gst_charges' },
+    amount: { type: Number, default: 0 },
+    chargeType: { type: String, default: 'percentage' },
+    unit: { type: String, default: '%' }
+  },
+  packingCharges: {
+    type: { type: String, default: 'packing_charges' },
+    amount: { type: Number, default: 0 },
+    chargeType: { type: String, default: 'fixed' },
+    unit: { type: String, default: '₹' }
+  },
+  platformCharge: {
+    type: { type: String, default: 'platform_charge' },
+    amount: { type: Number, default: 0 },
+    chargeType: { type: String, default: 'percentage' },
+    unit: { type: String, default: '%' }
+  },
+  deliveryCharge: {
+    type: { type: String, default: 'delivery_charge' },
+    amount: { type: Number, default: 0 },
+    chargeType: { type: String, default: 'fixed' },
+    deliveryMethod: { type: String, default: 'per_km' },
+    perKmRate: { type: Number, default: 0 },
+    unit: { type: String, default: '₹' }
+  },
+  gstOnDelivery: {
+    type: { type: String, default: 'gst_on_delivery' },
+    amount: { type: Number, default: 18 },
+    chargeType: { type: String, default: 'percentage' },
+    unit: { type: String, default: '%' }
+  }
+},
    
   },
   {

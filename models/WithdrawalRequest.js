@@ -8,20 +8,45 @@ const withdrawalRequestSchema = new mongoose.Schema(
     },
     amount: {
       type: Number,
-      min: 1,
+    },
+    processingFee: {
+      type: Number,
+    },
+    netAmount: {
+      type: Number,
+      required: true
     },
     accountDetails: {
-      bankName: { type: String,},
+      bankName: { type: String, },
       accountNumber: { type: String, },
       ifsc: { type: String, },
       accountHolder: { type: String, },
+      accountType: { type: String },
+      branchName: { type: String }
     },
     status: {
       type: String,
-      enum: ["pending", "approved", "rejected"],
+      enum: ["pending", "approved", "rejected", "processing", "completed"],
       default: "pending",
     },
-    remarks: { type: String }, // optional, admin can add notes
+    approvedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User"
+    },
+    approvedAt: {
+      type: Date
+    },
+    remarks: { 
+      type: String,
+      default: ''
+    },
+    transactionId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Transaction"
+    },
+    paymentReference: {
+      type: String
+    }
   },
   { timestamps: true }
 );

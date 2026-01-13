@@ -10,10 +10,12 @@ router.get("/restaurant-products/user/:userId", controller.getCartByUserId);
 router.get("/restaurant-product/:categoryId", controller.getRestaurantProductsByCategoryId);
 router.get("/restaurant-products/:restaurantId", controller.getRecommendedByRestaurantId);
 
-router.put("/restaurant-product/:productId", controller.updateRestaurantProduct );
+router.put("/restaurant-product/:productId/:recommendedId", controller.updateRestaurantProduct );
 router.delete("/restaurant-product/:productId", controller.deleteRestaurantProduct);
 // Delete recommended item
-router.delete("/restaurant-products/:productId/recommended/:recommendedId",controller.deleteRecommendedByProductId);
+router.delete("/restaurant-products/:productId/:recommendedId",controller.deleteRecommendedByProductId);
+router.get("/searchpro", controller.getAllRestaurantProductsBySearch);
+
 
 
 

@@ -12,6 +12,10 @@ router.post('/login', adminController.login);
 router.post('/register', adminController.register)
 router.get('/getprofile/:adminId', adminController.getAdminByAdminId);
 
+
+router.get('/getwallet/:adminId', adminController.getAdminWallet);
+
+
 // Get Profile by adminId
 router.get('/profile/:adminId', adminController.getProfile);
 
@@ -62,6 +66,9 @@ router.get('/get-all', adminController.getAllAmounts);
 router.put('/update/:id', adminController.updateAmount);
 router.delete('/delete/:id', adminController.deleteAmount);
 
+router.get('/myprofile/:staffId', adminController.getStaffProfile);
+
+
 // Create a new plan
 router.post('/createplan', adminController.createPlan);
 router.get('/allpnals', adminController.getAllPlans);
@@ -110,6 +117,32 @@ router.put("/updateCommission/:id", adminController.updateCommission);
 // Delete a commission by ID
 router.delete("/deleteCommission/:id", adminController.deleteCommission);
 
+
+
+router.post('/addReferralReward', adminController.addReferralReward);
+
+router.get('/getReferralRewards', adminController.getReferralRewards);
+
+// Update charge
+router.put('/updateReferralReward/:id', adminController.updateReferralReward);
+
+// Delete charge
+router.delete('/deleteReferralReward/:id', adminController.deleteReferralReward);
+
+router.post('/forgot-password', adminController.forgotPassword);
+router.post('/reset-password', adminController.resetPassword);
+
+
+// Add credential
+router.post('/addcredential', adminController.addCredential);
+
+// Get all credentials
+
+// Update credential
+router.put('/updatecredential/:credentialId', adminController.updateCredential);
+
+// Delete credential
+router.delete('/deletecredential/:credentialId', adminController.deleteCredential);
 
 
 module.exports = router;

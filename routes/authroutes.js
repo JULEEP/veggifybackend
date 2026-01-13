@@ -33,11 +33,21 @@ const {
   resendOtp,
   updateUserSimply,
   deleteAccount,
-  confirmDeleteAccount
+  confirmDeleteAccount,
+  deleteUser,
+  submitWebsiteEnquiry,
+  getAllWebsiteEnquiries,
+  setMaintenance,
+  getMaintenanceStatus,
+  getUserWallet,
+  getPendinBanners,
+  getPendingBanners,
+  updateEnquiry,
+  deleteEnquiry
   
 } = require('../controllers/userController');
 const upload = require('../utils/multer');
-const { deleteUser } = require('../controllers/adminController');
+const { getAllCredentials } = require('../controllers/adminController');
 
 
 // 🔐 Authentication Flow
@@ -101,6 +111,7 @@ router.post('/banner', createBanner);
 
 // Get all banners
 router.get('/banners', getAllBanners);
+router.get('/pendingbanners', getPendingBanners);
 
 // Get single banner by ID
 router.get('/banners/:id', getBannerById);
@@ -126,6 +137,28 @@ router.get('/confirm-delete-account/:token', confirmDeleteAccount);
 // Route: Delete user by ID (admin)
 router.delete('/delete-user/:userId', deleteUser);
 
+
+
+// POST route to handle the website enquiry submission
+router.post("/submit-enquiry", submitWebsiteEnquiry);
+
+// GET route to fetch all enquiries
+router.get("/get-all-enquiries", getAllWebsiteEnquiries);
+
+// Update enquiry status
+router.put('/update-enquiry/:id', updateEnquiry);
+
+// Delete enquiry
+router.delete('/delete-enquiry/:id', deleteEnquiry);
+
+router.post("/setmaintenance", setMaintenance);
+
+// Get current maintenance status (GET)
+router.get("/maintenance-status", getMaintenanceStatus);
+
+router.get('/userwallet/:userId', getUserWallet);
+
+router.get('/getallcredential', getAllCredentials);
 
 
 module.exports = router;

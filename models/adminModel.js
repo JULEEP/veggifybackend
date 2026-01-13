@@ -6,17 +6,39 @@ const adminSchema = new mongoose.Schema({
     required: true,
     unique: true
   },
-   name: {
+  name: {
     type: String,
   },
-   email: {
+  email: {
     type: String,
   },
+  otp: { type: String },
+  otpExpiry: { type: Date },
   password: {
     type: String,
-    minlength: 6, // Only validated if password exists
-    // DO NOT add required: true
+    minlength: 6,
   },
+ walletBalance: {
+    type: Number,
+    default: 0,
+  },
+  // Forgot Password OTP fields
+  resetOTP: {
+    type: String
+  },
+  resetOTPExpires: {
+    type: Date
+  },
+    otp: {
+    type: String
+  },
+  otpExpires: {
+    type: Date
+  },
+  // CHANGE HERE: String array rakh lo
+  walletTransactions: [{
+    type: String // Simply String array rakh do
+  }],
   isOtpVerified: {
     type: Boolean,
     default: false
