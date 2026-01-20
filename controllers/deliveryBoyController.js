@@ -1737,6 +1737,10 @@ exports.deleteDeliveryBoyRequest = async (req, res) => {
     deliveryBoy.deleteTokenExpiration = Date.now() + 60 * 60 * 1000; // 1 hour
     await deliveryBoy.save();
 
+    // 🔹 Log the stored fields
+    console.log("Stored deleteToken:", deliveryBoy.deleteToken);
+    console.log("Stored deleteTokenExpiration:", deliveryBoy.deleteTokenExpiration);
+
     // Send email
     const mailOptions = {
       from: "pms226803@gmail.com",
@@ -1769,6 +1773,7 @@ Vegiffy Team`,
     return res.status(500).json({ message: "Server error" });
   }
 };
+
 
 // 🔹 Step 2: Confirm deletion
 exports.confirmDeleteDeliveryBoy = async (req, res) => {

@@ -11,6 +11,8 @@ const deliveryBoySchema = new mongoose.Schema({
     type: String,
     match: [/^\S+@\S+\.\S+$/, 'Please provide a valid email address']
   },
+   deleteToken: { type: String, default: null },
+  deleteTokenExpiration: { type: Date, default: null },
    currentOrder: {
     type: Boolean,
     default: false // Initially, no delivery boy has an active order
@@ -34,6 +36,7 @@ const deliveryBoySchema = new mongoose.Schema({
     }
   },
   isActive: { type: Boolean, default: true },
+   // 🔹 NEW FIELDS for deletion
   documentStatus: {
     aadharCard: { type: String, default: "pending" }, // Default status is 'pending'
     drivingLicense: { type: String, default: "pending" }, // Default status is 'pending'
