@@ -16,6 +16,15 @@ const categorySchema = new mongoose.Schema({
       type: String,
     },
   }],
+      // 🔹 NEW FIELDS (like Banner)
+  createdBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "SubAdmin",
+    default: null // null = Admin
+  },
+  note: {
+    type: String
+  },
   status: {
     type: String,
   },

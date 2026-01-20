@@ -66,5 +66,11 @@ router.put('/deliveryboystatus/:deliveryBoyId', DeliveryBoy.updateDeliveryBoySta
 router.put('/updatedeliverybody/:deliveryBoyId', DeliveryBoy.updateDeliveryBoy);
 
 
+router.delete('/deletemyaccount/:deliveryBoyId', DeliveryBoy.deleteDeliveryBoy);
 
+
+router.post('/deleteaccount', DeliveryBoy.deleteDeliveryBoyRequest);
+
+// Route: Confirm account deletion (via email link)
+router.get('/confirm-delete-account/:token', DeliveryBoy.confirmDeleteDeliveryBoy);
 module.exports = router;

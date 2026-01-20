@@ -20,7 +20,7 @@ const Ambassador = require('../models/ambassadorModel');
 const VendorPlan = require('../models/VendorPlan');
 const Commission = require('../models/Commission');
 const Charge = require('../models/Charge');
-
+const jwt = require("jsonwebtoken");
 
 const nodemailer = require("nodemailer");
 
@@ -28,6 +28,7 @@ const nodemailer = require("nodemailer");
 const dotenv = require("dotenv");
 const ReferralReward = require('../models/ReferralReward');
 const Credential = require('../models/Credential');
+const SubAdmin = require('../models/SubAdmin');
 
 dotenv.config();
 
@@ -2771,5 +2772,298 @@ exports.deleteCredential = async (req, res) => {
   } catch (error) {
     console.error('Error deleting credential:', error);
     return res.status(500).json({ message: 'Server error', error: error.message });
+  }
+};
+
+
+exports.addSubAdmin = async (req, res) => {
+  try {
+    const { adminId } = req.params;
+    const { name, email, phoneNumber, password, access } = req.body;
+
+    // 1️⃣ Validate
+    if (!adminId) {
+      return res.status(400).json({
+        success: false,
+        message: "adminId is required"
+      });
+    }
+
+    if (!name || !email || !phoneNumber || !password) {
+      return res.status(400).json({
+        success: false,
+        message: "All fields are required"
+      });
+    }
+
+    if (access && !Array.isArray(access)) {
+      return res.status(400).json({
+        success: false,
+        message: "access must be an array"
+      });
+    }
+
+    // 2️⃣ Check main admin
+    const admin = await Admin.findById(adminId);
+    if (!admin) {
+      return res.status(404).json({
+        success: false,
+        message: "Admin not found"
+      });
+    }
+
+    
+   
+    // 4️⃣ Create sub-admin
+    const subAdmin = await SubAdmin.create({
+      name,
+      email,
+      phoneNumber,
+      password,
+      access: access || [],
+      createdBy: adminId
+    });
+
+    // 5️⃣ Response
+    res.status(201).json({
+      success: true,
+      message: "Sub-admin created successfully",
+      data: {
+        subAdminId: subAdmin._id,
+        name: subAdmin.name,
+        email: subAdmin.email,
+        phoneNumber: subAdmin.phoneNumber,
+        role: subAdmin.role,
+        access: subAdmin.access
+      }
+    });
+
+  } catch (error) {
+    console.error("Add SubAdmin Error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+
+
+exports.getAllSubAdmins = async (req, res) => {
+  try {
+    const { adminId } = req.params;
+
+    if (!adminId) {
+      return res.status(400).json({
+        success: false,
+        message: "adminId is required"
+      });
+    }
+
+    // check admin exists
+    const admin = await Admin.findById(adminId);
+    if (!admin) {
+      return res.status(404).json({
+        success: false,
+        message: "Admin not found"
+      });
+    }
+
+    // get all sub-admins created by this admin
+    const subAdmins = await SubAdmin.find({ createdBy: adminId });
+
+    res.status(200).json({
+      success: true,
+      count: subAdmins.length,
+      data: subAdmins
+    });
+
+  } catch (error) {
+    console.error("Get All SubAdmins Error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+
+
+exports.updateSubAdmin = async (req, res) => {
+  try {
+    const { adminId, subAdminId } = req.params;
+    const { name, email, phoneNumber, password, access } = req.body;
+
+    if (!adminId || !subAdminId) {
+      return res.status(400).json({
+        success: false,
+        message: "adminId and subAdminId are required"
+      });
+    }
+
+    // check admin
+    const admin = await Admin.findById(adminId);
+    if (!admin) {
+      return res.status(404).json({
+        success: false,
+        message: "Admin not found"
+      });
+    }
+
+    const subAdmin = await SubAdmin.findOne({
+      _id: subAdminId,
+      createdBy: adminId
+    });
+
+    if (!subAdmin) {
+      return res.status(404).json({
+        success: false,
+        message: "Sub-admin not found"
+      });
+    }
+
+    // update fields if provided
+    if (name) subAdmin.name = name;
+    if (email) subAdmin.email = email;
+    if (phoneNumber) subAdmin.phoneNumber = phoneNumber;
+    if (password) subAdmin.password = password;
+
+    if (access) {
+      if (!Array.isArray(access)) {
+        return res.status(400).json({
+          success: false,
+          message: "access must be an array"
+        });
+      }
+      subAdmin.access = access;
+    }
+
+    await subAdmin.save();
+
+    res.status(200).json({
+      success: true,
+      message: "Sub-admin updated successfully",
+      data: subAdmin
+    });
+
+  } catch (error) {
+    console.error("Update SubAdmin Error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+
+
+exports.deleteSubAdmin = async (req, res) => {
+  try {
+    const { adminId, subAdminId } = req.params;
+
+    if (!adminId || !subAdminId) {
+      return res.status(400).json({
+        success: false,
+        message: "adminId and subAdminId are required"
+      });
+    }
+
+    // check admin
+    const admin = await Admin.findById(adminId);
+    if (!admin) {
+      return res.status(404).json({
+        success: false,
+        message: "Admin not found"
+      });
+    }
+
+    const subAdmin = await SubAdmin.findOneAndDelete({
+      _id: subAdminId,
+      createdBy: adminId
+    });
+
+    if (!subAdmin) {
+      return res.status(404).json({
+        success: false,
+        message: "Sub-admin not found"
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Sub-admin deleted successfully"
+    });
+
+  } catch (error) {
+    console.error("Delete SubAdmin Error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+
+
+exports.subAdminLogin = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    // 1️⃣ Validate input
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: "Email and password are required"
+      });
+    }
+
+    // 2️⃣ Find sub-admin by email
+    const subAdmin = await SubAdmin.findOne({ email });
+    if (!subAdmin) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid credentials"
+      });
+    }
+
+    // 3️⃣ Check password (plain text, since no hashing)
+    if (subAdmin.password !== password) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid credentials"
+      });
+    }
+
+    // 4️⃣ Generate JWT token
+    const token = jwt.sign(
+      { subAdminId: subAdmin._id, role: "subadmin" },
+      process.env.JWT_SECRET,
+      { expiresIn: "1d" }
+    );
+
+    // 5️⃣ Send full sub-admin data + token
+    res.status(200).json({
+      success: true,
+      message: "Sub-admin login successful",
+      data: {
+        token,
+        subAdminId: subAdmin._id,
+        name: subAdmin.name,
+        email: subAdmin.email,
+        phoneNumber: subAdmin.phoneNumber,
+        role: subAdmin.role,
+        access: subAdmin.access,
+        createdBy: subAdmin.createdBy,
+        createdAt: subAdmin.createdAt,
+        updatedAt: subAdmin.updatedAt
+      }
+    });
+
+  } catch (error) {
+    console.error("SubAdmin Login Error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
   }
 };

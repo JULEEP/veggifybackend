@@ -8,6 +8,10 @@ const mongoose = require("mongoose");
 const notificationModel = require("../models/notificationModel");
 const Withdrawal = require("../models/Withdrawal");
 const orderModel = require("../models/orderModel");
+const nodemailer = require("nodemailer");
+const crypto = require('crypto');
+const dotenv = require("dotenv");
+
 
 
 // Haversine formula
@@ -1652,5 +1656,142 @@ exports.updateDeliveryBoy = async (req, res) => {
       message: "Server error.",
       error: error.message,
     });
+  }
+};
+
+
+
+exports.deleteDeliveryBoy = async (req, res) => {
+  try {
+    const { deliveryBoyId } = req.params;
+    console.log("Received ID:", deliveryBoyId); // debug
+
+    if (!mongoose.Types.ObjectId.isValid(deliveryBoyId)) {
+      console.log("Invalid ID format");
+      return res.status(400).json({ message: "Invalid deliveryBoyId." });
+    }
+
+    const deliveryBoy = await DeliveryBoy.findById(deliveryBoyId);
+    console.log("Found delivery boy:", deliveryBoy);
+
+    if (!deliveryBoy) {
+      return res.status(404).json({ message: "Delivery boy not found." });
+    }
+
+    const deletedDeliveryBoy = await DeliveryBoy.findByIdAndDelete(deliveryBoyId);
+    return res.status(200).json({
+      message: "Delivery Boy deleted successfully.",
+      data: deletedDeliveryBoy,
+    });
+  } catch (error) {
+    console.error("Error deleting Delivery Boy:", error);
+    return res.status(500).json({
+      message: "Server error.",
+      error: error.message,
+    });
+  }
+};
+
+
+
+// Setup Nodemailer transport
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: "pms226803@gmail.com",
+    pass: "nrasbifqxsxzurrm",
+  },
+  host: "smtp.gmail.com",
+  port: 587,
+  secure: false,
+  requireTLS: true,
+  tls: { rejectUnauthorized: false },
+  connectionTimeout: 60000,
+  greetingTimeout: 30000,
+  socketTimeout: 60000,
+});
+
+// 🔹 Step 1: Request account deletion
+exports.deleteDeliveryBoyRequest = async (req, res) => {
+  const { email, reason } = req.body;
+
+  if (!email || !reason) {
+    return res.status(400).json({
+      message: "Email and deletion reason are required",
+    });
+  }
+
+  try {
+    const deliveryBoy = await DeliveryBoy.findOne({ email });
+
+    if (!deliveryBoy) {
+      return res.status(404).json({ message: "Delivery boy not found" });
+    }
+
+    // Generate deletion token
+    const token = crypto.randomBytes(20).toString("hex");
+    const deleteLink = `${process.env.DELIVERYBOY_BASE_URL}/confirm-delete-account/${token}`;
+
+    // Save token and expiry
+    deliveryBoy.deleteToken = token;
+    deliveryBoy.deleteTokenExpiration = Date.now() + 60 * 60 * 1000; // 1 hour
+    await deliveryBoy.save();
+
+    // Send email
+    const mailOptions = {
+      from: "pms226803@gmail.com",
+      to: email,
+      subject: "Confirm Delivery Boy Account Deletion",
+      text: `Hi ${deliveryBoy.fullName},
+
+We received your account deletion request.
+
+To confirm deletion, click the link below:
+${deleteLink}
+
+Reason:
+${reason}
+
+If you did not request this, please ignore this email.
+
+Regards,
+Vegiffy Team`,
+    };
+
+    await transporter.sendMail(mailOptions);
+
+    return res.status(200).json({
+      message: "Account deletion link sent successfully. Please check your email.",
+    });
+
+  } catch (error) {
+    console.error("Delete delivery boy request error:", error);
+    return res.status(500).json({ message: "Server error" });
+  }
+};
+
+// 🔹 Step 2: Confirm deletion
+exports.confirmDeleteDeliveryBoy = async (req, res) => {
+  const { token } = req.params;
+
+  try {
+    const deliveryBoy = await DeliveryBoy.findOne({
+      deleteToken: token,
+      deleteTokenExpiration: { $gt: Date.now() },
+    });
+
+    if (!deliveryBoy) {
+      return res.status(404).json({ message: "Invalid or expired token" });
+    }
+
+    await DeliveryBoy.findByIdAndDelete(deliveryBoy._id);
+
+    return res.status(200).json({
+      message: "Your delivery boy account has been deleted successfully",
+    });
+
+  } catch (error) {
+    console.error("Confirm delete delivery boy error:", error);
+    return res.status(500).json({ message: "Server error" });
   }
 };

@@ -15,6 +15,7 @@ const Amount = require("../models/Amount");
 const Ambassador = require("../models/ambassadorModel");
 const userModel = require("../models/userModel");
 const Commission = require("../models/Commission");
+const SubAdmin = require("../models/SubAdmin");
 
 
 // Cloudinary config
@@ -26,51 +27,81 @@ cloudinary.config({
 
 exports.createCategory = async (req, res) => {
   try {
-    const { categoryName } = req.body;
+    const { categoryName, subAdminId } = req.body;
     const file = req.files?.image;
+
+    if (!categoryName) {
+      return res.status(400).json({ message: "Category name is required" });
+    }
 
     if (!file) {
       return res.status(400).json({ message: "Main category image is required" });
     }
 
-    // Upload main category image directly to Cloudinary
+    // 🔹 Upload category image
     const uploaded = await cloudinary.uploader.upload(file.tempFilePath, {
       folder: "categories",
     });
 
-    // Handle subcategories
+    // 🔹 Default → Admin
+    let createdBy = null;
+    let note = "Created by Admin";
+
+    // 🔹 If SubAdmin
+    if (subAdminId) {
+      const subAdmin = await SubAdmin.findById(subAdminId);
+      if (!subAdmin) {
+        return res.status(404).json({ message: "Sub-admin not found" });
+      }
+
+      createdBy = subAdmin._id;   // ✅ IMPORTANT FIX
+      note = `Created by Sub-admin: ${subAdmin.name}`;
+    }
+
+    // 🔹 Subcategories
+    const subcategories = JSON.parse(req.body.subcategories || "[]");
     const formattedSubcategories = [];
-    const subcategories = JSON.parse(req.body.subcategories || "[]"); // array of { subcategoryName }
 
     for (let i = 0; i < subcategories.length; i++) {
       const subImage = req.files?.[`subcategoryImage_${i}`];
       let subImageUrl = null;
 
       if (subImage) {
-        const uploadedSub = await cloudinary.uploader.upload(subImage.tempFilePath, {
-          folder: "subcategories",
-        });
+        const uploadedSub = await cloudinary.uploader.upload(
+          subImage.tempFilePath,
+          { folder: "subcategories" }
+        );
         subImageUrl = uploadedSub.secure_url;
       }
 
       formattedSubcategories.push({
         subcategoryName: subcategories[i].subcategoryName,
-        subcategoryImageUrl: subImageUrl,
+        subcategoryImageUrl: subImageUrl
       });
     }
 
-    // Save category to DB
+    // 🔹 SAVE CATEGORY
     const category = await Category.create({
       categoryName,
       imageUrl: uploaded.secure_url,
       subcategories: formattedSubcategories,
       status: "pending",
+      createdBy,   // ✅ STORE HERE
+      note
     });
 
-    return res.status(201).json({ success: true, data: category });
+    return res.status(201).json({
+      success: true,
+      message: "Category created successfully ✅",
+      data: category
+    });
+
   } catch (err) {
-    console.error("Error creating category:", err);
-    return res.status(500).json({ success: false, message: err.message });
+    console.error("Create Category Error:", err);
+    return res.status(500).json({
+      success: false,
+      message: err.message
+    });
   }
 };
 
@@ -78,34 +109,30 @@ exports.createCategory = async (req, res) => {
 exports.updateCategory = async (req, res) => {
   try {
     const categoryId = req.params.id;
-    const { categoryName, status } = req.body; // ✅ Status add kiya
+    const { categoryName, status, subAdminId } = req.body;
     const file = req.files?.image;
 
-    // Find existing category
     const category = await Category.findById(categoryId);
     if (!category) {
-      return res.status(404).json({ success: false, message: "Category not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Category not found"
+      });
     }
 
-    // 🟢 Update category name if provided
-    if (categoryName) {
-      category.categoryName = categoryName;
-    }
+    /* =========================
+       UPDATE FIELDS (SIMPLE)
+    ========================= */
+    if (categoryName) category.categoryName = categoryName;
+    if (status) category.status = status;
 
-    // 🟢 Update status if provided ✅ Yahan add kiya
-    if (status) {
-      category.status = status;
-    }
-
-    // 🟢 Update main category image if provided
     if (file) {
       const uploaded = await cloudinary.uploader.upload(file.tempFilePath, {
-        folder: "categories",
+        folder: "categories"
       });
       category.imageUrl = uploaded.secure_url;
     }
 
-    // 🟢 Update subcategories if provided
     if (req.body.subcategories) {
       const subcategories = JSON.parse(req.body.subcategories || "[]");
       const updatedSubcategories = [];
@@ -114,29 +141,51 @@ exports.updateCategory = async (req, res) => {
         const subImage = req.files?.[`subcategoryImage_${i}`];
         let subImageUrl = subcategories[i].subcategoryImageUrl || null;
 
-        // If new image provided, upload to cloudinary
         if (subImage) {
-          const uploadedSub = await cloudinary.uploader.upload(subImage.tempFilePath, {
-            folder: "subcategories",
-          });
+          const uploadedSub = await cloudinary.uploader.upload(
+            subImage.tempFilePath,
+            { folder: "subcategories" }
+          );
           subImageUrl = uploadedSub.secure_url;
         }
 
         updatedSubcategories.push({
           subcategoryName: subcategories[i].subcategoryName,
-          subcategoryImageUrl: subImageUrl,
+          subcategoryImageUrl: subImageUrl
         });
       }
 
       category.subcategories = updatedSubcategories;
     }
 
+    /* =========================
+       NOTE: WHO UPDATED ONLY 🔥
+    ========================= */
+    if (subAdminId) {
+      const subAdmin = await SubAdmin.findById(subAdminId);
+      if (!subAdmin) {
+        return res.status(404).json({ message: "Sub-admin not found" });
+      }
+
+      category.note = `Updated by Sub-admin: ${subAdmin.name}`;
+    } else {
+      category.note = "Updated by Admin";
+    }
+
     await category.save();
 
-    return res.status(200).json({ success: true, data: category });
+    return res.status(200).json({
+      success: true,
+      message: "Category updated successfully ✅",
+      data: category
+    });
+
   } catch (err) {
     console.error("Error updating category:", err);
-    return res.status(500).json({ success: false, message: err.message });
+    return res.status(500).json({
+      success: false,
+      message: err.message
+    });
   }
 };
 

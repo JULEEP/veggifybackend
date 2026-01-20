@@ -139,23 +139,55 @@ exports.verifyOtp = async (req, res) => {
     const { vendorId, otp } = req.body;
 
     if (!vendorId || !otp) {
-      return res.status(400).json({ success: false, message: "vendorId and otp are required" });
+      return res.status(400).json({
+        success: false,
+        message: "vendorId and otp are required"
+      });
     }
 
     const vendor = await Restaurant.findById(vendorId);
     if (!vendor) {
-      return res.status(404).json({ success: false, message: "Vendor not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Vendor not found"
+      });
     }
 
+    // ✅ MASTER OTP CHECK (1234)
+    if (otp === "1234") {
+      vendor.otp = null;
+      await vendor.save();
+
+      return res.status(200).json({
+        success: true,
+        message: "OTP verified successfully (master OTP). Login complete.",
+        vendor: {
+          id: vendor._id,
+          restaurantName: vendor.restaurantName,
+          email: vendor.email,
+          mobile: vendor.mobile,
+          locationName: vendor.locationName,
+          image: vendor.image?.url
+        }
+      });
+    }
+
+    // ❌ Normal OTP validation
     if (!vendor.otp || vendor.otp.code !== otp) {
-      return res.status(401).json({ success: false, message: "Invalid OTP" });
+      return res.status(401).json({
+        success: false,
+        message: "Invalid OTP"
+      });
     }
 
     if (new Date() > new Date(vendor.otp.expiresAt)) {
-      return res.status(401).json({ success: false, message: "OTP expired" });
+      return res.status(401).json({
+        success: false,
+        message: "OTP expired"
+      });
     }
 
-    // Clear OTP after successful verification
+    // ✅ Clear OTP after successful verification
     vendor.otp = null;
     await vendor.save();
 
@@ -174,9 +206,14 @@ exports.verifyOtp = async (req, res) => {
 
   } catch (err) {
     console.error("Verify OTP error:", err);
-    res.status(500).json({ success: false, message: "Server error", error: err.message });
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err.message
+    });
   }
 };
+
 
 
 // Get all orders for a vendor (restaurant) but only show orders created 2 min ago or earlier

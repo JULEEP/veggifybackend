@@ -34,6 +34,7 @@ const RestaurantProductSchema = new mongoose.Schema(
       },
     ],
 
+
     status: {
       type: String,
       enum: ["active", "inactive"],
@@ -41,6 +42,9 @@ const RestaurantProductSchema = new mongoose.Schema(
     },
   },
 ],
+
+
+    note: { type: String, default: "" },
 
 
     // Menu items

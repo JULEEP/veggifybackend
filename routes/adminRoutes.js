@@ -9,7 +9,12 @@ router.post('/send-otp', adminController.sendOtp);
 router.post('/verify-otp', adminController.verifyOtp);
 router.post('/set-password', adminController.setPassword);
 router.post('/login', adminController.login);
+router.post('/subadminlogin', adminController.subAdminLogin);
 router.post('/register', adminController.register)
+router.post("/addsubadmin/:adminId", adminController.addSubAdmin);
+router.get("/getallsubadmins/:adminId", adminController.getAllSubAdmins);
+router.put("/updatesubadmin/:adminId/:subAdminId", adminController.updateSubAdmin);
+router.delete("/deletesubadmin/:adminId/:subAdminId", adminController.deleteSubAdmin);
 router.get('/getprofile/:adminId', adminController.getAdminByAdminId);
 
 

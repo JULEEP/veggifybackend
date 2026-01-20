@@ -708,6 +708,7 @@ const razorpay = new Razorpay({
 
 const axios = require('axios');
 const adminModel = require("../models/adminModel");
+const SubAdmin = require("../models/SubAdmin");
 
 // Helper function to fetch charges from API
 const fetchCharges = async () => {
@@ -1201,41 +1202,75 @@ exports.getAllOrders = async (req, res) => {
 
 // Update only orderStatus by ID
 exports.updateOrderStatus = async (req, res) => {
-  const { id } = req.params;
-  const { orderStatus } = req.body;  // extract orderStatus from request body
-
-  if (!orderStatus) {
-    return res.status(400).json({ success: false, message: "orderStatus is required" });
-  }
-
   try {
-    const updatedOrder = await Order.findByIdAndUpdate(
-      id,
-      { orderStatus },  // update only orderStatus field
-      { new: true, runValidators: true }
-    )
-      .populate("restaurantId", "restaurantName locationName")
-      .populate("userId")
-      .populate({
-        path: "cartId",
-        populate: [
-          { path: "userId", select: "name email phone" },
-          { path: "restaurantId", select: "restaurantName locationName" },
-          { path: "products.restaurantProductId", select: "name price image" },
-          { path: "appliedCouponId", select: "code discountPercentage" },
-        ],
-      });
+    const { id } = req.params;
+    const { orderStatus, subAdminId } = req.body;
 
-    if (!updatedOrder) {
-      return res.status(404).json({ success: false, message: "Order not found" });
+    if (!orderStatus) {
+      return res.status(400).json({
+        success: false,
+        message: "orderStatus is required"
+      });
     }
 
-    res.status(200).json({ success: true, data: updatedOrder });
+    // =========================
+    // FIND ORDER
+    // =========================
+    const order = await Order.findById(id);
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found"
+      });
+    }
+
+    // =========================
+    // UPDATE STATUS
+    // =========================
+    order.orderStatus = orderStatus;
+
+    // =========================
+    // WHO UPDATED (NOTE)
+    // =========================
+    if (subAdminId) {
+      const subAdmin = await SubAdmin.findById(subAdminId);
+      if (!subAdmin) {
+        return res.status(404).json({
+          success: false,
+          message: "Sub-admin not found"
+        });
+      }
+
+      order.note = `Order status updated to "${orderStatus}" by Sub-admin: ${subAdmin.name}`;
+    } else {
+      order.note = `Order status updated to "${orderStatus}" by Admin`;
+    }
+
+    // 🔥 LOG BEFORE SAVE
+    console.log("🔵 ORDER NOTE BEFORE SAVE:", order.note);
+
+    await order.save();
+
+    // 🔥 LOG AFTER SAVE
+    console.log("🟢 ORDER NOTE AFTER SAVE:", order.note);
+
+    return res.status(200).json({
+      success: true,
+      message: "Order status updated successfully ✅",
+      note: order.note,   // 🔥 FORCE RETURN
+      data: order
+    });
+
   } catch (error) {
-    console.error("updateOrderStatus error:", error);
-    res.status(500).json({ success: false, message: "Server error", error: error.message });
+    console.error("❌ updateOrderStatus error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message
+    });
   }
 };
+
 
 
 

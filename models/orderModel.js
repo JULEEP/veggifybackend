@@ -46,7 +46,7 @@ const orderSchema = new mongoose.Schema(
 
   orderStatus: {
     type: String,
-    enum: ["Pending", "Accepted", "Rejected", "Picked", "Rider Accepted", "Rider Rejected", "Delivered", "Cancelled", "Rider Accepted"],
+    enum: ["Pending", "Accepted", "Rejected", "Picked", "Completed", "Rider Accepted", "Rider Rejected", "Delivered", "Cancelled", "Rider Accepted"],
     default: "Pending"
   },
 
@@ -108,11 +108,17 @@ const orderSchema = new mongoose.Schema(
   // ✅ Track delivery status (Optional)
   deliveryStatus: {
     type: String,
-    enum: ["Pending", "Assigned", "Picked", "Rider Accepted", "Rider Rejected", "Delivered", "Failed", "Rider Accepted"],
+    enum: ["Pending", "Assigned", "Picked", "Completed", "Rider Accepted", "Rider Rejected", "Delivered", "Failed", "Rider Accepted"],
     default: "Pending"
   },
 
   transactionId: { type: String, default: null }, // store Razorpay txn id
+
+  note: {
+  type: String,
+  default: ""
+},
+
 
 
    products: [{

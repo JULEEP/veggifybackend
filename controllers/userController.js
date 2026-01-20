@@ -18,6 +18,7 @@ const dotenv = require("dotenv");
 const WebsiteEnquiry = require('../models/WebsiteEnquiry');
 const Maintenance = require('../models/Maintenance');
 const twilio = require("twilio");
+const SubAdmin = require('../models/SubAdmin');
 
 dotenv.config();
 
@@ -890,6 +891,8 @@ const getReferralByUserId = async (req, res) => {
 // Controller
 const createBanner = async (req, res) => {
   try {
+    const { subAdminId } = req.body; // optional
+
     if (!req.files || !req.files.image) {
       return res.status(400).json({ message: 'Image is required' });
     }
@@ -901,16 +904,34 @@ const createBanner = async (req, res) => {
       folder: "banners"
     });
 
+    // Determine creator info
+    let note = "Created by Admin";
+    let createdBy = null;
+
+    if (subAdminId) {
+      // check sub-admin exists
+      const subAdmin = await SubAdmin.findById(subAdminId);
+      if (!subAdmin) {
+        return res.status(404).json({ message: "Sub-admin not found" });
+      }
+      note = `Created by Sub-admin: ${subAdmin.name}`;
+      createdBy = subAdminId;
+    }
+
     const newBanner = await Banner.create({
       image: result.secure_url,
-      status: 'pending'
+      status: 'pending',
+      createdBy: createdBy, // null if admin
+      note: note
     });
 
     return res.status(201).json({ message: 'Banner created ✅', data: newBanner });
   } catch (err) {
+    console.error("Create Banner Error:", err);
     return res.status(500).json({ message: 'Create failed ❌', error: err.message });
   }
 };
+
 // ✅ READ ALL
 const getAllBanners = async (req, res) => {
   try {
@@ -959,42 +980,77 @@ const getBannerById = async (req, res) => {
 // ✅ UPDATE
 const updateBanner = async (req, res) => {
   try {
+    const { subAdminId, status } = req.body;
+
     const banner = await Banner.findById(req.params.id);
     if (!banner) {
-      return res.status(404).json({ success: false, message: 'Banner not found' });
+      return res.status(404).json({
+        success: false,
+        message: "Banner not found"
+      });
     }
 
     let imageUrl = banner.image;
 
-    // ✅ If a new file is uploaded, upload to Cloudinary
+    // =========================
+    // IMAGE UPDATE (OPTIONAL)
+    // =========================
     if (req.files && req.files.image) {
-      const result = await cloudinary.uploader.upload(req.files.image.tempFilePath, {
-        folder: "banners",
-      });
+      const result = await cloudinary.uploader.upload(
+        req.files.image.tempFilePath,
+        { folder: "banners" }
+      );
       imageUrl = result.secure_url;
     }
 
-    // ✅ Update status if provided
-    if (req.body.status) {
-      banner.status = req.body.status;
+    banner.image = imageUrl;
+
+    // =========================
+    // STATUS UPDATE
+    // =========================
+    if (status) {
+      banner.status = status;
     }
 
-    // ✅ Update image URL
-    banner.image = imageUrl;
+    // =========================
+    // NOTE: WHO UPDATED 🔥
+    // =========================
+    if (subAdminId) {
+      const subAdmin = await SubAdmin.findById(subAdminId);
+      if (!subAdmin) {
+        return res.status(404).json({
+          success: false,
+          message: "Sub-admin not found"
+        });
+      }
+
+      banner.createdBy = subAdmin._id;
+      banner.note = `Updated by Sub-admin: ${subAdmin.name}`;
+    } else {
+      banner.createdBy = null;
+      banner.note = "Updated by Admin";
+    }
+
+    // 🔥 LOGGING
+    console.log("🟡 Banner NOTE before save:", banner.note);
 
     await banner.save();
 
+    console.log("🟢 Banner NOTE after save:", banner.note);
+
     return res.status(200).json({
       success: true,
-      message: 'Banner updated successfully ✅',
-      data: banner,
+      message: "Banner updated successfully ✅",
+      note: banner.note,
+      data: banner
     });
+
   } catch (err) {
-    console.error('Banner update error:', err);
+    console.error("❌ Banner update error:", err);
     return res.status(500).json({
       success: false,
-      message: 'Update failed ❌',
-      error: err.message,
+      message: "Update failed ❌",
+      error: err.message
     });
   }
 };
