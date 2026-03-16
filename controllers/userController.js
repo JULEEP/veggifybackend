@@ -19,6 +19,9 @@ const WebsiteEnquiry = require('../models/WebsiteEnquiry');
 const Maintenance = require('../models/Maintenance');
 const twilio = require("twilio");
 const SubAdmin = require('../models/SubAdmin');
+const Coupon = require('../models/Coupon');
+const Cart = require('../models/cartModel');
+
 
 dotenv.config();
 
@@ -202,7 +205,7 @@ const verifyOtp = async (req, res) => {
     await newUser.save();
 
     // Add to ambassador if referred
-    if (decoded.referredBy && decoded.referredBy.startsWith("VEGGYFYAMB")) {
+    if (decoded.referredBy && decoded.referredBy.startsWith("VEGAMB")) {
       const ambassador = await Ambassador.findOne({ referralCode: decoded.referredBy });
       if (ambassador) {
         ambassador.users.push(newUser._id);
@@ -489,22 +492,54 @@ const resetForgotPassword = async (req, res) => {
     const { userId } = req.params;
     const { newPassword, confirmPassword } = req.body;
 
-    if (!newPassword || !confirmPassword) return res.status(400).json({ status: false, message: "Passwords required ❌" });
-    if (newPassword !== confirmPassword) return res.status(400).json({ status: false, message: "Passwords do not match ❌" });
+    if (!newPassword || !confirmPassword) {
+      return res.status(400).json({
+        status: false,
+        message: "Passwords required ❌"
+      });
+    }
+
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({
+        status: false,
+        message: "Passwords do not match ❌"
+      });
+    }
 
     const user = await User.findById(userId);
-    if (!user) return res.status(404).json({ status: false, message: "User not found ❌" });
 
-    user.password = await bcrypt.hash(newPassword, 10);
+    if (!user) {
+      return res.status(404).json({
+        status: false,
+        message: "User not found ❌"
+      });
+    }
+
+    // ✅ hash password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // ✅ update password
+    user.password = hashedPassword;
+
     await user.save();
 
-    return res.status(200).json({ status: true, message: "Password reset successful ✅" });
+    return res.status(200).json({
+      status: true,
+      message: "Password reset successful ✅",
+      updatedPassword: newPassword,     // testing ke liye
+      hashedPassword: hashedPassword    // db me store hua password
+    });
 
   } catch (err) {
-    return res.status(500).json({ status: false, message: "Password reset failed ❌", error: err.message });
+    console.error("Reset Password Error:", err);
+
+    return res.status(500).json({
+      status: false,
+      message: "Password reset failed ❌",
+      error: err.message
+    });
   }
 };
-
 
 
 const getProfile = async (req, res) => {
@@ -650,21 +685,31 @@ const deleteProfileImage = async (req, res) => {
   }
 };
 
-// 📌 Get All Addresses of a User
+// 📌 Get All Addresses of a User (with isDefault field)
 const getAllAddresses = async (req, res) => {
   try {
     const { userId } = req.params;
 
     const user = await User.findById(userId);
-    if (!user) return res.status(404).json({ success: false, message: 'User not found ❌' });
+    if (!user) 
+      return res.status(404).json({ success: false, message: 'User not found ❌' });
+
+    const addresses = (user.addresses || []).map(addr => ({
+      ...addr.toObject(),
+      isDefault: !!addr.isDefault  // ✅ add isDefault field
+    }));
 
     res.status(200).json({
       success: true,
       message: "All addresses fetched ✅",
-      addresses: user.addresses || []
+      addresses
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: "Failed to fetch addresses ❌", error: err.message });
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to fetch addresses ❌", 
+      error: err.message 
+    });
   }
 };
 
@@ -887,11 +932,10 @@ const getReferralByUserId = async (req, res) => {
 };
 
 
-/// ✅ CREATE
 // Controller
 const createBanner = async (req, res) => {
   try {
-    const { subAdminId } = req.body; // optional
+    const { subAdminId } = req.body || {}; // ✅ FIX
 
     if (!req.files || !req.files.image) {
       return res.status(400).json({ message: 'Image is required' });
@@ -899,17 +943,14 @@ const createBanner = async (req, res) => {
 
     const imageFile = req.files.image;
 
-    // Upload to Cloudinary
     const result = await cloudinary.uploader.upload(imageFile.tempFilePath, {
       folder: "banners"
     });
 
-    // Determine creator info
     let note = "Created by Admin";
     let createdBy = null;
 
     if (subAdminId) {
-      // check sub-admin exists
       const subAdmin = await SubAdmin.findById(subAdminId);
       if (!subAdmin) {
         return res.status(404).json({ message: "Sub-admin not found" });
@@ -921,16 +962,18 @@ const createBanner = async (req, res) => {
     const newBanner = await Banner.create({
       image: result.secure_url,
       status: 'pending',
-      createdBy: createdBy, // null if admin
-      note: note
+      createdBy,
+      note
     });
 
     return res.status(201).json({ message: 'Banner created ✅', data: newBanner });
+
   } catch (err) {
     console.error("Create Banner Error:", err);
     return res.status(500).json({ message: 'Create failed ❌', error: err.message });
   }
 };
+
 
 // ✅ READ ALL
 const getAllBanners = async (req, res) => {
@@ -1626,6 +1669,559 @@ const getUserWallet = async (req, res) => {
   }
 };
 
+
+
+
+const getAllCoupons = async (req, res) => {
+  try {
+    const { isActive, discountType } = req.query;
+
+    let filter = {};
+    if (isActive !== undefined) filter.isActive = isActive;
+    if (discountType) filter.discountType = discountType;
+
+    const coupons = await Coupon.find(filter)
+      .populate("createdBy", "name email")
+      .populate("updatedBy", "name email")
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({
+      success: true,
+      count: coupons.length,
+      data: coupons,
+    });
+  } catch (err) {
+    console.error("Get Coupons Error:", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+
+const getActiveCoupons = async (req, res) => {
+  try {
+    const { userId } = req.params; // ✅ userId params se le rahe hain
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: "userId is required in params"
+      });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid userId"
+      });
+    }
+
+    const now = new Date();
+
+    // Fetch all active, non-expired coupons
+    const coupons = await Coupon.find({
+      isActive: true,
+      endDate: { $gte: now },
+    }).sort({ createdAt: -1 });
+
+    // ✅ Check user's cart to see which coupons are applied
+    const cart = await Cart.findOne({ userId });
+    
+    // ✅ Add isApplied field to each coupon
+    const couponsWithAppliedStatus = coupons.map(coupon => {
+      const couponObj = coupon.toObject();
+      
+      // Check if this coupon is applied in user's cart
+      if (cart && cart.appliedCouponId && cart.appliedCouponId.toString() === coupon._id.toString()) {
+        couponObj.isApplied = true;
+      } else {
+        couponObj.isApplied = false;
+      }
+      
+      return couponObj;
+    });
+
+    return res.status(200).json({
+      success: true,
+      count: couponsWithAppliedStatus.length,
+      data: couponsWithAppliedStatus,
+    });
+
+  } catch (err) {
+    console.error("Get Active Coupons Error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err.message,
+    });
+  }
+};
+
+
+
+// Apply coupon to cart
+// Apply coupon to cart
+const applyCoupon = async (req, res) => {
+  try {
+    const { userId, couponId } = req.body;
+
+    // ✅ Validate inputs
+    if (!userId || !couponId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "userId and couponId are required" 
+      });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Invalid userId" 
+      });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(couponId)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Invalid couponId" 
+      });
+    }
+
+    // ✅ Find user cart
+    const cart = await Cart.findOne({ userId });
+    
+    if (!cart) {
+      return res.status(404).json({ 
+        success: false, 
+        message: "Cart not found. Please add items to cart first." 
+      });
+    }
+
+    if (!cart.products || cart.products.length === 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Cart is empty. Please add items to cart first." 
+      });
+    }
+
+    // ✅ Check if another coupon is already applied
+    if (cart.appliedCouponId && cart.appliedCouponId.toString() !== couponId) {
+      const existingCoupon = await Coupon.findById(cart.appliedCouponId);
+      return res.status(400).json({
+        success: false,
+        message: `Another coupon "${existingCoupon?.couponCode}" is already applied. Please remove it first.`,
+        appliedCoupon: {
+          couponId: cart.appliedCouponId,
+          couponCode: existingCoupon?.couponCode
+        }
+      });
+    }
+
+    // ✅ If same coupon is already applied
+    if (cart.appliedCouponId && cart.appliedCouponId.toString() === couponId) {
+      return res.status(400).json({
+        success: false,
+        message: "This coupon is already applied to your cart"
+      });
+    }
+
+    // ✅ Find and validate coupon
+    const coupon = await Coupon.findById(couponId);
+    
+    if (!coupon) {
+      return res.status(404).json({ 
+        success: false, 
+        message: "Coupon not found" 
+      });
+    }
+
+    // Check if coupon is active
+    if (!coupon.isActive) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Coupon is not active" 
+      });
+    }
+
+    // Check coupon validity date
+    const currentDate = new Date();
+    if (coupon.startDate && currentDate < coupon.startDate) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Coupon is not yet valid" 
+      });
+    }
+
+    if (coupon.endDate && currentDate > coupon.endDate) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Coupon has expired" 
+      });
+    }
+
+    // Check usage limit
+    if (coupon.usageLimit && coupon.usedCount >= coupon.usageLimit) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Coupon usage limit reached" 
+      });
+    }
+
+    // Check minimum order amount
+    if (cart.subTotal < coupon.minOrderAmount) {
+      return res.status(400).json({
+        success: false,
+        message: `Minimum order amount of ₹${coupon.minOrderAmount} required for this coupon`
+      });
+    }
+
+    console.log('Applying Coupon:', {
+      couponCode: coupon.couponCode,
+      discountType: coupon.discountType,
+      discountValue: coupon.discountValue,
+      minOrderAmount: coupon.minOrderAmount,
+      maxDiscountAmount: coupon.maxDiscountAmount,
+      cartSubTotal: cart.subTotal
+    });
+
+    // ✅ Calculate coupon discount
+    let couponDiscount = 0;
+    let calculation = '';
+
+    if (coupon.discountType === 'percentage') {
+      couponDiscount = (cart.subTotal * coupon.discountValue) / 100;
+      
+      // Apply maximum discount limit if specified
+      if (coupon.maxDiscountAmount && couponDiscount > coupon.maxDiscountAmount) {
+        couponDiscount = coupon.maxDiscountAmount;
+        calculation = `${coupon.discountValue}% of ₹${cart.subTotal} = ₹${(cart.subTotal * coupon.discountValue) / 100} (capped at ₹${coupon.maxDiscountAmount})`;
+      } else {
+        calculation = `${coupon.discountValue}% of ₹${cart.subTotal} = ₹${couponDiscount}`;
+      }
+    } else if (coupon.discountType === 'flat') {
+      couponDiscount = coupon.discountValue;
+      calculation = `Flat discount: ₹${couponDiscount}`;
+    }
+
+    couponDiscount = Number(couponDiscount.toFixed(2));
+
+    // ✅ Update cart with coupon details
+    cart.appliedCouponId = coupon._id;
+    cart.couponDiscount = couponDiscount;
+    
+    // Update chargeCalculations.couponDiscount
+    cart.chargeCalculations.couponDiscount = {
+      couponId: coupon._id,
+      couponCode: coupon.couponCode,
+      discountType: coupon.discountType,
+      discountValue: coupon.discountValue,
+      amount: couponDiscount,
+      calculation: calculation
+    };
+
+    // ✅ Recalculate final amount with coupon discount
+    const finalAmount = Number((
+      cart.subTotal + 
+      (cart.gstCharges || 0) + 
+      (cart.platformCharge || 0) + 
+      (cart.deliveryCharge || 0) + 
+      (cart.gstOnDelivery || 0) - 
+      couponDiscount
+    ).toFixed(2));
+
+    cart.finalAmount = finalAmount;
+
+    await cart.save();
+
+    console.log('Coupon Applied Successfully:', {
+      couponCode: coupon.couponCode,
+      discountAmount: couponDiscount,
+      previousFinal: cart.finalAmount + couponDiscount,
+      newFinal: cart.finalAmount,
+      savings: couponDiscount
+    });
+
+    // ✅ Prepare response with isApplied = true
+    const responseData = {
+      success: true,
+      message: "Coupon applied successfully",
+      cart: cart.toObject(),
+      couponDetails: {
+        couponId: coupon._id,
+        couponCode: coupon.couponCode,
+        title: coupon.title,
+        description: coupon.description,
+        discountType: coupon.discountType,
+        discountValue: coupon.discountValue,
+        discountAmount: couponDiscount,
+        calculation: calculation,
+        minOrderAmount: coupon.minOrderAmount,
+        maxDiscountAmount: coupon.maxDiscountAmount,
+        isApplied: true // ✅ Added isApplied field
+      },
+      savingsSummary: {
+        originalTotal: finalAmount + couponDiscount,
+        couponDiscount: couponDiscount,
+        newTotal: finalAmount,
+        totalSaved: (cart.amountSavedOnOrder || 0) + couponDiscount,
+        savingsPercentage: ((cart.amountSavedOnOrder || 0) + couponDiscount) > 0 ? 
+          Number((((cart.amountSavedOnOrder || 0) + couponDiscount) / (cart.subTotal + (cart.amountSavedOnOrder || 0)) * 100).toFixed(1)) : 0
+      },
+      chargeBreakdown: {
+        subTotal: cart.subTotal,
+        gstOnFood: cart.gstCharges || 0,
+        platformCharge: cart.platformCharge || 0,
+        deliveryCharge: cart.deliveryCharge || 0,
+        gstOnDelivery: cart.gstOnDelivery || 0,
+        couponDiscount: couponDiscount,
+        finalAmount: cart.finalAmount,
+        calculation: `${cart.subTotal} + ${cart.gstCharges || 0} + ${cart.platformCharge || 0} + ${cart.deliveryCharge || 0} + ${cart.gstOnDelivery || 0} - ${couponDiscount} = ${cart.finalAmount}`
+      }
+    };
+
+    return res.status(200).json(responseData);
+
+  } catch (error) {
+    console.error("applyCoupon Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+      error: error.stack
+    });
+  }
+};
+
+// Remove coupon from cart
+// Remove coupon from cart
+const removeCoupon = async (req, res) => {
+  try {
+    const { userId } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "userId is required" 
+      });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Invalid userId" 
+      });
+    }
+
+    // ✅ Find user cart
+    const cart = await Cart.findOne({ userId });
+    
+    if (!cart) {
+      return res.status(404).json({ 
+        success: false, 
+        message: "Cart not found" 
+      });
+    }
+
+    // ✅ Check if coupon is applied
+    if (!cart.appliedCouponId && !cart.couponDiscount) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "No coupon is currently applied to this cart" 
+      });
+    }
+
+    // ✅ Store coupon info for response before removing
+    const removedCoupon = {
+      couponId: cart.appliedCouponId,
+      discountAmount: cart.couponDiscount,
+      couponCode: cart.chargeCalculations?.couponDiscount?.couponCode || null,
+      wasApplied: true
+    };
+
+    // ✅ Remove coupon from cart
+    cart.appliedCouponId = null;
+    cart.couponDiscount = 0;
+    
+    // Reset couponDiscount in chargeCalculations
+    if (cart.chargeCalculations && cart.chargeCalculations.couponDiscount) {
+      cart.chargeCalculations.couponDiscount = {
+        couponId: null,
+        couponCode: "",
+        discountType: "",
+        discountValue: 0,
+        amount: 0,
+        calculation: ""
+      };
+    }
+
+    // ✅ Recalculate final amount without coupon discount
+    const finalAmount = Number((
+      cart.subTotal + 
+      (cart.gstCharges || 0) + 
+      (cart.platformCharge || 0) + 
+      (cart.deliveryCharge || 0) + 
+      (cart.gstOnDelivery || 0)
+    ).toFixed(2));
+
+    cart.finalAmount = finalAmount;
+
+    await cart.save();
+
+    console.log('Coupon Removed Successfully:', {
+      removedCouponId: removedCoupon.couponId,
+      removedDiscount: removedCoupon.discountAmount,
+      newFinal: cart.finalAmount
+    });
+
+    // ✅ Prepare response
+    const responseData = {
+      success: true,
+      message: "Coupon removed successfully",
+      cart: cart.toObject(),
+      removedCoupon: removedCoupon,
+      savingsSummary: {
+        originalTotal: finalAmount + (removedCoupon.discountAmount || 0),
+        removedDiscount: removedCoupon.discountAmount || 0,
+        newTotal: finalAmount,
+        totalSaved: cart.amountSavedOnOrder || 0
+      },
+      chargeBreakdown: {
+        subTotal: cart.subTotal,
+        gstOnFood: cart.gstCharges || 0,
+        platformCharge: cart.platformCharge || 0,
+        deliveryCharge: cart.deliveryCharge || 0,
+        gstOnDelivery: cart.gstOnDelivery || 0,
+        couponDiscount: 0,
+        finalAmount: cart.finalAmount,
+        calculation: `${cart.subTotal} + ${cart.gstCharges || 0} + ${cart.platformCharge || 0} + ${cart.deliveryCharge || 0} + ${cart.gstOnDelivery || 0} = ${cart.finalAmount}`
+      }
+    };
+
+    return res.status(200).json(responseData);
+
+  } catch (error) {
+    console.error("removeCoupon Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+      error: error.stack
+    });
+  }
+};
+
+
+ const deleteUserNotifications = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { notificationIds } = req.body;
+
+    // 1️⃣ Validate userId
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid userId is required."
+      });
+    }
+
+    // 2️⃣ Validate notificationIds
+    if (!notificationIds || !Array.isArray(notificationIds) || notificationIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "notificationIds array is required."
+      });
+    }
+
+    // 3️⃣ Validate each notification ID
+    const invalidIds = notificationIds.filter(
+      id => !mongoose.Types.ObjectId.isValid(id)
+    );
+
+    if (invalidIds.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: "One or more notification IDs are invalid."
+      });
+    }
+
+    // 4️⃣ Find user
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found."
+      });
+    }
+
+    // 5️⃣ Filter out notifications
+    user.notifications = user.notifications.filter(
+      notification => !notificationIds.includes(notification._id.toString())
+    );
+
+    await user.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Notification(s) deleted successfully.",
+      remainingNotifications: user.notifications
+    });
+
+  } catch (error) {
+    console.error("deleteUserNotifications error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message
+    });
+  }
+};
+
+
+
+// 📌 Set a User Address as Default
+const setDefaultAddress = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { addressId } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ success: false, message: "Valid userId is required" });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(addressId)) {
+      return res.status(400).json({ success: false, message: "Valid addressId is required" });
+    }
+
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ success: false, message: "User not found ❌" });
+
+    let addressFound = false;
+
+    user.addresses = user.addresses.map(addr => {
+      if (addr._id.toString() === addressId) {
+        addressFound = true;
+        return { ...addr.toObject(), isDefault: true };
+      } else {
+        return { ...addr.toObject(), isDefault: false };
+      }
+    });
+
+    if (!addressFound) {
+      return res.status(404).json({ success: false, message: "Address not found ❌" });
+    }
+
+    await user.save();
+
+    res.status(200).json({
+      success: true,
+      message: "Default address updated successfully ✅",
+      addresses: user.addresses
+    });
+
+  } catch (err) {
+    console.error("Set default address error:", err);
+    res.status(500).json({ success: false, message: "Server error ❌", error: err.message });
+  }
+};
+
+
 module.exports = {
   register,
   verifyOtp,
@@ -1667,5 +2263,11 @@ module.exports = {
   setMaintenance,
   getMaintenanceStatus,
   getUserWallet,
-  getPendingBanners
+  getPendingBanners,
+  getAllCoupons,
+  getActiveCoupons,
+  applyCoupon,
+  removeCoupon,
+  deleteUserNotifications,
+  setDefaultAddress
 };

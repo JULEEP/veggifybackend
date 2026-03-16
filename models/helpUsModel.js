@@ -26,6 +26,12 @@ const helpUsSchema = new mongoose.Schema({
    status: {  // New field to store the URL of the image
     type: String,
   },
+        note: { type: String },
+      updatedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "SubAdmin",
+        default: null,
+      },
   createdAt: {
     type: Date,
     default: Date.now

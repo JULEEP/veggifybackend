@@ -23,6 +23,7 @@ addresses: [
     country: { type: String, required: true },
     postalCode: { type: String, required: true },
     addressType: { type: String, default: 'Home' },
+    isDefault: { type: Boolean, default: false },
     location: {
       type: {
         type: String, 

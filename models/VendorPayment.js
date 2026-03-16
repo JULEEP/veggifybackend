@@ -32,6 +32,25 @@ const vendorPaymentSchema = new mongoose.Schema({
     default: 'pending'
   },
 
+   note: String,
+      addedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "SubAdmin",
+        default: null,
+      },
+
+
+      // ✅ New fields for payment screenshot
+  paymentScreenshot: {
+    type: String, // Cloudinary URL
+  },
+  screenshotUploadedAt: {
+    type: Date,
+  },
+  submittedAt: {
+    type: Date,
+  },
+
    // 🧾 Bank Transfer Info
     bankDetails: {
       accountName: String,

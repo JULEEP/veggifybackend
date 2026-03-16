@@ -14,7 +14,6 @@ const withdrawalRequestSchema = new mongoose.Schema(
     },
     netAmount: {
       type: Number,
-      required: true
     },
     accountDetails: {
       bankName: { type: String, },
@@ -24,6 +23,13 @@ const withdrawalRequestSchema = new mongoose.Schema(
       accountType: { type: String },
       branchName: { type: String }
     },
+
+    note: { type: String },
+updatedBy: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: "SubAdmin",
+  default: null,
+},
     status: {
       type: String,
       enum: ["pending", "approved", "rejected", "processing", "completed"],

@@ -24,7 +24,7 @@ const AmbassadorPaymentSchema = new mongoose.Schema({
     default: false,
   },
   
-  // ✅ Added discount related fields:
+  // ✅ Price related fields:
   baseAmount: {
     type: Number, // plan price before tax
     default: 0
@@ -54,20 +54,55 @@ const AmbassadorPaymentSchema = new mongoose.Schema({
   },
   paymentStatus: {
     type: String,
+    enum: ['pending', 'completed', 'failed', 'pending_verification', 'verified', 'rejected'],
+    default: 'pending'
   },
-   status: {
+  status: {
     type: String,
+    enum: ['pending', 'completed', 'failed', 'pending_verification', 'verified', 'rejected'],
+    default: 'pending'
   },
   paymentMethod: {
     type: String,
+    enum: ['razorpay', 'bank_transfer', 'upi', 'card', 'wallet'],
+    default: 'razorpay'
   },
+  
+  // ✅ Bank transfer specific fields:
   bankDetails: {
-      accountName: { type: String },
-      accountNumber: { type: String },
-      bankName: { type: String },
-      ifscCode: { type: String },
-      referenceNumber: { type: String },
-    },
+    accountName: { type: String },
+    accountNumber: { type: String },
+    bankName: { type: String },
+    ifscCode: { type: String },
+    referenceNumber: { type: String },
+  },
+  
+  // ✅ New fields for payment screenshot
+  paymentScreenshot: {
+    type: String, // Cloudinary URL
+  },
+  screenshotUploadedAt: {
+    type: Date,
+  },
+  submittedAt: {
+    type: Date,
+  },
+  verifiedAt: {
+    type: Date,
+  },
+  verifiedBy: {
+    type: String,
+    ref: "SubAdmin",
+    default: null,
+  },
+  note: { 
+    type: String 
+  },
+  updatedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "SubAdmin",
+    default: null,
+  },
   isActive: {
     type: Boolean,
     default: true

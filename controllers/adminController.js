@@ -1,7 +1,6 @@
 const bcrypt = require('bcrypt');
 const Admin = require('../models/adminModel');
 const mongoose = require('mongoose');
-const Coupon = require('../models/couponModel');
 const User = require('../models/userModel');
 const { generateTempToken, verifyTempToken, generateAuthToken, generateCouponToken, couponAuthMiddleware } = require('../utils/adminJWT');
 const restaurantModel = require('../models/restaurantModel');
@@ -29,6 +28,7 @@ const dotenv = require("dotenv");
 const ReferralReward = require('../models/ReferralReward');
 const Credential = require('../models/Credential');
 const SubAdmin = require('../models/SubAdmin');
+const Coupon = require('../models/Coupon');
 
 dotenv.config();
 
@@ -403,179 +403,174 @@ exports.getAdminByAdminId = async (req, res) => {
 };
 
 
-// Generate coupon token (POST /api/admin/token)
-exports.getCouponToken = async (req, res) => {
-    try {
-        const token = generateCouponToken();
-        return res.status(200).json({
-            success: true,
-            message: "Coupon token generated successfully",
-            token
-        });
-    } catch (err) {
-        console.error("Get Coupon Token Error:", err);
-        return res.status(500).json({ success: false, message: "Server error", error: err.message });
-    }
-};
+// // Generate coupon token (POST /api/admin/token)
+// exports.getCouponToken = async (req, res) => {
+//     try {
+//         const token = generateCouponToken();
+//         return res.status(200).json({
+//             success: true,
+//             message: "Coupon token generated successfully",
+//             token
+//         });
+//     } catch (err) {
+//         console.error("Get Coupon Token Error:", err);
+//         return res.status(500).json({ success: false, message: "Server error", error: err.message });
+//     }
+// };
 
-// CREATE coupon (POST /api/admin/coupons)
-exports.createCoupon = async (req, res) => {
-    try {
-        if (!req.coupon || req.coupon.role !== 'coupon') {
-            return res.status(403).json({ success: false, message: "Unauthorized. Valid coupon token required." });
-        }
+// // CREATE coupon (POST /api/admin/coupons)
+// exports.createCoupon = async (req, res) => {
+//     try {
+//         if (!req.coupon || req.coupon.role !== 'coupon') {
+//             return res.status(403).json({ success: false, message: "Unauthorized. Valid coupon token required." });
+//         }
 
-        const { code, discountPercentage, maxDiscountAmount, minCartAmount, expiresAt } = req.body;
+//         const { code, discountPercentage, maxDiscountAmount, minCartAmount, expiresAt } = req.body;
 
-        if (!code || !discountPercentage) {
-            return res.status(400).json({ success: false, message: "Code and discountPercentage are required." });
-        }
+//         if (!code || !discountPercentage) {
+//             return res.status(400).json({ success: false, message: "Code and discountPercentage are required." });
+//         }
 
-        const existing = await Coupon.findOne({ code });
-        if (existing) return res.status(400).json({ success: false, message: "Coupon code already exists." });
+//         const existing = await Coupon.findOne({ code });
+//         if (existing) return res.status(400).json({ success: false, message: "Coupon code already exists." });
 
-        const coupon = new Coupon({
-            code,
-            discountPercentage,
-            maxDiscountAmount,
-            minCartAmount,
-            expiresAt,
+//         const coupon = new Coupon({
+//             code,
+//             discountPercentage,
+//             maxDiscountAmount,
+//             minCartAmount,
+//             expiresAt,
             
-        });
-        await coupon.save();
+//         });
+//         await coupon.save();
 
-        return res.status(201).json({ success: true, message: "Coupon created successfully.", coupon });
+//         return res.status(201).json({ success: true, message: "Coupon created successfully.", coupon });
 
-    } catch (err) {
-        console.error("Create Coupon Error:", err);
-        return res.status(500).json({ success: false, message: "Server error", error: err.message });
-    }
-};
+//     } catch (err) {
+//         console.error("Create Coupon Error:", err);
+//         return res.status(500).json({ success: false, message: "Server error", error: err.message });
+//     }
+// };
 
-// ---------------------- GET ALL COUPONS ----------------------
-exports.getAllCoupons = async (req, res) => {
-    try {
-        const coupons = await Coupon.find().sort({ createdAt: -1 });
-        return res.status(200).json({ success: true, coupons });
-    } catch (err) {
-        console.error("Get All Coupons Error:", err);
-        return res.status(500).json({ success: false, message: "Server error", error: err.message });
-    }
-};
+// // ---------------------- GET ALL COUPONS ----------------------
+// exports.getAllCoupons = async (req, res) => {
+//     try {
+//         const coupons = await Coupon.find().sort({ createdAt: -1 });
+//         return res.status(200).json({ success: true, coupons });
+//     } catch (err) {
+//         console.error("Get All Coupons Error:", err);
+//         return res.status(500).json({ success: false, message: "Server error", error: err.message });
+//     }
+// };
 
 
-// ---------------------- GET SINGLE COUPON ----------------------
-exports.getCouponById = async (req, res) => {
-     try {
-        const { couponId } = req.params;
-        if (!mongoose.Types.ObjectId.isValid(couponId))
-            return res.status(400).json({ success: false, message: "Invalid Coupon ID." });
+// // ---------------------- GET SINGLE COUPON ----------------------
+// exports.getCouponById = async (req, res) => {
+//      try {
+//         const { couponId } = req.params;
+//         if (!mongoose.Types.ObjectId.isValid(couponId))
+//             return res.status(400).json({ success: false, message: "Invalid Coupon ID." });
 
-        const coupon = await Coupon.findById(couponId);
-        if (!coupon) return res.status(404).json({ success: false, message: "Coupon not found." });
+//         const coupon = await Coupon.findById(couponId);
+//         if (!coupon) return res.status(404).json({ success: false, message: "Coupon not found." });
 
-        return res.status(200).json({ success: true, coupon });
-    } catch (err) {
-        console.error("Get Coupon By ID Error:", err);
-        return res.status(500).json({ success: false, message: "Server error", error: err.message });
-    }
-};
+//         return res.status(200).json({ success: true, coupon });
+//     } catch (err) {
+//         console.error("Get Coupon By ID Error:", err);
+//         return res.status(500).json({ success: false, message: "Server error", error: err.message });
+//     }
+// };
 
-// ---------------------- UPDATE COUPON ----------------------
-exports.updateCoupon = async (req, res) => {
-    try {
-        const { couponId } = req.params;
-        const updateData = req.body;
+// // ---------------------- UPDATE COUPON ----------------------
+// exports.updateCoupon = async (req, res) => {
+//     try {
+//         const { couponId } = req.params;
+//         const updateData = req.body;
 
-        if (!mongoose.Types.ObjectId.isValid(couponId))
-            return res.status(400).json({ success: false, message: "Invalid Coupon ID." });
+//         if (!mongoose.Types.ObjectId.isValid(couponId))
+//             return res.status(400).json({ success: false, message: "Invalid Coupon ID." });
 
-        const coupon = await Coupon.findByIdAndUpdate(couponId, updateData, { new: true });
-        if (!coupon) return res.status(404).json({ success: false, message: "Coupon not found." });
+//         const coupon = await Coupon.findByIdAndUpdate(couponId, updateData, { new: true });
+//         if (!coupon) return res.status(404).json({ success: false, message: "Coupon not found." });
 
-        return res.status(200).json({ success: true, message: "Coupon updated successfully.", coupon });
-    } catch (err) {
-        console.error("Update Coupon Error:", err);
-        return res.status(500).json({ success: false, message: "Server error", error: err.message });
-    }
-};
-// ---------------------- DELETE COUPON ----------------------
-exports.deleteCoupon = async (req, res) => {
-   try {
-        const { couponId } = req.params;
-        if (!mongoose.Types.ObjectId.isValid(couponId))
-            return res.status(400).json({ success: false, message: "Invalid Coupon ID." });
+//         return res.status(200).json({ success: true, message: "Coupon updated successfully.", coupon });
+//     } catch (err) {
+//         console.error("Update Coupon Error:", err);
+//         return res.status(500).json({ success: false, message: "Server error", error: err.message });
+//     }
+// };
+// // ---------------------- DELETE COUPON ----------------------
+// exports.deleteCoupon = async (req, res) => {
+//    try {
+//         const { couponId } = req.params;
+//         if (!mongoose.Types.ObjectId.isValid(couponId))
+//             return res.status(400).json({ success: false, message: "Invalid Coupon ID." });
 
-        const coupon = await Coupon.findByIdAndDelete(couponId);
-        if (!coupon) return res.status(404).json({ success: false, message: "Coupon not found." });
+//         const coupon = await Coupon.findByIdAndDelete(couponId);
+//         if (!coupon) return res.status(404).json({ success: false, message: "Coupon not found." });
 
-        return res.status(200).json({ success: true, message: "Coupon deleted successfully." });
-    } catch (err) {
-        console.error("Delete Coupon Error:", err);
-        return res.status(500).json({ success: false, message: "Server error", error: err.message });
-    }
-};
+//         return res.status(200).json({ success: true, message: "Coupon deleted successfully." });
+//     } catch (err) {
+//         console.error("Delete Coupon Error:", err);
+//         return res.status(500).json({ success: false, message: "Server error", error: err.message });
+//     }
+// };
 
-// ---------------------- TOGGLE COUPON STATUS ----------------------
-exports.toggleCouponStatus = async (req, res) => {
-    try {
-        const { couponId } = req.params;
+// // ---------------------- TOGGLE COUPON STATUS ----------------------
+// exports.toggleCouponStatus = async (req, res) => {
+//     try {
+//         const { couponId } = req.params;
 
-        // Validate coupon ID
-        if (!mongoose.Types.ObjectId.isValid(couponId)) {
-            return res.status(400).json({ success: false, message: "Invalid Coupon ID." });
-        }
+//         // Validate coupon ID
+//         if (!mongoose.Types.ObjectId.isValid(couponId)) {
+//             return res.status(400).json({ success: false, message: "Invalid Coupon ID." });
+//         }
 
-        // Find coupon
-        const coupon = await Coupon.findById(couponId);
-        if (!coupon) {
-            return res.status(404).json({ success: false, message: "Coupon not found." });
-        }
+//         // Find coupon
+//         const coupon = await Coupon.findById(couponId);
+//         if (!coupon) {
+//             return res.status(404).json({ success: false, message: "Coupon not found." });
+//         }
 
-        // Toggle isActive
-        coupon.isActive = !coupon.isActive;
-        await coupon.save();
+//         // Toggle isActive
+//         coupon.isActive = !coupon.isActive;
+//         await coupon.save();
 
-        return res.status(200).json({
-            success: true,
-            message: `Coupon is now ${coupon.isActive ? "active" : "inactive"}.`,
-            coupon
-        });
-    } catch (err) {
-        console.error("Toggle Coupon Status Error:", err);
-        return res.status(500).json({ success: false, message: "Server error", error: err.message });
-    }
-};
+//         return res.status(200).json({
+//             success: true,
+//             message: `Coupon is now ${coupon.isActive ? "active" : "inactive"}.`,
+//             coupon
+//         });
+//     } catch (err) {
+//         console.error("Toggle Coupon Status Error:", err);
+//         return res.status(500).json({ success: false, message: "Server error", error: err.message });
+//     }
+// };
 
 
 
 exports.getAllUsers = async (req, res) => {
   try {
-    // Optional: pagination params
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
-    const skip = (page - 1) * limit;
+    const filters = {};
 
-    // Optional: add filters from query params here if needed
-    const filters = {}; // For example, { isVerified: true }
-
-    const totalUsers = await User.countDocuments(filters);
     const users = await User.find(filters)
-      .skip(skip)
-      .limit(limit)
-      .select('-password -otp')  // exclude sensitive fields
+      .select("-password -otp") // remove sensitive fields
+      .sort({ createdAt: -1 })  // latest users first
       .lean();
 
     res.json({
       success: true,
-      total: totalUsers,
-      page,
-      limit,
+      total: users.length,
       users,
     });
+
   } catch (err) {
-    console.error('Error fetching users:', err);
-    res.status(500).json({ success: false, message: 'Server error', error: err.message });
+    console.error("Error fetching users:", err);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err.message,
+    });
   }
 };
 
@@ -853,15 +848,15 @@ exports.registerStaff = async (req, res) => {
       address,
       salary,
       emergencyContact,
-      pagesAccess 
+      pagesAccess,
+      subAdminId // 👈 added
     } = req.body;
 
-    // ✅ express-fileupload → files are directly inside req.files
+    // ✅ express-fileupload
     const aadharCardFront = req.files?.aadharCardFront;
     const aadharCardBack = req.files?.aadharCardBack;
     const photo = req.files?.photo;
 
-    // Validate required documents
     if (!aadharCardFront || !photo) {
       return res.status(400).json({
         success: false,
@@ -869,58 +864,65 @@ exports.registerStaff = async (req, res) => {
       });
     }
 
-    // ✅ Check if staff already exists by email or phone
+    // ✅ Check duplicate staff
     const existingStaff = await Staff.findOne({
       $or: [
-        { email: email.toLowerCase() }, 
+        { email: email.toLowerCase() },
         { phone: mobileNumber }
       ],
     });
 
-    if (existingStaff) {
-      return res.status(400).json({
-        success: false,
-        message: existingStaff.email === email.toLowerCase() 
-          ? "Email already registered" 
-          : "Phone number already registered",
-      });
-    }
+   
+    // ✅ Upload documents
+    const aadharFrontUpload = await cloudinary.uploader.upload(
+      aadharCardFront.tempFilePath,
+      { folder: "staff/aadhar/front", resource_type: "auto" }
+    );
 
-    // ✅ Upload Aadhar Card Front to Cloudinary
-    const aadharFrontUpload = await cloudinary.uploader.upload(aadharCardFront.tempFilePath, {
-      folder: "staff/aadhar/front",
-      resource_type: "auto"
-    });
+    const photoUpload = await cloudinary.uploader.upload(
+      photo.tempFilePath,
+      { folder: "staff/photo", resource_type: "image" }
+    );
 
-    // ✅ Upload Photo to Cloudinary
-    const photoUpload = await cloudinary.uploader.upload(photo.tempFilePath, {
-      folder: "staff/photo",
-      resource_type: "image"
-    });
-
-    // ✅ Upload Aadhar Card Back to Cloudinary (if provided)
     let aadharBackUpload = null;
     if (aadharCardBack) {
-      aadharBackUpload = await cloudinary.uploader.upload(aadharCardBack.tempFilePath, {
-        folder: "staff/aadhar/back",
-        resource_type: "auto"
-      });
+      aadharBackUpload = await cloudinary.uploader.upload(
+        aadharCardBack.tempFilePath,
+        { folder: "staff/aadhar/back", resource_type: "auto" }
+      );
     }
 
-    // ✅ Parse pagesAccess if it's JSON string
+    // ✅ Parse pagesAccess
     let parsedPagesAccess = [];
     if (pagesAccess) {
       try {
-        parsedPagesAccess = typeof pagesAccess === "string" 
-          ? JSON.parse(pagesAccess) 
-          : pagesAccess;
-      } catch (parseError) {
-        console.error("Error parsing pagesAccess:", parseError);
-        parsedPagesAccess = [];
+        parsedPagesAccess =
+          typeof pagesAccess === "string"
+            ? JSON.parse(pagesAccess)
+            : pagesAccess;
+      } catch (err) {
+        console.error("pagesAccess parse error:", err);
       }
     }
 
-    // ✅ Create staff data
+    // ✅ NOTE & CREATED BY logic
+    let note = "Staff registered by Admin";
+    let createdBy = null;
+
+    if (subAdminId) {
+      const subAdmin = await SubAdmin.findById(subAdminId);
+      if (!subAdmin) {
+        return res.status(404).json({
+          success: false,
+          message: "Sub-admin not found",
+        });
+      }
+
+      note = `Staff registered by Sub-admin: ${subAdmin.name}`;
+      createdBy = subAdminId;
+    }
+
+    // ✅ Create staff
     const staffData = {
       fullName,
       email: email.toLowerCase(),
@@ -939,7 +941,9 @@ exports.registerStaff = async (req, res) => {
       photo: photoUpload.secure_url,
       pagesAccess: parsedPagesAccess,
       status: "pending",
-      isActive: true
+      isActive: true,
+      note,        // 👈 added
+      createdBy    // 👈 added
     };
 
     const newStaff = new Staff(staffData);
@@ -947,76 +951,102 @@ exports.registerStaff = async (req, res) => {
 
     res.status(201).json({
       success: true,
-      message: "Staff registered successfully!",
+      message: "Staff registered successfully ✅",
       staff: {
         id: newStaff._id,
         fullName: newStaff.fullName,
         email: newStaff.email,
         phone: newStaff.phone,
         role: newStaff.role,
-        status: newStaff.status
+        status: newStaff.status,
       },
     });
   } catch (error) {
     console.error("Staff Registration Error:", error);
-    
-    // Handle duplicate key errors
+
     if (error.code === 11000) {
       const field = Object.keys(error.keyPattern)[0];
-      const message = field === 'email' 
-        ? 'Email already exists' 
-        : field === 'phone' 
-          ? 'Phone number already exists'
-          : 'Employee ID already exists';
-      
-      return res.status(400).json({ 
-        success: false, 
-        message 
+      const message =
+        field === "email"
+          ? "Email already exists"
+          : field === "phone"
+          ? "Phone number already exists"
+          : "Employee ID already exists";
+
+      return res.status(400).json({
+        success: false,
+        message,
       });
     }
-    
-    res.status(500).json({ 
-      success: false, 
-      message: "Server Error", 
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined 
+
+    res.status(500).json({
+      success: false,
+      message: "Server Error",
+      error:
+        process.env.NODE_ENV === "development"
+          ? error.message
+          : undefined,
     });
   }
 };
 
 exports.addSalaryToStaff = async (req, res) => {
   try {
-    const { staffId } = req.params; // Get staffId from URL params
-    const { amount, month, status } = req.body; // Get salary data from request body
+    const { staffId } = req.params;
+    const { amount, month, status, subAdminId } = req.body; // 👈 subAdminId added
 
-    // Find the staff member by ID
+    // ✅ Find staff
     const staff = await Staff.findById(staffId);
     if (!staff) {
       return res.status(404).json({
-        message: "Staff member not found"
+        success: false,
+        message: "Staff member not found",
       });
     }
 
-    // Create the new salary entry with a date field
+    // ✅ NOTE & ADDED BY logic
+    let note = "Salary added by Admin";
+    let addedBy = null;
+
+    if (subAdminId) {
+      const subAdmin = await SubAdmin.findById(subAdminId);
+      if (!subAdmin) {
+        return res.status(404).json({
+          success: false,
+          message: "Sub-admin not found",
+        });
+      }
+
+      note = `Salary added by Sub-admin: ${subAdmin.name}`;
+      addedBy = subAdminId;
+    }
+
+    // ✅ Create salary entry
     const newSalary = {
       amount,
       month,
       status,
-      date: new Date() // Set the current date
+      date: new Date(),
+      note,      // 👈 added
+      addedBy,   // 👈 added
     };
 
-    // Add the new salary entry to the mySalary[] array
+    // ✅ Push salary
     staff.mySalary.push(newSalary);
-
-    // Save the updated staff document
     await staff.save();
 
     return res.status(200).json({
-      message: "Salary added successfully",
-      staff: staff
+      success: true,
+      message: "Salary added successfully ✅",
+      staff,
     });
   } catch (error) {
     console.error("Error adding salary:", error);
-    res.status(500).json({ message: "Server Error", error: error.message });
+    return res.status(500).json({
+      success: false,
+      message: "Server Error",
+      error: error.message,
+    });
   }
 };
 
@@ -1067,16 +1097,36 @@ exports.updateStaff = async (req, res) => {
       gender,
       age,
       pagesAccess,
-      status, // ✅ status included in destructuring
+      status,
+      subAdminId, // 👈 added
     } = req.body;
 
     // ✅ Check if staff exists
     const staff = await Staff.findById(id);
     if (!staff) {
-      return res.status(404).json({ success: false, message: "Staff not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Staff not found" });
     }
 
-    // ✅ Prepare update data - INCLUDING STATUS
+    // ✅ NOTE & UPDATED BY logic
+    let note = "Staff updated by Admin";
+    let updatedBy = null;
+
+    if (subAdminId) {
+      const subAdmin = await SubAdmin.findById(subAdminId);
+      if (!subAdmin) {
+        return res.status(404).json({
+          success: false,
+          message: "Sub-admin not found",
+        });
+      }
+
+      note = `Staff updated by Sub-admin: ${subAdmin.name}`;
+      updatedBy = subAdminId;
+    }
+
+    // ✅ Prepare update data
     let updateData = {
       fullName,
       email,
@@ -1084,38 +1134,42 @@ exports.updateStaff = async (req, res) => {
       role,
       gender,
       age,
-      status, // ✅ ADD THIS LINE - Status included in update data
+      status,
+      note,       // 👈 added
+      updatedBy,  // 👈 added
     };
 
-    // ✅ Parse pagesAccess if provided
+    // ✅ Parse pagesAccess
     if (pagesAccess) {
       try {
         updateData.pagesAccess =
-          typeof pagesAccess === "string" ? JSON.parse(pagesAccess) : pagesAccess;
-      } catch (parseError) {
-        console.error("Error parsing pagesAccess:", parseError);
+          typeof pagesAccess === "string"
+            ? JSON.parse(pagesAccess)
+            : pagesAccess;
+      } catch (err) {
+        console.error("Error parsing pagesAccess:", err);
       }
     }
 
-    // ✅ If new Aadhar card uploaded
+    // ✅ Update Aadhar card
     if (req.files?.aadharCard) {
-      const aadharCard = req.files.aadharCard;
-      const aadharUpload = await cloudinary.uploader.upload(aadharCard.tempFilePath, {
-        folder: "staff/aadhar",
-      });
+      const aadharUpload = await cloudinary.uploader.upload(
+        req.files.aadharCard.tempFilePath,
+        { folder: "staff/aadhar" }
+      );
       updateData.aadharCard = aadharUpload.secure_url;
     }
 
-    // ✅ If new photo uploaded
+    // ✅ Update photo
     if (req.files?.photo) {
-      const photo = req.files.photo;
-      const photoUpload = await cloudinary.uploader.upload(photo.tempFilePath, {
-        folder: "staff/photo",
-      });
+      const photoUpload = await cloudinary.uploader.upload(
+        req.files.photo.tempFilePath,
+        { folder: "staff/photo" }
+      );
       updateData.photo = photoUpload.secure_url;
     }
 
-    // ✅ Update staff data
+    // ✅ Update staff
     const updatedStaff = await Staff.findByIdAndUpdate(id, updateData, {
       new: true,
       runValidators: true,
@@ -1123,7 +1177,7 @@ exports.updateStaff = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: "Staff updated successfully",
+      message: "Staff updated successfully ✅",
       data: updatedStaff,
     });
   } catch (error) {
@@ -1484,14 +1538,30 @@ exports.deleteAmount = async (req, res) => {
 
 exports.createPlan = async (req, res) => {
   try {
-    const { name, price, discount = 0, validity, benefits } = req.body;
+    const { name, price, discount = 0, validity, benefits, subAdminId } = req.body;
 
+    // Step 1: Handle subAdminId and note
+    let note = "Plan created by Admin";
+    let createdBy = null;
+
+    if (subAdminId) {
+      const subAdmin = await SubAdmin.findById(subAdminId);
+      if (!subAdmin) {
+        return res.status(404).json({ success: false, message: "Sub-admin not found" });
+      }
+      note = `Plan created by Sub-admin: ${subAdmin.name}`;
+      createdBy = subAdminId;
+    }
+
+    // Step 2: Create a new plan
     const newPlan = new AmbassadorPlan({
       name,
       price,
       discount,
       validity,
-      benefits
+      benefits,
+      note,            // Added note
+      createdBy       // Added createdBy to track who created the plan
     });
 
     await newPlan.save();
@@ -1547,11 +1617,35 @@ exports.getPlanById = async (req, res) => {
 // Update a plan
 exports.updatePlan = async (req, res) => {
   try {
-    const updatedPlan = await AmbassadorPlan.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    const { subAdminId, note } = req.body;  // Extract subAdminId and note
+
+    // Step 1: Handle subAdminId and note
+    let updatedBy = null;
+
+    if (subAdminId) {
+      const subAdmin = await SubAdmin.findById(subAdminId);
+      if (!subAdmin) {
+        return res.status(404).json({ success: false, message: "Sub-admin not found" });
+      }
+      updatedBy = subAdminId;
+    }
+
+    // Step 2: Update the plan
+    const updatedPlan = await AmbassadorPlan.findByIdAndUpdate(
+      req.params.id, 
+      { ...req.body, updatedBy, note: note || "Plan updated" },  // Include updatedBy and note
+      { new: true }
+    );
+
     if (!updatedPlan) {
       return res.status(404).json({ success: false, message: "Plan not found" });
     }
-    res.status(200).json({ success: true, message: "Plan updated", data: updatedPlan });
+
+    res.status(200).json({
+      success: true,
+      message: "Plan updated successfully",
+      data: updatedPlan
+    });
   } catch (err) {
     console.error("❌ Error updating plan:", err);
     res.status(500).json({ success: false, message: err.message });
@@ -1820,13 +1914,26 @@ exports.getReferredStats = async (req, res) => {
 // Create a new vendor plan
 exports.createVendorPlan = async (req, res) => {
   try {
-    const { name, price, validity, benefits } = req.body;
+    const { name, price, validity, benefits, subAdminId } = req.body;
 
+    // Find the sub-admin who is creating the plan (if subAdminId is provided)
+    let note = `Vendor plan created by Admin`; // Default note
+    if (subAdminId) {
+      const subAdmin = await SubAdmin.findById(subAdminId);
+      if (subAdmin) {
+        note = `Vendor plan created by Sub-admin: ${subAdmin.name}`;
+      } else {
+        return res.status(404).json({ success: false, message: "Sub-admin not found" });
+      }
+    }
+
+    // Create the new Vendor Plan
     const newPlan = new VendorPlan({
       name,
       price,
       validity,
       benefits,
+      note, // Adding note to the plan
     });
 
     await newPlan.save();
@@ -1845,6 +1952,7 @@ exports.createVendorPlan = async (req, res) => {
     });
   }
 };
+
 
 // Get all vendor plans
 exports.getAllVendorPlans = async (req, res) => {
@@ -1881,24 +1989,46 @@ exports.getVendorPlanById = async (req, res) => {
 // Update a vendor plan
 exports.updateVendorPlan = async (req, res) => {
   try {
-    const updatedPlan = await VendorPlan.findByIdAndUpdate(
-      req.params.id, 
-      req.body, 
-      { new: true, runValidators: true }
-    );
+    const { id } = req.params;
+    const { subAdminId, ...updatedFields } = req.body; // Extracting subAdminId separately
+
+    // Find the Vendor Plan to update
+    const updatedPlan = await VendorPlan.findById(id);
     if (!updatedPlan) {
       return res.status(404).json({ success: false, message: "Vendor plan not found" });
     }
-    res.status(200).json({ 
-      success: true, 
-      message: "Vendor plan updated successfully", 
-      data: updatedPlan 
+
+    // Find the sub-admin who is updating the plan (if subAdminId is provided)
+    let note = `Vendor plan updated by Admin`; // Default note
+    if (subAdminId) {
+      const subAdmin = await SubAdmin.findById(subAdminId);
+      if (subAdmin) {
+        note = `Vendor plan updated by Sub-admin: ${subAdmin.name}`;
+      } else {
+        return res.status(404).json({ success: false, message: "Sub-admin not found" });
+      }
+    }
+
+    // Add the note to the updated fields
+    updatedFields.note = note;
+
+    // Update the Vendor Plan
+    const plan = await VendorPlan.findByIdAndUpdate(id, updatedFields, { new: true, runValidators: true });
+
+    res.status(200).json({
+      success: true,
+      message: "Vendor plan updated successfully",
+      data: plan,
     });
   } catch (err) {
     console.error("❌ Error updating vendor plan:", err);
-    res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({
+      success: false,
+      message: err.message,
+    });
   }
 };
+
 
 // Delete a vendor plan
 exports.deleteVendorPlan = async (req, res) => {
@@ -1973,7 +2103,8 @@ exports.createCharge = async (req, res) => {
       minDistance,
       maxDistance,
       perKmRate,
-      freeDeliveryThreshold  // ✅ Added new field
+      freeDeliveryThreshold, // ✅ Added new field
+      subAdminId // Added subAdminId
     } = req.body;
     
     // Validate required fields
@@ -2003,7 +2134,6 @@ exports.createCharge = async (req, res) => {
       
       switch(deliveryMethod) {
         case 'flat_rate':
-        
           break;
         case 'per_km':
           break;
@@ -2042,7 +2172,18 @@ exports.createCharge = async (req, res) => {
     // Use the chargeType sent from frontend, or default to 'fixed'
     const finalChargeType = chargeType || 'fixed';
     const finalAmount = type === 'free_delivery_threshold' ? 0 : amount;
-    
+
+    // Find the sub-admin who is creating the charge (if subAdminId is provided)
+    let note = `Charge created by Admin`; // Default note
+    if (subAdminId) {
+      const subAdmin = await SubAdmin.findById(subAdminId);
+      if (subAdmin) {
+        note = `Charge created by Sub-admin: ${subAdmin.name}`;
+      } else {
+        return res.status(404).json({ success: false, message: "Sub-admin not found" });
+      }
+    }
+
     const newCharge = await Charge.create({
       type,
       amount: finalAmount,
@@ -2052,7 +2193,8 @@ exports.createCharge = async (req, res) => {
       minDistance: type === 'delivery_charge' ? minDistance : null,
       maxDistance: type === 'delivery_charge' ? maxDistance : null,
       perKmRate: type === 'delivery_charge' ? perKmRate : null,
-      freeDeliveryThreshold: type === 'free_delivery_threshold' ? freeDeliveryThreshold : null
+      freeDeliveryThreshold: type === 'free_delivery_threshold' ? freeDeliveryThreshold : null,
+      note, // Adding note to the charge
     });
     
     res.status(201).json({
@@ -2071,13 +2213,13 @@ exports.createCharge = async (req, res) => {
     }
     
     // Handle duplicate key errors
-    
     res.status(500).json({
       success: false,
       message: error.message
     });
   }
 };
+
 
 // Update charge
 exports.updateCharge = async (req, res) => {
@@ -2091,7 +2233,8 @@ exports.updateCharge = async (req, res) => {
       minDistance,
       maxDistance,
       perKmRate,
-      freeDeliveryThreshold  // ✅ Added new field
+      freeDeliveryThreshold, // ✅ Added new field
+      subAdminId // Added subAdminId
     } = req.body;
     
     // Find existing charge
@@ -2113,7 +2256,6 @@ exports.updateCharge = async (req, res) => {
     
     // If updating delivery charge, validate delivery-specific fields
     if (existingCharge.type === 'delivery_charge') {
-      // If updating delivery method, validate the required fields
       const methodToUse = deliveryMethod || existingCharge.deliveryMethod;
       
       switch(methodToUse) {
@@ -2194,6 +2336,18 @@ exports.updateCharge = async (req, res) => {
       updateData.freeDeliveryThreshold = null;
     }
     
+    // Add the note to the update data
+    let note = `Charge updated by Admin`; // Default note
+    if (subAdminId) {
+      const subAdmin = await SubAdmin.findById(subAdminId);
+      if (subAdmin) {
+        note = `Charge updated by Sub-admin: ${subAdmin.name}`;
+      } else {
+        return res.status(404).json({ success: false, message: "Sub-admin not found" });
+      }
+    }
+    updateData.note = note;
+
     const updatedCharge = await Charge.findByIdAndUpdate(
       id,
       updateData,
@@ -2676,7 +2830,7 @@ exports.resetPassword = async (req, res) => {
 
 exports.addCredential = async (req, res) => {
   try {
-    const { type, email, mobile, whatsappNumber } = req.body;
+    const { type, email, mobile, whatsappNumber, subAdminId } = req.body;  // Added subAdminId
 
     if (!type || !email || !mobile || !whatsappNumber) {
       return res.status(400).json({
@@ -2684,11 +2838,23 @@ exports.addCredential = async (req, res) => {
       });
     }
 
+    // Find the sub-admin who is adding the credential (if subAdminId is provided)
+    let note = `Credential added by Admin`; // Default note
+    if (subAdminId) {
+      const subAdmin = await SubAdmin.findById(subAdminId);
+      if (subAdmin) {
+        note = `Credential added by Sub-admin: ${subAdmin.name}`;
+      } else {
+        return res.status(404).json({ success: false, message: "Sub-admin not found" });
+      }
+    }
+
     const newCredential = new Credential({
       type,
       email,
       mobile,
-      whatsappNumber
+      whatsappNumber,
+      note // Adding note to the credential
     });
 
     await newCredential.save();
@@ -2723,7 +2889,7 @@ exports.getAllCredentials = async (req, res) => {
 exports.updateCredential = async (req, res) => {
   try {
     const { credentialId } = req.params;
-    const { type, email, mobile, whatsappNumber } = req.body;
+    const { type, email, mobile, whatsappNumber, subAdminId } = req.body;  // Added subAdminId
 
     const updateData = {};
 
@@ -2731,6 +2897,20 @@ exports.updateCredential = async (req, res) => {
     if (email) updateData.email = email;
     if (mobile) updateData.mobile = mobile;
     if (whatsappNumber) updateData.whatsappNumber = whatsappNumber;
+
+    // Find the sub-admin who is updating the credential (if subAdminId is provided)
+    let note = `Credential updated by Admin`; // Default note
+    if (subAdminId) {
+      const subAdmin = await SubAdmin.findById(subAdminId);
+      if (subAdmin) {
+        note = `Credential updated by Sub-admin: ${subAdmin.name}`;
+      } else {
+        return res.status(404).json({ success: false, message: "Sub-admin not found" });
+      }
+    }
+
+    // Add note to update data
+    updateData.note = note;
 
     const updatedCredential = await Credential.findByIdAndUpdate(
       credentialId,
@@ -2755,6 +2935,7 @@ exports.updateCredential = async (req, res) => {
     });
   }
 };
+
 
 
 // Delete a credential
@@ -3065,5 +3246,151 @@ exports.subAdminLogin = async (req, res) => {
       success: false,
       message: error.message
     });
+  }
+};
+
+
+
+
+exports.createCoupon = async (req, res) => {
+  try {
+    const {
+      couponCode,
+      title,
+      description,
+      discountType,
+      discountValue,
+      minOrderAmount,
+      maxDiscountAmount,
+      startDate,
+      endDate,
+      usageLimit,
+      isActive,
+      subAdminId, // ✅ sirf body se
+    } = req.body || {};
+
+
+    const existing = await Coupon.findOne({ couponCode });
+    if (existing) {
+      return res.status(400).json({
+        success: false,
+        message: "Coupon code already exists",
+      });
+    }
+
+    let note = "Created by Admin";
+    let createdBy = null;
+
+    if (subAdminId) {
+      const subAdmin = await SubAdmin.findById(subAdminId);
+      if (!subAdmin) {
+        return res.status(404).json({
+          success: false,
+          message: "Sub-admin not found",
+        });
+      }
+      note = `Created by Sub-admin: ${subAdmin.name}`;
+      createdBy = subAdminId;
+    }
+
+    const coupon = await Coupon.create({
+      couponCode,
+      title,
+      description,
+      discountType,
+      discountValue,
+      minOrderAmount,
+      maxDiscountAmount,
+      startDate,
+      endDate,
+      usageLimit,
+      isActive,
+      note,
+      createdBy,
+    });
+
+    res.status(201).json({
+      success: true,
+      message: "Coupon created successfully ✅",
+      data: coupon,
+    });
+  } catch (err) {
+    console.error("Create Coupon Error:", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+
+
+exports.updateCoupon = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { subAdminId, ...updateData } = req.body || {};
+
+    let note = "Updated by Admin";
+    let updatedBy = null;
+
+    if (subAdminId) {
+      const subAdmin = await SubAdmin.findById(subAdminId);
+      if (!subAdmin) {
+        return res.status(404).json({
+          success: false,
+          message: "Sub-admin not found",
+        });
+      }
+      note = `Updated by Sub-admin: ${subAdmin.name}`;
+      updatedBy = subAdminId;
+    }
+
+    const updatedCoupon = await Coupon.findByIdAndUpdate(
+      id,
+      {
+        ...updateData,
+        note,
+        updatedBy,
+      },
+      { new: true }
+    );
+
+    if (!updatedCoupon) {
+      return res.status(404).json({
+        success: false,
+        message: "Coupon not found",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Coupon updated successfully ✅",
+      data: updatedCoupon,
+    });
+  } catch (err) {
+    console.error("Update Coupon Error:", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+
+
+
+exports.deleteCoupon = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const deleted = await Coupon.findByIdAndDelete(id);
+    if (!deleted) {
+      return res.status(404).json({
+        success: false,
+        message: "Coupon not found",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Coupon deleted successfully",
+    });
+  } catch (err) {
+    console.error("Delete Coupon Error:", err);
+    res.status(500).json({ success: false, message: "Server error" });
   }
 };

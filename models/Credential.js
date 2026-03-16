@@ -13,6 +13,12 @@ const credentialSchema = new mongoose.Schema({
    whatsappNumber: {
     type: String,
   },
+        note: { type: String },
+      updatedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "SubAdmin",
+        default: null,
+      },
   createdAt: {
     type: Date,
     default: Date.now

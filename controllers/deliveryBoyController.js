@@ -11,6 +11,8 @@ const orderModel = require("../models/orderModel");
 const nodemailer = require("nodemailer");
 const crypto = require('crypto');
 const dotenv = require("dotenv");
+const SubAdmin = require('../models/SubAdmin');
+
 
 
 
@@ -108,38 +110,50 @@ exports.registerDeliveryBoy = async (req, res) => {
 // Update Delivery Boy (Full Name and Email)
 exports.updateDeliveryBoy = async (req, res) => {
   try {
-    // Extract deliveryBoyId from the URL params
     const { deliveryBoyId } = req.params;
+    const { fullName, email, subAdminId } = req.body; // 👈 subAdminId added
 
-    // Extract fullName and email from the request body
-    const { fullName, email } = req.body;
-
-    // Validate if fullName and email are provided
     if (!fullName || !email) {
-      return res.status(400).json({ message: "Both fullName and email are required." });
+      return res
+        .status(400)
+        .json({ message: "Both fullName and email are required." });
     }
 
-    // Validate if deliveryBoyId is a valid ObjectId
     if (!mongoose.Types.ObjectId.isValid(deliveryBoyId)) {
       return res.status(400).json({ message: "Invalid deliveryBoyId." });
     }
 
-    // Find the delivery boy by ID
     const deliveryBoy = await DeliveryBoy.findById(deliveryBoyId);
     if (!deliveryBoy) {
       return res.status(404).json({ message: "Delivery boy not found." });
     }
 
-    // Update the delivery boy's fullName and email
+    // ✅ NOTE & UPDATED BY logic
+    let note = "Delivery Boy updated by Admin";
+    let updatedBy = null;
+
+    if (subAdminId) {
+      const subAdmin = await SubAdmin.findById(subAdminId);
+      if (!subAdmin) {
+        return res.status(404).json({
+          message: "Sub-admin not found",
+        });
+      }
+
+      note = `Delivery Boy updated by Sub-admin: ${subAdmin.name}`;
+      updatedBy = subAdminId;
+    }
+
+    // ✅ Update fields
     deliveryBoy.fullName = fullName;
     deliveryBoy.email = email;
+    deliveryBoy.note = note;           // 👈 added
+    deliveryBoy.updatedBy = updatedBy; // 👈 added
 
-    // Save the updated delivery boy details
     await deliveryBoy.save();
 
-    // Send success response
     return res.status(200).json({
-      message: "Delivery Boy updated successfully.",
+      message: "Delivery Boy updated successfully ✅",
       data: deliveryBoy,
     });
   } catch (error) {
@@ -150,6 +164,8 @@ exports.updateDeliveryBoy = async (req, res) => {
     });
   }
 };
+
+
 
 // Step 2: Verify OTP and save in DB
 exports.verifyOTP = async (req, res) => {
@@ -176,8 +192,6 @@ exports.verifyOTP = async (req, res) => {
   }
 };
 
-// Step 1: Request OTP for login
-// Step 1: Request OTP for login
 // 1. Request Login OTP
 exports.requestLoginOTP = async (req, res) => {
   try {
@@ -190,26 +204,40 @@ exports.requestLoginOTP = async (req, res) => {
     // Check if delivery boy exists
     const deliveryBoy = await DeliveryBoy.findOne({ mobileNumber });
     if (!deliveryBoy) {
-      return res.status(404).json({ message: "Delivery Boy not found. Please register first." });
+      return res.status(404).json({ 
+        message: "Delivery Boy not found. Please register first." 
+      });
+    }
+
+    // 🔴 Check if account is pending
+    if (deliveryBoy.deliveryBoyStatus === "pending") {
+      return res.status(403).json({
+        success: false,
+        message: "Your account is not verified by admin. Please wait for approval."
+      });
     }
 
     // Set OTP as a fixed value (1234)
     const otp = 1234;
 
     // Store OTP and expiry in database
-    deliveryBoy.otp = otp;  // Save OTP
-    deliveryBoy.otpExpiresAt = Date.now() + 5 * 60 * 1000; // OTP expires in 5 minutes
+    deliveryBoy.otp = otp;
+    deliveryBoy.otpExpiresAt = Date.now() + 5 * 60 * 1000; // 5 minutes
     await deliveryBoy.save();
 
-    // For testing, send OTP in response (in real-world apps, this should be sent via SMS)
     res.status(200).json({
       success: true,
       message: "OTP sent successfully",
-      otp,  // Send OTP in the response (for testing purposes)
+      otp, // Only for testing
     });
+
   } catch (error) {
     console.error("Request Login OTP Error:", error);
-    res.status(500).json({ success: false, message: "Server Error", error: error.message });
+    res.status(500).json({ 
+      success: false, 
+      message: "Server Error", 
+      error: error.message 
+    });
   }
 };
 
@@ -1237,18 +1265,18 @@ exports.getAllWithdrawals = async (req, res) => {
 // Admin controller to update withdrawal status (Approve/Reject)
 exports.updateWithdrawalStatus = async (req, res) => {
   try {
-    const { withdrawalId } = req.params;  // Extract the withdrawalId from the URL params
-    const { status } = req.body;  // Extract the status ('Approved' or 'Rejected') from the body
+    const { withdrawalId } = req.params;
+    const { status, subAdminId } = req.body; // 👈 subAdminId added
 
     // Validate status
-    if (!['Approved', 'Rejected'].includes(status)) {
+    if (!["Approved", "Rejected"].includes(status)) {
       return res.status(400).json({
         success: false,
         message: "Invalid status. It must be either 'Approved' or 'Rejected'.",
       });
     }
 
-    // Find the withdrawal request by ID
+    // Find withdrawal request
     const withdrawal = await Withdrawal.findById(withdrawalId);
     if (!withdrawal) {
       return res.status(404).json({
@@ -1257,9 +1285,29 @@ exports.updateWithdrawalStatus = async (req, res) => {
       });
     }
 
-    // If status is 'Approved', deduct amount from delivery boy's wallet
-    if (status === 'Approved') {
-      const deliveryBoy = await DeliveryBoy.findById(withdrawal.deliveryBoyId);
+    // ✅ NOTE & UPDATED BY logic
+    let note = `Delivery Boy withdrawal ${status} by Admin`;
+    let updatedBy = null;
+
+    if (subAdminId) {
+      const subAdmin = await SubAdmin.findById(subAdminId);
+      if (!subAdmin) {
+        return res.status(404).json({
+          success: false,
+          message: "Sub-admin not found",
+        });
+      }
+
+      note = `Delivery Boy withdrawal ${status} by Sub-admin: ${subAdmin.name}`;
+      updatedBy = subAdminId;
+    }
+
+    // If Approved → deduct wallet balance
+    if (status === "Approved") {
+      const deliveryBoy = await DeliveryBoy.findById(
+        withdrawal.deliveryBoyId
+      );
+
       if (!deliveryBoy) {
         return res.status(404).json({
           success: false,
@@ -1267,7 +1315,6 @@ exports.updateWithdrawalStatus = async (req, res) => {
         });
       }
 
-      // Check if the delivery boy has enough balance
       if (deliveryBoy.walletBalance < withdrawal.amount) {
         return res.status(400).json({
           success: false,
@@ -1275,23 +1322,20 @@ exports.updateWithdrawalStatus = async (req, res) => {
         });
       }
 
-      // Deduct the withdrawal amount from the delivery boy's wallet
       deliveryBoy.walletBalance -= withdrawal.amount;
-
-      // Save the updated delivery boy's wallet balance
       await deliveryBoy.save();
     }
 
-    // Update the withdrawal request status
+    // ✅ Update withdrawal
     withdrawal.status = status;
+    withdrawal.note = note;           // 👈 added
+    withdrawal.updatedBy = updatedBy; // 👈 added
 
-    // Save the updated withdrawal status
     await withdrawal.save();
 
-    // Return the success response
     return res.status(200).json({
       success: true,
-      message: `Withdrawal request ${status} successfully.`,
+      message: `Withdrawal request ${status} successfully ✅`,
       data: withdrawal,
     });
   } catch (error) {
@@ -1303,6 +1347,7 @@ exports.updateWithdrawalStatus = async (req, res) => {
     });
   }
 };
+
 
 
 exports.getDeliveryBoyProfile = async (req, res) => {

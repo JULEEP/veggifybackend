@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>VEGIFFY Receipt</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Courier New', 'Lucida Console', monospace;
+            background: #ffffff;
+            padding: 0;
+            line-height: 1.2;
+            font-size: 12px;
+        }
+        
+        .thermal-receipt {
+            max-width: 300px;
+            margin: 0 auto;
+            background: white;
+            border: 1px dashed #999;
+            padding: 15px 12px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        
+        /* Dotted lines for thermal look */
+        .dotted-line {
+            border-bottom: 1px dotted #333;
+            margin: 8px 0;
+        }
+        
+        .solid-line {
+            border-bottom: 1px solid #333;
+            margin: 8px 0;
+        }
+        
+        /* Header */
+        .store-header {
+            text-align: center;
+            margin-bottom: 10px;
+        }
+        
+        .store-header h1 {
+            font-size: 28px;
+            font-weight: 800;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            font-family: 'Courier New', monospace;
+            margin: 0;
+        }
+        
+        .store-header .tagline {
+            font-size: 9px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            margin-top: 2px;
+        }
+        
+        .store-header .invoice-no {
+            font-size: 11px;
+            margin-top: 5px;
+        }
+        
+        /* Bill title */
+        .bill-title {
+            text-align: center;
+            font-size: 16px;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 3px;
+            margin: 5px 0;
+        }
+        
+        /* Info rows */
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            margin: 3px 0;
+        }
+        
+        .info-row .label {
+            font-weight: bold;
+        }
+        
+        /* Restaurant info */
+        .restaurant-info {
+            margin: 8px 0;
+            text-align: center;
+        }
+        
+        .restaurant-info .name {
+            font-size: 14px;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+        
+        .restaurant-info .location {
+            font-size: 10px;
+        }
+        
+        /* Address */
+        .address-box {
+            margin: 8px 0;
+        }
+        
+        .address-box .title {
+            font-weight: bold;
+            text-transform: uppercase;
+            font-size: 10px;
+            margin-bottom: 2px;
+        }
+        
+        .address-box p {
+            font-size: 10px;
+            line-height: 1.3;
+        }
+        
+        /* Items table */
+        .items-table {
+            width: 100%;
+            margin: 10px 0;
+            font-size: 10px;
+        }
+        
+        .items-table th {
+            text-align: left;
+            border-bottom: 1px solid #333;
+            padding: 3px 0;
+            text-transform: uppercase;
+        }
+        
+        .items-table td {
+            padding: 3px 0;
+        }
+        
+        .items-table .item-name {
+            font-weight: bold;
+        }
+        
+        .items-table .item-meta {
+            font-size: 9px;
+            color: #555;
+        }
+        
+        .items-table .text-right {
+            text-align: right;
+        }
+        
+        /* Summary */
+        .summary-box {
+            margin: 8px 0;
+        }
+        
+        .summary-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 10px;
+            padding: 2px 0;
+        }
+        
+        .summary-row.total {
+            font-size: 14px;
+            font-weight: bold;
+            border-top: 2px solid #333;
+            border-bottom: 2px solid #333;
+            padding: 5px 0;
+            margin: 5px 0;
+        }
+        
+        .discount {
+            color: #333;
+        }
+        
+        /* Payment status */
+        .payment-row {
+            display: flex;
+            justify-content: space-between;
+            margin: 5px 0;
+            font-size: 10px;
+        }
+        
+        .payment-status {
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+        
+        /* Footer */
+        .footer {
+            text-align: center;
+            margin-top: 12px;
+            font-size: 10px;
+        }
+        
+        .footer .thankyou {
+            font-weight: bold;
+            font-size: 12px;
+            margin-bottom: 5px;
+        }
+        
+        .footer .note {
+            font-size: 8px;
+            color: #555;
+        }
+        
+        /* Thermal cut effect */
+        .thermal-cut {
+            text-align: center;
+            margin: 8px 0;
+            font-size: 8px;
+            letter-spacing: 2px;
+        }
+        
+        /* Date time */
+        .datetime {
+            text-align: center;
+            font-size: 10px;
+            margin: 5px 0;
+        }
+        
+        /* Order meta */
+        .order-meta {
+            display: flex;
+            justify-content: space-between;
+            font-size: 10px;
+            margin: 5px 0;
+        }
+        
+        /* Compact everything */
+        .compact {
+            line-height: 1.1;
+        }
+        
+        /* Star line */
+        .star-line {
+            text-align: center;
+            font-size: 12px;
+            letter-spacing: 2px;
+            margin: 5px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="thermal-receipt">
+        <!-- Store Header -->
+        <div class="store-header">
+            <h1>VEGIFFY</h1>
+            <div class="tagline">fresh • healthy • fast</div>
+            <div class="star-line">⋆ ⋆ ⋆</div>
+            <div class="invoice-no">Receipt #<%= order._id.toString().slice(-8) %></div>
+            <div class="datetime">
+                <%= new Date(order.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: '2-digit' }) %>
+                <%= new Date(order.createdAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) %>
+            </div>
+        </div>
+        
+        <div class="dotted-line"></div>
+        
+        <!-- Restaurant Info -->
+        <div class="restaurant-info">
+            <div class="name"><%= order.restaurantId.restaurantName.toUpperCase() %></div>
+            <div class="location"><%= order.restaurantId.locationName %></div>
+        </div>
+        
+        <div class="solid-line"></div>
+        
+        <!-- Customer Address -->
+        <div class="address-box">
+            <div class="title">DELIVER TO:</div>
+            <p><%= order.deliveryAddress.street %></p>
+            <p><%= order.deliveryAddress.city %>, <%= order.deliveryAddress.state %> - <%= order.deliveryAddress.postalCode %></p>
+            <p>[<%= order.deliveryAddress.addressType %>]</p>
+        </div>
+        
+        <div class="dotted-line"></div>
+        
+        <!-- Order Meta -->
+        <div class="order-meta">
+            <span>Order #: <%= order._id.toString().slice(-6) %></span>
+            <span>Distance: <%= order.distanceKm %>km</span>
+        </div>
+        
+        <div class="solid-line"></div>
+        
+        <!-- Items -->
+        <table class="items-table">
+            <thead>
+                <tr>
+                    <th>Item</th>
+                    <th class="text-right">Qty</th>
+                    <th class="text-right">Price</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% order.products.forEach(product => { %>
+                    <tr>
+                        <td>
+                            <span class="item-name"><%= product.name %></span>
+                            <% if(product.isHalfPlate) { %>
+                                <div class="item-meta">(Half Plate)</div>
+                            <% } %>
+                            <% if(product.discountAmount > 0) { %>
+                                <div class="item-meta">-₹<%= product.discountAmount.toFixed(2) %></div>
+                            <% } %>
+                        </td>
+                        <td class="text-right"><%= product.quantity %></td>
+                        <td class="text-right">₹<%= (product.price * product.quantity).toFixed(2) %></td>
+                    </tr>
+                <% }) %>
+            </tbody>
+        </table>
+        
+        <div class="solid-line"></div>
+        
+        <!-- Summary -->
+        <div class="summary-box">
+            <div class="summary-row">
+                <span>Subtotal</span>
+                <span>₹<%= order.subTotal.toFixed(2) %></span>
+            </div>
+            <div class="summary-row">
+                <span>Delivery</span>
+                <span>₹<%= order.deliveryCharge.toFixed(2) %></span>
+            </div>
+            <div class="summary-row">
+                <span>Platform Fee</span>
+                <span>₹<%= order.platformCharge.toFixed(2) %></span>
+            </div>
+            <div class="summary-row">
+                <span>Packing</span>
+                <span>₹<%= order.packingCharges.toFixed(2) %></span>
+            </div>
+            <div class="summary-row">
+                <span>GST Food (5%)</span>
+                <span>₹<%= order.gstCharges.toFixed(2) %></span>
+            </div>
+            <div class="summary-row">
+                <span>GST Delivery (18%)</span>
+                <span>₹<%= order.gstOnDelivery.toFixed(2) %></span>
+            </div>
+            
+            <% if(order.couponDiscount > 0) { %>
+                <div class="summary-row discount">
+                    <span>Coupon (<%= order.appliedCoupon.couponCode || '' %>)</span>
+                    <span>-₹<%= order.couponDiscount.toFixed(2) %></span>
+                </div>
+            <% } %>
+            
+            <div class="summary-row total">
+                <span>TOTAL</span>
+                <span>₹<%= order.totalPayable.toFixed(2) %></span>
+            </div>
+        </div>
+        
+        <div class="solid-line"></div>
+        
+        <!-- Payment Info -->
+        <div class="payment-row">
+            <span>Payment:</span>
+            <span class="payment-status"><%= order.paymentMethod %> - <%= order.paymentStatus %></span>
+        </div>
+        
+        <% if(order.transactionId) { %>
+            <div style="font-size: 8px; text-align: center; margin: 2px 0;">
+                TXN: <%= order.transactionId %>
+            </div>
+        <% } %>
+        
+        <div class="payment-row">
+            <span>Status:</span>
+            <span class="payment-status"><%= order.orderStatus %></span>
+        </div>
+        
+        <% if(order.isDeliveryFree) { %>
+            <div style="text-align: center; font-size: 9px; margin: 3px 0;">
+                * FREE DELIVERY *
+            </div>
+        <% } %>
+        
+        <div class="dotted-line"></div>
+        
+        <!-- Footer -->
+        <div class="footer">
+            <div class="thankyou">THANK YOU!</div>
+            <div>VEGIFFY</div>
+            <div class="note">info@vegiffy.in | +91 63091 00101</div>
+        </div>
+        
+    </div>
+</body>
+</html>

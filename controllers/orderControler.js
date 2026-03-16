@@ -11,6 +11,13 @@ const fs = require("fs");
 const Ambassador = require("../models/ambassadorModel");
 const QRCode = require('qrcode');
 const Razorpay = require("razorpay");
+const ReferralReward = require("../models/ReferralReward");
+
+const ejs = require('ejs');
+const path = require('path');
+const puppeteer = require('puppeteer');
+
+
 
 
 // Haversine formula to calculate distance in km
@@ -942,6 +949,9 @@ exports.createOrder = async (req, res) => {
       isDeliveryFree: cart.isDeliveryFree,
       freeDeliveryThreshold: cart.freeDeliveryThreshold,
       perKmRate: cart.perKmRate,
+
+        // ✅ Coupon related
+  appliedCouponId: cart.appliedCouponId || null,
       
       // ✅ नया field: amountSavedOnOrder
       amountSavedOnOrder: cart.amountSavedOnOrder || 0,
@@ -954,9 +964,11 @@ exports.createOrder = async (req, res) => {
       
       // ✅ Products
       products: cleanProducts,
+
+        // ✅ Applied coupon details from cart
+  appliedCoupon: cart.chargeCalculations?.couponDiscount || null,
       
-      // ✅ Applied coupon
-      appliedCoupon: cart.appliedCoupon || null,
+     
       
       // ✅ Delivery status
       deliveryStatus: "Pending"
@@ -1011,6 +1023,36 @@ exports.createOrder = async (req, res) => {
     } catch (notifError) {
       console.error('Notification sending failed:', notifError.message);
     }
+
+
+    // ✅ Send Notification to User
+try {
+  const userNotification = {
+    type: 'order_placed',
+    title: '🎉 Order Placed Successfully!',
+    message: `Your order #${order.orderNumber || order._id.toString().slice(-6)} has been placed successfully`,
+    timestamp: new Date(),
+    status: 'unread'
+  };
+
+  await User.findByIdAndUpdate(
+    userId,
+    {
+      $push: {
+        notifications: {
+          $each: [userNotification],
+          $position: 0,  // Naya notification sabse upar
+          $slice: 50      // Sirf 50 notifications store karo
+        }
+      }
+    }
+  );
+  
+  console.log('User notification sent successfully');
+} catch (userNotifError) {
+  console.error('User notification failed:', userNotifError.message);
+  // Notification fail hone se order create hona band nahi hoga
+}
 
     // ✅ Prepare charge breakdown for response (DIRECT from cart)
     const gstRate = cart.chargeCalculations?.gstOnFood?.rate || 5;
@@ -1167,21 +1209,21 @@ exports.getAllOrders = async (req, res) => {
   try {
     const orders = await Order.find()
       .populate("restaurantId", "restaurantName locationName")
-      .populate("userId") // populate all user fields
+      .populate("userId")
       .populate({
         path: "cartId",
         populate: [
-          { path: "userId", select: "name email phone" }, // user inside cart
-          { path: "restaurantId", select: "restaurantName locationName" }, // restaurant inside cart
+          { path: "userId", select: "name email phone" },
+          { path: "restaurantId", select: "restaurantName locationName" },
           {
             path: "products.restaurantProductId",
-            select: "name price image", // product details inside cart products array
+            select: "name price image",
           },
-          { path: "appliedCouponId", select: "code discountPercentage" }, // coupon details if any
+          { path: "appliedCouponId", select: "code discountPercentage" },
         ],
       })
-      // 🆕 Populate deliveryBoyId with selected fields
-      .populate("deliveryBoyId", "fullName mobileNumber vehicleType email deliveryBoyStatus");
+      // ✅ Rider / Delivery Boy details
+      .populate("riderId", "fullName mobileNumber vehicleType email deliveryBoyStatus isActive");
 
     return res.status(200).json({
       success: true,
@@ -1321,6 +1363,12 @@ exports.getOrderById = async (req, res) => {
   }
 };
 
+// Make sure uploads/invoices folder exists
+const invoicesDir = path.join(__dirname, '../uploads/invoices');
+if (!fs.existsSync(invoicesDir)) {
+  fs.mkdirSync(invoicesDir, { recursive: true });
+}
+
 exports.getOrdersByUserId = async (req, res) => {
   try {
     const { userId } = req.params;
@@ -1330,15 +1378,12 @@ exports.getOrdersByUserId = async (req, res) => {
         .json({ success: false, message: "Valid userId is required." });
     }
 
-    // Build filter object dynamically
     const filter = { userId };
 
-    // If orderStatus is passed in query, add that
     if (req.query.orderStatus) {
       filter.orderStatus = req.query.orderStatus;
     }
 
-    // If “today” filter is requested (say via `today=true`), add date filter
     if (req.query.today === "true") {
       const startOfDay = new Date();
       startOfDay.setHours(0, 0, 0, 0);
@@ -1350,7 +1395,62 @@ exports.getOrdersByUserId = async (req, res) => {
     const orders = await Order.find(filter)
       .populate("restaurantId", "restaurantName locationName");
 
-    return res.status(200).json({ success: true, data: orders });
+    // Har order ke liye invoice banao
+    const ordersWithInvoice = await Promise.all(orders.map(async (order) => {
+      const orderObj = order.toObject();
+      
+      try {
+        // 1. EJS template render karo
+        const invoiceHtml = await ejs.renderFile(
+          path.join(__dirname, '../views/invoice.ejs'),
+          { order: orderObj }
+        );
+        
+        // 2. PDF filename banao
+        const invoiceFileName = `invoice_${order._id}_${Date.now()}.pdf`;
+        const invoicePath = path.join(invoicesDir, invoiceFileName);
+        
+        // 3. 🔥 SIMPLE VERSION - puppeteer khud download karega 🔥
+        const browser = await puppeteer.launch({
+          args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox'
+          ]
+        });
+        
+        const page = await browser.newPage();
+        await page.setContent(invoiceHtml, {
+          waitUntil: 'networkidle0'
+        });
+        
+        await page.pdf({
+          path: invoicePath,
+          format: 'A4',
+          printBackground: true,
+          margin: {
+            top: '20px',
+            right: '20px',
+            bottom: '20px',
+            left: '20px'
+          }
+        });
+        
+        await browser.close();
+        
+        // 4. URL banao
+        const baseUrl = 'https://api.vegiffyy.com';
+        orderObj.invoiceUrl = `${baseUrl}/uploads/invoices/${invoiceFileName}`;
+        
+      } catch (pdfError) {
+        console.error('Invoice generation failed for order:', order._id, pdfError);
+        orderObj.invoiceUrl = null;
+        orderObj.invoiceError = 'Failed to generate invoice';
+      }
+      
+      return orderObj;
+    }));
+
+    return res.status(200).json({ success: true, data: ordersWithInvoice });
   } catch (error) {
     console.error("getOrdersByUserId error:", error);
     return res
@@ -1358,8 +1458,6 @@ exports.getOrdersByUserId = async (req, res) => {
       .json({ success: false, message: "Server error", error: error.message });
   }
 };
-
-
 
 
 exports.getPreviousOrdersByUserId = async (req, res) => {
@@ -1373,18 +1471,86 @@ exports.getPreviousOrdersByUserId = async (req, res) => {
         .json({ success: false, message: "Valid userId is required." });
     }
 
-    // Find orders for that user with status "Completed"
+    // Find orders for that user with status "Delivered"
     const orders = await Order.find({
       userId,
       orderStatus: "Delivered"
     }).populate("restaurantId", "restaurantName locationName");
 
+    // Har order ke liye invoice banao (sirf unke liye jinka abhi tak invoice nahi bana)
+    const ordersWithInvoice = await Promise.all(orders.map(async (order) => {
+      const orderObj = order.toObject();
+      
+      try {
+        // Pehle check karo ki kya invoice already exist karta hai
+        const existingInvoice = fs.readdirSync(invoicesDir).find(file => 
+          file.includes(order._id.toString())
+        );
+        
+        if (existingInvoice) {
+          // Agar invoice already hai to wahi URL do
+          const baseUrl = 'https://api.vegiffyy.com';
+          orderObj.invoiceUrl = `${baseUrl}/uploads/invoices/${existingInvoice}`;
+        } else {
+          // Naya invoice banao
+          
+          // 1. EJS template render karo
+          const invoiceHtml = await ejs.renderFile(
+            path.join(__dirname, '../views/invoice.ejs'),
+            { order: orderObj }
+          );
+          
+          // 2. PDF filename banao
+          const invoiceFileName = `invoice_${order._id}_${Date.now()}.pdf`;
+          const invoicePath = path.join(invoicesDir, invoiceFileName);
+          
+          // 3. Puppeteer se PDF generate karo
+          const browser = await puppeteer.launch({
+            args: [
+              '--no-sandbox',
+              '--disable-setuid-sandbox'
+            ]
+          });
+          
+          const page = await browser.newPage();
+          await page.setContent(invoiceHtml, {
+            waitUntil: 'networkidle0'
+          });
+          
+          await page.pdf({
+            path: invoicePath,
+            format: 'A4',
+            printBackground: true,
+            margin: {
+              top: '20px',
+              right: '20px',
+              bottom: '20px',
+              left: '20px'
+            }
+          });
+          
+          await browser.close();
+          
+          // 4. URL banao
+          const baseUrl = 'https://api.vegiffyy.com';
+          orderObj.invoiceUrl = `${baseUrl}/uploads/invoices/${invoiceFileName}`;
+        }
+        
+      } catch (pdfError) {
+        console.error('Invoice generation failed for order:', order._id, pdfError);
+        orderObj.invoiceUrl = null;
+        orderObj.invoiceError = 'Failed to generate invoice';
+      }
+      
+      return orderObj;
+    }));
+
     return res.status(200).json({
       success: true,
-      data: orders
+      data: ordersWithInvoice
     });
   } catch (error) {
-    console.error("getCompletedOrdersByUserId error:", error);
+    console.error("getPreviousOrdersByUserId error:", error);
     return res.status(500).json({
       success: false,
       message: "Server error",
@@ -1392,7 +1558,6 @@ exports.getPreviousOrdersByUserId = async (req, res) => {
     });
   }
 };
-
 
 
 exports.getAcceptedOrdersByUserId = async (req, res) => {
@@ -1821,8 +1986,13 @@ exports.vendorAcceptOrder = async (req, res) => {
     // ❌ Step for preparationTime removed
 
     // Step 8: Save available delivery boys in order
-    order.availableDeliveryBoys = deliveryBoysInfo;
+// Step 8: Save available delivery boys in order
+order.availableDeliveryBoys = deliveryBoysInfo;
 
+// ✅ First available rider ki id store kar do
+if (deliveryBoysInfo.length > 0) {
+  order.riderId = deliveryBoysInfo[0].deliveryBoyId;
+}
     // Step 9: Delivery charge
     const deliveryCharge = order.deliveryCharge || 0;
 
@@ -2982,6 +3152,2305 @@ exports.getRiderPickedOrders = async (req, res) => {
 
 
 
+// exports.markOrderAsDelivered = async (req, res) => {
+//   try {
+//     const { deliveryBoyId, orderId, paymentType } = req.body;
+
+//     console.log('🔵 MARK ORDER AS DELIVERED STARTED');
+//     console.log('📦 Order ID:', orderId);
+//     console.log('🚴 Delivery Boy ID:', deliveryBoyId);
+//     console.log('💰 Payment Type:', paymentType);
+
+//     // Validate the delivery boy
+//     const deliveryBoy = await DeliveryBoy.findById(deliveryBoyId);
+//     if (!deliveryBoy) {
+//       console.log('❌ Delivery boy not found:', deliveryBoyId);
+//       return res.status(404).json({
+//         success: false,
+//         message: "Delivery boy not found.",
+//       });
+//     }
+//     console.log('✅ Delivery boy found:', deliveryBoy._id, '-', deliveryBoy.name);
+
+//     // Validate the order
+//     const order = await Order.findById(orderId).populate('restaurantId');
+//     if (!order) {
+//       console.log('❌ Order not found:', orderId);
+//       return res.status(404).json({
+//         success: false,
+//         message: "Order not found.",
+//       });
+//     }
+//     console.log('✅ Order found:', order._id);
+//     console.log('📊 Order Details:', {
+//       orderStatus: order.orderStatus,
+//       deliveryStatus: order.deliveryStatus,
+//       userId: order.userId,
+//       subTotal: order.subTotal,
+//       deliveryCharge: order.deliveryCharge,
+//       totalPayable: order.totalPayable
+//     });
+
+//     // Ensure the order is in "Picked" status before proceeding to "Delivered"
+//     if (order.orderStatus !== "Picked" || order.deliveryStatus !== "Picked") {
+//       console.log('❌ Order status check failed:', {
+//         orderStatus: order.orderStatus,
+//         deliveryStatus: order.deliveryStatus,
+//         required: 'Picked'
+//       });
+//       return res.status(400).json({
+//         success: false,
+//         message: "Order is not in 'Picked' status.",
+//       });
+//     }
+//     console.log('✅ Order is in "Picked" status');
+
+//     // Mark order as delivered and update statuses
+//     order.orderStatus = "Delivered";
+//     order.deliveryStatus = "Delivered";
+//     console.log('📈 Order status updated to "Delivered"');
+
+//     // Store the paymentType in the order
+//     if (paymentType) {
+//       order.paymentType = paymentType;
+//       console.log('💰 Payment type added to order:', paymentType);
+//     }
+
+//     // Handle payment for COD orders (without UPI ID)
+//     if (order.paymentMethod === "COD") {
+//       order.paymentStatus = "Paid";
+//       console.log('💵 COD order - Payment status set to "Paid"');
+//     } else {
+//       order.paymentStatus = "Completed";
+//       console.log('💳 Non-COD order - Payment status set to "Completed"');
+//     }
+
+//     // ========== DISTRIBUTE PAYMENT TO ADMIN AND RESTAURANT ==========
+//     console.log('\n💸 PAYMENT DISTRIBUTION STARTED');
+    
+//     // 1. Find the restaurant
+//     const restaurant = await Restaurant.findById(order.restaurantId);
+//     if (!restaurant) {
+//       console.log('❌ Restaurant not found for order:', order.restaurantId);
+//       return res.status(404).json({
+//         success: false,
+//         message: "Restaurant not found.",
+//       });
+//     }
+//     console.log('✅ Restaurant found:', restaurant._id, '-', restaurant.restaurantName);
+
+//     // 2. **FIXED: Now always use 20% commission from subtotal**
+//     const commissionPercentage = 20; // FIXED 20% commission
+    
+//     // 3. **CHANGED: Calculate commission from SUBTOTAL, not totalPayable**
+//     const subtotal = order.subTotal || order.totalAmount || 0;
+    
+//     // Delivery charge alag se rahega
+//     const deliveryCharge = order.deliveryCharge || 0;
+//     const totalPayable = order.totalPayable || 0;
+    
+//     // Calculate amounts based on SUBTOTAL
+//     const adminCommission = (subtotal * commissionPercentage) / 100;
+//     const restaurantAmount = subtotal - adminCommission;
+    
+//     console.log("📊 Payment Distribution Details:", {
+//       subtotal: subtotal.toFixed(2),
+//       deliveryCharge: deliveryCharge.toFixed(2),
+//       totalPayable: totalPayable.toFixed(2),
+//       commissionPercentage: `${commissionPercentage}%`,
+//       adminCommission: adminCommission.toFixed(2),
+//       restaurantAmount: restaurantAmount.toFixed(2)
+//     });
+
+//     // 4. Update Admin wallet (add commission) - FIXED
+//     const admin = await adminModel.findOne();
+    
+//     if (admin) {
+//       console.log('👑 Admin found:', admin._id);
+      
+//       // CRITICAL FIX: Check if walletBalance exists, if not create it
+//       if (admin.walletBalance === undefined) {
+//         admin.walletBalance = 0;
+//         console.log('⚠️ Admin wallet balance was undefined, set to 0');
+//       }
+      
+//       const adminBalanceBefore = admin.walletBalance;
+      
+//       // Now add commission
+//       admin.walletBalance = admin.walletBalance + adminCommission;
+      
+//       console.log('💰 Admin wallet updated:', {
+//         before: adminBalanceBefore.toFixed(2),
+//         added: adminCommission.toFixed(2),
+//         after: admin.walletBalance.toFixed(2)
+//       });
+      
+//       // Create transaction object
+//       const transactionObj = {
+//         amount: adminCommission,
+//         dateAdded: new Date().toISOString(),
+//         type: "commission",
+//         orderId: orderId.toString(),
+//         restaurantId: restaurant._id.toString(),
+//         restaurantName: restaurant.restaurantName,
+//         subtotal: subtotal,
+//         commissionPercentage: commissionPercentage,
+//         description: `Commission from order #${orderId.toString().substring(0, 8)} (20% of subtotal)`
+//       };
+      
+//       // Initialize if not exists
+//       if (!admin.walletTransactions || !Array.isArray(admin.walletTransactions)) {
+//         admin.walletTransactions = [];
+//         console.log('📝 Admin wallet transactions array initialized');
+//       }
+      
+//       // Admin ke liye JSON string push karo
+//       admin.walletTransactions.push(JSON.stringify(transactionObj));
+//       console.log('📋 Admin transaction added:', transactionObj.description);
+      
+//       // Mark fields as modified
+//       admin.markModified('walletBalance');
+//       admin.markModified('walletTransactions');
+      
+//       await admin.save();
+//       console.log('💾 Admin saved successfully');
+//     } else {
+//       console.log('❌ Admin not found in database');
+//     }
+
+//     // 5. Update Restaurant wallet (add restaurant's share)
+//     console.log('\n🏪 RESTAURANT PAYMENT PROCESSING');
+    
+//     // Check and initialize restaurant wallet fields
+//     if (restaurant.walletBalance === undefined) {
+//       restaurant.walletBalance = 0;
+//       console.log('⚠️ Restaurant wallet balance was undefined, set to 0');
+//     }
+//     if (restaurant.totalEarnings === undefined) {
+//       restaurant.totalEarnings = 0;
+//       console.log('⚠️ Restaurant totalEarnings was undefined, set to 0');
+//     }
+//     if (restaurant.totalCommissionPaid === undefined) {
+//       restaurant.totalCommissionPaid = 0;
+//       console.log('⚠️ Restaurant totalCommissionPaid was undefined, set to 0');
+//     }
+    
+//     const restaurantBalanceBefore = restaurant.walletBalance;
+//     const totalEarningsBefore = restaurant.totalEarnings;
+//     const totalCommissionBefore = restaurant.totalCommissionPaid;
+    
+//     restaurant.walletBalance = restaurant.walletBalance + restaurantAmount;
+//     restaurant.totalEarnings = restaurant.totalEarnings + restaurantAmount;
+//     restaurant.totalCommissionPaid = restaurant.totalCommissionPaid + adminCommission;
+    
+//     console.log('🏪 Restaurant wallet updated:', {
+//       walletBalance: {
+//         before: restaurantBalanceBefore.toFixed(2),
+//         added: restaurantAmount.toFixed(2),
+//         after: restaurant.walletBalance.toFixed(2)
+//       },
+//       totalEarnings: {
+//         before: totalEarningsBefore.toFixed(2),
+//         added: restaurantAmount.toFixed(2),
+//         after: restaurant.totalEarnings.toFixed(2)
+//       },
+//       totalCommissionPaid: {
+//         before: totalCommissionBefore.toFixed(2),
+//         added: adminCommission.toFixed(2),
+//         after: restaurant.totalCommissionPaid.toFixed(2)
+//       }
+//     });
+    
+//     // Initialize if not exists
+//     if (!restaurant.walletTransactions || !Array.isArray(restaurant.walletTransactions)) {
+//       restaurant.walletTransactions = [];
+//       console.log('📝 Restaurant wallet transactions array initialized');
+//     }
+    
+//     // Restaurant ke liye transaction object
+//     const restaurantTransaction = {
+//       amount: restaurantAmount,
+//       dateAdded: new Date().toISOString(),
+//       type: "order_payment",
+//       orderId: orderId.toString(),
+//       subtotal: subtotal,
+//       commissionDeducted: adminCommission,
+//       commissionPercentage: commissionPercentage,
+//       netAmount: restaurantAmount,
+//       description: `Payment for order #${orderId.toString().substring(0, 8)} (80% of subtotal)`
+//     };
+    
+//     // Restaurant ke liye JSON string push karo
+//     restaurant.walletTransactions.push(JSON.stringify(restaurantTransaction));
+//     console.log('📋 Restaurant transaction added:', restaurantTransaction.description);
+    
+//     await restaurant.save();
+//     console.log('💾 Restaurant saved successfully');
+
+//     // 6. Update order with commission details
+//     order.adminCommission = adminCommission;
+//     order.restaurantPayout = restaurantAmount;
+//     order.commissionPercentage = commissionPercentage;
+//     order.commissionAppliedOn = "subtotal"; // Indicate commission was applied on subtotal
+//     console.log('📋 Order commission details updated');
+
+//     // ========== NEW: REFERRAL REWARD LOGIC ==========
+//     console.log('\n🎁 REFERRAL REWARD PROCESSING STARTED');
+//     let referralRewardDetails = null;
+
+//     // Find the user who placed this order
+//     const user = await User.findById(order.userId);
+    
+//     if (user) {
+//       console.log('👤 Order user found:', user._id, '-', user.name || user.email);
+//       console.log('🔍 Checking user.referredBy field:', user.referredBy);
+      
+//       if (user.referredBy) {
+//         console.log('🎯 User has a referrer! Referrer CODE:', user.referredBy);
+//         console.log('📧 User email:', user.email);
+//         console.log('📞 User phone:', user.phone);
+        
+//         // Check if this is user's first order
+//         const userOrderCount = await Order.countDocuments({ userId: user._id });
+//         const isFirstOrder = userOrderCount === 1; // Yeh order hi pehla order hai
+        
+//         console.log('📊 User order count:', userOrderCount);
+//         console.log('🌟 Is this first order?', isFirstOrder);
+        
+//         if (isFirstOrder) {
+//           console.log('🎉 FIRST ORDER DETECTED - Applying referral rewards');
+          
+//           // Get referral reward settings from referralRewardSchema
+//           const referralRewardSetting = await ReferralReward.findOne({ 
+//             userType: "user" 
+//           });
+          
+//           let userRewardValue = 20; // Default fallback value
+          
+//           if (referralRewardSetting) {
+//             console.log('🎯 Referral reward setting found:', {
+//               userType: referralRewardSetting.userType,
+//               rewardType: referralRewardSetting.rewardType,
+//               rewardValue: referralRewardSetting.rewardValue
+//             });
+            
+//             // Set reward value based on schema
+//             userRewardValue = referralRewardSetting.rewardValue || 20;
+//             console.log('💰 Using reward value from schema:', userRewardValue);
+//           } else {
+//             console.log('⚠️ No referral reward setting found, using default:', userRewardValue);
+//           }
+          
+//           const referralCommissionPercentage = 6; // 6% of admin commission
+          
+//           // Calculate reward amounts
+//           const referralRewardFromCommission = (adminCommission * referralCommissionPercentage) / 100;
+          
+//           console.log('📐 Referral calculations:', {
+//             adminCommission: adminCommission.toFixed(2),
+//             referralPercentage: `${referralCommissionPercentage}%`,
+//             referralRewardFromCommission: referralRewardFromCommission.toFixed(2),
+//             userFixedReward: userRewardValue.toFixed(2)
+//           });
+          
+//           // Get the referral code from user
+//           const referralCode = user.referredBy;
+          
+//           console.log('🔎 Looking for referrer with CODE:', referralCode);
+          
+//           // Try to find as Ambassador first (searching by referralCode field)
+//           let referrer = await Ambassador.findOne({ referralCode: referralCode });
+//           let referrerType = "ambassador";
+          
+//           if (referrer) {
+//             console.log('🎖️ Referrer found as AMBASSADOR:', referrer._id);
+//             console.log('📛 Ambassador name:', referrer.name);
+//             console.log('📞 Ambassador phone:', referrer.phone);
+//             console.log('🔑 Ambassador referral code:', referrer.referralCode);
+//           } else {
+//             console.log('❌ Not found as Ambassador, trying Restaurant...');
+            
+//             // If not found as Ambassador, try as Restaurant (searching by referralCode field)
+//             referrer = await Restaurant.findOne({ referralCode: referralCode });
+//             referrerType = "restaurant";
+            
+//             if (referrer) {
+//               console.log('🏪 Referrer found as RESTAURANT:', referrer._id);
+//               console.log('🏬 Restaurant name:', referrer.restaurantName);
+//               console.log('🔑 Restaurant referral code:', referrer.referralCode);
+//             } else {
+//               console.log('❌ Not found as Restaurant, trying User...');
+              
+//               // If still not found, try as User (searching by referralCode field)
+//               referrer = await User.findOne({ referralCode: referralCode });
+//               referrerType = "user";
+              
+//               if (referrer) {
+//                 console.log('👤 Referrer found as USER:', referrer._id);
+//                 console.log('📛 User name:', referrer.name);
+//                 console.log('📞 User phone:', referrer.phone);
+//                 console.log('🔑 User referral code:', referrer.referralCode);
+//               } else {
+//                 console.log('❌ Referrer not found in any collection with referralCode:', referralCode);
+//                 console.log('ℹ️ Searching in: Ambassador.referralCode, Restaurant.referralCode, User.referralCode');
+//               }
+//             }
+//           }
+          
+//           if (referrer) {
+//             console.log(`✅ Referrer confirmed as ${referrerType.toUpperCase()}:`, referrer._id);
+//             console.log(`🔑 Referrer code: ${referrer.referralCode}`);
+            
+//             let rewardAmount = 0;
+//             let rewardDescription = "";
+            
+//             // Determine reward based on referrer type
+//             if (referrerType === "ambassador" || referrerType === "restaurant") {
+//               // Ambassador or Restaurant gets 6% of admin commission
+//               rewardAmount = referralRewardFromCommission;
+//               rewardDescription = `6% of admin commission for referring user ${user._id} (${user.name || user.email})`;
+//               console.log(`💰 ${referrerType.toUpperCase()} reward: ${rewardAmount.toFixed(2)} (6% of admin commission)`);
+//             } else if (referrerType === "user") {
+//               // User gets value from referralRewardSchema (₹50 or whatever is set)
+//               rewardAmount = userRewardValue;
+//               rewardDescription = `₹${userRewardValue} reward from referral system for referring user ${user._id} (${user.name || user.email})`;
+//               console.log(`💰 USER reward: ${rewardAmount.toFixed(2)} (From referralRewardSchema)`);
+//             }
+            
+//             // Update referrer's wallet
+//             const referrerWalletBefore = referrer.walletBalance || 0;
+            
+//             if (referrer.walletBalance === undefined) {
+//               referrer.walletBalance = 0;
+//               console.log('⚠️ Referrer wallet balance was undefined, set to 0');
+//             }
+            
+//             referrer.walletBalance = referrer.walletBalance + rewardAmount;
+            
+//             console.log(`💰 Referrer wallet updated (${referrerType}):`, {
+//               before: referrerWalletBefore.toFixed(2),
+//               added: rewardAmount.toFixed(2),
+//               after: referrer.walletBalance.toFixed(2)
+//             });
+            
+//             // Initialize wallet transactions if not exists
+//             if (!referrer.walletTransactions || !Array.isArray(referrer.walletTransactions)) {
+//               referrer.walletTransactions = [];
+//               console.log('📝 Referrer wallet transactions array initialized');
+//             }
+            
+//             // Add transaction record
+//             const referralTransaction = {
+//               amount: rewardAmount,
+//               dateAdded: new Date(),
+//               type: "referral_reward",
+//               orderId: orderId,
+//               referredUserId: user._id,
+//               referredUserName: user.name || user.email,
+//               referredUserCode: user.referralCode || 'No code',
+//               orderAmount: subtotal,
+//               referralCodeUsed: referralCode,
+//               description: rewardDescription,
+//               isFirstOrder: true,
+//               rewardSource: referrerType === "user" ? "referralRewardSchema" : "6% commission"
+//             };
+            
+//             // Check the model type to determine how to store the transaction
+//             if (referrerType === "user") {
+//               // For User model, store as proper object
+//               referrer.walletTransactions.push(referralTransaction);
+//               console.log('📋 User referral transaction added as object');
+//             } else {
+//               // For Ambassador/Restaurant, store as JSON string
+//               referrer.walletTransactions.push(JSON.stringify(referralTransaction));
+//               console.log('📋 Ambassador/Restaurant referral transaction added as JSON string');
+//             }
+            
+//             // Save the referrer
+//             await referrer.save();
+//             console.log(`💾 Referrer (${referrerType}) saved successfully`);
+            
+//             // **IMPORTANT: GIVE REWARD TO THE NEW USER WHO PLACED THE ORDER**
+//             console.log('\n🎁 REWARDING THE NEW USER WHO PLACED THE ORDER');
+//             const newUserReward = userRewardValue; // Same amount from referralRewardSchema
+            
+//             if (user.walletBalance === undefined) {
+//               user.walletBalance = 0;
+//               console.log('⚠️ User wallet balance was undefined, set to 0');
+//             }
+            
+//             const userWalletBefore = user.walletBalance;
+//             user.walletBalance = user.walletBalance + newUserReward;
+            
+//             console.log('👤 New user wallet updated:', {
+//               before: userWalletBefore.toFixed(2),
+//               added: newUserReward.toFixed(2),
+//               after: user.walletBalance.toFixed(2),
+//               userName: user.name || user.email
+//             });
+            
+//             // Initialize user wallet transactions if not exists
+//             if (!user.walletTransactions || !Array.isArray(user.walletTransactions)) {
+//               user.walletTransactions = [];
+//               console.log('📝 User wallet transactions array initialized');
+//             }
+            
+//             // Add transaction record for new user
+//             const newUserTransaction = {
+//               amount: newUserReward,
+//               dateAdded: new Date(),
+//               type: "referral_signup_bonus",
+//               orderId: orderId,
+//               description: `Welcome bonus of ₹${newUserReward} for completing first order with referral code ${referralCode}`,
+//               isFirstOrder: true,
+//               referrerCode: referralCode,
+//               referrerType: referrerType
+//             };
+            
+//             // User ke liye proper object push karo
+//             user.walletTransactions.push(newUserTransaction);
+//             console.log('📋 New user bonus transaction added');
+            
+//             // Save the user
+//             await user.save();
+//             console.log('💾 New user saved with bonus');
+            
+//             // Deduct the reward from admin's wallet
+//             if (admin) {
+//               // **Deduct BOTH: referrer reward + new user reward**
+//               const totalDeduction = rewardAmount + newUserReward;
+//               const adminBalanceBeforeDeduction = admin.walletBalance;
+//               admin.walletBalance = admin.walletBalance - totalDeduction;
+              
+//               console.log('👑 Admin wallet deduction for referrals:', {
+//                 before: adminBalanceBeforeDeduction.toFixed(2),
+//                 referrerDeduction: rewardAmount.toFixed(2),
+//                 newUserDeduction: newUserReward.toFixed(2),
+//                 totalDeduction: totalDeduction.toFixed(2),
+//                 after: admin.walletBalance.toFixed(2),
+//                 referrerType: referrerType,
+//                 referrerId: referrer._id,
+//                 referrerCode: referrer.referralCode
+//               });
+              
+//               // Add a transaction record for the deduction
+//               const adminDeductionTransaction = {
+//                 amount: -totalDeduction,
+//                 dateAdded: new Date().toISOString(),
+//                 type: "referral_payout",
+//                 orderId: orderId.toString(),
+//                 referrerId: referrer._id.toString(),
+//                 referrerType: referrerType,
+//                 referrerName: referrer.name || referrer.restaurantName || referrer._id,
+//                 referrerCode: referrer.referralCode,
+//                 referredUserId: user._id.toString(),
+//                 referredUserName: user.name || user.email,
+//                 referralCodeUsed: referralCode,
+//                 referrerReward: rewardAmount,
+//                 newUserReward: newUserReward,
+//                 description: `Referral rewards paid: ₹${rewardAmount.toFixed(2)} to ${referrerType} "${referrer.name || referrer.restaurantName || referrer._id}" + ₹${newUserReward.toFixed(2)} to new user "${user.name || user.email}" for first order #${orderId.toString().substring(0, 8)}`
+//               };
+              
+//               admin.walletTransactions.push(JSON.stringify(adminDeductionTransaction));
+//               console.log('📋 Admin deduction transaction added');
+              
+//               admin.markModified('walletBalance');
+//               admin.markModified('walletTransactions');
+//               await admin.save();
+//               console.log('💾 Admin saved after referral deduction');
+//             }
+            
+//             // Update order with referral info
+//             order.referredBy = referralCode; // Store the referral code
+//             order.referredById = referrer._id; // Store the actual referrer ID
+//             order.referrerType = referrerType;
+//             order.referralRewardPaid = rewardAmount;
+//             order.newUserRewardPaid = newUserReward;
+//             order.referredUserName = user.name || user.email;
+//             order.referrerName = referrer.name || referrer.restaurantName || referrer._id;
+//             order.referrerCode = referrer.referralCode; // Store the referrer's code
+//             order.isFirstOrder = true; // Mark as first order
+            
+//             console.log('📋 Order updated with referral info:', {
+//               referredByCode: referralCode,
+//               referredById: referrer._id,
+//               referrerType: referrerType,
+//               referrerRewardPaid: rewardAmount.toFixed(2),
+//               newUserRewardPaid: newUserReward.toFixed(2),
+//               referredUserName: user.name || user.email,
+//               referrerName: referrer.name || referrer.restaurantName || referrer._id,
+//               referrerCode: referrer.referralCode,
+//               isFirstOrder: true
+//             });
+            
+//             // Prepare response details
+//             referralRewardDetails = {
+//               referrerType: referrerType,
+//               referrerId: referrer._id,
+//               referrerCode: referrer.referralCode,
+//               referrerName: referrer.name || referrer.restaurantName || referrer._id,
+//               rewardAmount: rewardAmount,
+//               newUserReward: newUserReward,
+//               rewardSource: referrerType === "user" ? "referralRewardSchema" : "6% of admin commission",
+//               deductedFromAdmin: true,
+//               adminWalletAfterDeduction: admin ? admin.walletBalance : null,
+//               referredUserId: user._id,
+//               referredUserName: user.name || user.email,
+//               referralCodeUsed: referralCode,
+//               isFirstOrder: true,
+//               userOrderCount: userOrderCount
+//             };
+            
+//             console.log(`🎁 FIRST ORDER referral rewards PROCESSED:`);
+//             console.log(`   ₹${rewardAmount.toFixed(2)} to ${referrerType} "${referrer.name || referrer.restaurantName || referrer._id}" (code: ${referrer.referralCode})`);
+//             console.log(`   ₹${newUserReward.toFixed(2)} to new user "${user.name || user.email}"`);
+//           } else {
+//             console.log('⚠️ Referrer code found in user.referredBy but no matching referrer found in database');
+//             console.log('📝 Store this info in order for manual investigation');
+            
+//             // Even if referrer not found, store the code in order for investigation
+//             order.referredBy = referralCode;
+//             order.referrerType = "unknown";
+//             order.referralRewardPaid = 0;
+//             order.referredUserName = user.name || user.email;
+//             order.referralError = "Referrer code found but referrer not in database";
+//             order.isFirstOrder = true;
+            
+//             console.log('📋 Order updated with referral error info');
+//           }
+//         } else {
+//           console.log('ℹ️ Not user\'s first order. Skipping referral rewards.');
+//           console.log('ℹ️ Only first orders qualify for referral rewards.');
+//         }
+//       } else {
+//         console.log('ℹ️ No referrer found for this user (user.referredBy is null/undefined)');
+//       }
+//     } else {
+//       console.log('❌ User not found for order.userId:', order.userId);
+//     }
+
+//     // ========== UPDATE DELIVERY BOY WALLET ==========
+//     console.log('\n🚴 DELIVERY BOY PAYMENT PROCESSING');
+    
+//     const deliveryBoyBalanceBefore = deliveryBoy.walletBalance || 0;
+    
+//     // Update the delivery boy's wallet
+//     deliveryBoy.walletBalance = (deliveryBoy.walletBalance || 0) + deliveryCharge;
+    
+//     console.log('💰 Delivery boy wallet updated:', {
+//       before: deliveryBoyBalanceBefore.toFixed(2),
+//       added: deliveryCharge.toFixed(2),
+//       after: deliveryBoy.walletBalance.toFixed(2),
+//       deliveryBoyName: deliveryBoy.name
+//     });
+
+//     // Initialize if not exists
+//     if (!deliveryBoy.walletTransactions || !Array.isArray(deliveryBoy.walletTransactions)) {
+//       deliveryBoy.walletTransactions = [];
+//       console.log('📝 Delivery boy wallet transactions array initialized');
+//     }
+    
+//     // DeliveryBoy ke liye PROPER OBJECT push karo (JSON string nahi)
+//     const deliveryTransaction = {
+//       amount: deliveryCharge,
+//       dateAdded: new Date(),
+//       type: "delivery",
+//       orderId: orderId,
+//       description: `Delivery charge for order #${orderId.toString().substring(0, 8)}`
+//     };
+    
+//     // Push as proper object
+//     deliveryBoy.walletTransactions.push(deliveryTransaction);
+//     console.log('📋 Delivery boy transaction added:', deliveryTransaction.description);
+
+//     // **Update the delivery boy's currentOrderStatus to 'Delivered'**
+//     deliveryBoy.currentOrderStatus = "Delivered";
+
+//     // Set the delivery boy's currentOrder to false (mark as available again)
+//     deliveryBoy.currentOrder = false;
+    
+//     console.log('🚴 Delivery boy status updated:', {
+//       currentOrderStatus: "Delivered",
+//       currentOrder: false,
+//       available: true
+//     });
+
+//     // Save the updated order and delivery boy
+//     await order.save();
+//     console.log('💾 Order saved with all updates');
+    
+//     await deliveryBoy.save();
+//     console.log('💾 Delivery boy saved with all updates');
+
+//     console.log('\n✅ ALL PROCESSES COMPLETED SUCCESSFULLY');
+//     console.log('📊 FINAL SUMMARY:');
+//     console.log('- Order marked as Delivered');
+//     console.log('- Payment distributed: Admin, Restaurant, Delivery Boy');
+//     if (referralRewardDetails) {
+//       console.log('- FIRST ORDER referral rewards processed:', {
+//         referrerType: referralRewardDetails.referrerType,
+//         referrerName: referralRewardDetails.referrerName,
+//         referrerCode: referralRewardDetails.referrerCode,
+//         referrerReward: referralRewardDetails.rewardAmount.toFixed(2),
+//         newUserReward: referralRewardDetails.newUserReward.toFixed(2),
+//         totalPaid: (referralRewardDetails.rewardAmount + referralRewardDetails.newUserReward).toFixed(2)
+//       });
+//     } else {
+//       console.log('- No referral reward processed (not first order or no referrer)');
+//     }
+
+//     return res.status(200).json({
+//       success: true,
+//       message: "Order marked as 'Delivered', payment status updated, and funds distributed.",
+//       data: {
+//         order,
+//         paymentDistribution: {
+//           subtotal: subtotal,
+//           deliveryCharge: deliveryCharge,
+//           totalPayable: totalPayable,
+//           commissionPercentage: `${commissionPercentage}%`,
+//           commissionAppliedOn: "subtotal",
+//           adminCommission: adminCommission,
+//           restaurantAmount: restaurantAmount,
+//           deliveryCharge: deliveryCharge,
+//           distribution: {
+//             admin: `${commissionPercentage}% of subtotal`,
+//             restaurant: `${100 - commissionPercentage}% of subtotal`,
+//             deliveryBoy: "100% of delivery charge"
+//           }
+//         },
+//         referralReward: referralRewardDetails,
+//         adminUpdated: admin ? {
+//           walletBalance: admin.walletBalance,
+//           hasWalletBalanceField: admin.walletBalance !== undefined
+//         } : null,
+//         logs: {
+//           userFound: !!user,
+//           hadReferrer: !!(user && user.referredBy),
+//           userOrderCount: userOrderCount || 0,
+//           isFirstOrder: !!(referralRewardDetails && referralRewardDetails.isFirstOrder),
+//           referrerType: referralRewardDetails?.referrerType || 'none',
+//           referrerCode: referralRewardDetails?.referrerCode || 'none',
+//           referrerReward: referralRewardDetails?.rewardAmount || 0,
+//           newUserReward: referralRewardDetails?.newUserReward || 0
+//         }
+//       },
+//     });
+//   } catch (error) {
+//     console.error("❌❌❌ ERROR marking order as delivered:", error);
+//     console.error("Error stack:", error.stack);
+//     return res.status(500).json({
+//       success: false,
+//       message: "Server error.",
+//       error: error.message,
+//     });
+//   }
+// };
+
+
+
+
+// exports.markOrderAsDelivered = async (req, res) => {
+//   try {
+//     const { deliveryBoyId, orderId, paymentType } = req.body;
+
+//     console.log('🔵 MARK ORDER AS DELIVERED STARTED');
+//     console.log('📦 Order ID:', orderId);
+//     console.log('🚴 Delivery Boy ID:', deliveryBoyId);
+//     console.log('💰 Payment Type:', paymentType);
+
+//     // Validate the delivery boy
+//     const deliveryBoy = await DeliveryBoy.findById(deliveryBoyId);
+//     if (!deliveryBoy) {
+//       console.log('❌ Delivery boy not found:', deliveryBoyId);
+//       return res.status(404).json({
+//         success: false,
+//         message: "Delivery boy not found.",
+//       });
+//     }
+//     console.log('✅ Delivery boy found:', deliveryBoy._id, '-', deliveryBoy.name);
+
+//     // Validate the order
+//     const order = await Order.findById(orderId).populate('restaurantId');
+//     if (!order) {
+//       console.log('❌ Order not found:', orderId);
+//       return res.status(404).json({
+//         success: false,
+//         message: "Order not found.",
+//       });
+//     }
+//     console.log('✅ Order found:', order._id);
+//     console.log('📊 Order Details:', {
+//       orderStatus: order.orderStatus,
+//       deliveryStatus: order.deliveryStatus,
+//       userId: order.userId,
+//       subTotal: order.subTotal,
+//       deliveryCharge: order.deliveryCharge,
+//       totalPayable: order.totalPayable
+//     });
+
+//     // Ensure the order is in "Picked" status before proceeding to "Delivered"
+//     if (order.orderStatus !== "Picked" || order.deliveryStatus !== "Picked") {
+//       console.log('❌ Order status check failed:', {
+//         orderStatus: order.orderStatus,
+//         deliveryStatus: order.deliveryStatus,
+//         required: 'Picked'
+//       });
+//       return res.status(400).json({
+//         success: false,
+//         message: "Order is not in 'Picked' status.",
+//       });
+//     }
+//     console.log('✅ Order is in "Picked" status');
+
+//     // Mark order as delivered and update statuses
+//     order.orderStatus = "Delivered";
+//     order.deliveryStatus = "Delivered";
+//     console.log('📈 Order status updated to "Delivered"');
+
+//     // Store the paymentType in the order
+//     if (paymentType) {
+//       order.paymentType = paymentType;
+//       console.log('💰 Payment type added to order:', paymentType);
+//     }
+
+//     // Handle payment for COD orders (without UPI ID)
+//     if (order.paymentMethod === "COD") {
+//       order.paymentStatus = "Paid";
+//       console.log('💵 COD order - Payment status set to "Paid"');
+//     } else {
+//       order.paymentStatus = "Completed";
+//       console.log('💳 Non-COD order - Payment status set to "Completed"');
+//     }
+
+//     // ========== DISTRIBUTE PAYMENT TO ADMIN AND RESTAURANT ==========
+//     console.log('\n💸 PAYMENT DISTRIBUTION STARTED');
+    
+//     // 1. Find the restaurant
+//     const restaurant = await Restaurant.findById(order.restaurantId);
+//     if (!restaurant) {
+//       console.log('❌ Restaurant not found for order:', order.restaurantId);
+//       return res.status(404).json({
+//         success: false,
+//         message: "Restaurant not found.",
+//       });
+//     }
+//     console.log('✅ Restaurant found:', restaurant._id, '-', restaurant.restaurantName);
+
+//     // 2. **FIXED: Now always use 20% commission from subtotal**
+//     const commissionPercentage = 20; // FIXED 20% commission
+    
+//     // 3. **CHANGED: Calculate commission from SUBTOTAL, not totalPayable**
+//     const subtotal = order.subTotal || order.totalAmount || 0;
+    
+//     // Delivery charge alag se rahega
+//     const deliveryCharge = order.deliveryCharge || 0;
+//     const totalPayable = order.totalPayable || 0;
+    
+//     // Calculate amounts based on SUBTOTAL
+//     const adminCommission = (subtotal * commissionPercentage) / 100;
+//     const restaurantAmount = subtotal - adminCommission;
+    
+//     console.log("📊 Payment Distribution Details:", {
+//       subtotal: subtotal.toFixed(2),
+//       deliveryCharge: deliveryCharge.toFixed(2),
+//       totalPayable: totalPayable.toFixed(2),
+//       commissionPercentage: `${commissionPercentage}%`,
+//       adminCommission: adminCommission.toFixed(2),
+//       restaurantAmount: restaurantAmount.toFixed(2)
+//     });
+
+//     // 4. Update Admin wallet (add commission) - FIXED
+//     const admin = await adminModel.findOne();
+    
+//     if (admin) {
+//       console.log('👑 Admin found:', admin._id);
+      
+//       // CRITICAL FIX: Check if walletBalance exists, if not create it
+//       if (admin.walletBalance === undefined) {
+//         admin.walletBalance = 0;
+//         console.log('⚠️ Admin wallet balance was undefined, set to 0');
+//       }
+      
+//       const adminBalanceBefore = admin.walletBalance;
+      
+//       // Now add commission
+//       admin.walletBalance = admin.walletBalance + adminCommission;
+      
+//       console.log('💰 Admin wallet updated:', {
+//         before: adminBalanceBefore.toFixed(2),
+//         added: adminCommission.toFixed(2),
+//         after: admin.walletBalance.toFixed(2)
+//       });
+      
+//       // Create transaction object
+//       const transactionObj = {
+//         amount: adminCommission,
+//         dateAdded: new Date().toISOString(),
+//         type: "commission",
+//         orderId: orderId.toString(),
+//         restaurantId: restaurant._id.toString(),
+//         restaurantName: restaurant.restaurantName,
+//         subtotal: subtotal,
+//         commissionPercentage: commissionPercentage,
+//         description: `Commission from order #${orderId.toString().substring(0, 8)} (20% of subtotal)`
+//       };
+      
+//       // Initialize if not exists
+//       if (!admin.walletTransactions || !Array.isArray(admin.walletTransactions)) {
+//         admin.walletTransactions = [];
+//         console.log('📝 Admin wallet transactions array initialized');
+//       }
+      
+//       // Admin ke liye JSON string push karo
+//       admin.walletTransactions.push(JSON.stringify(transactionObj));
+//       console.log('📋 Admin transaction added:', transactionObj.description);
+      
+//       // Mark fields as modified
+//       admin.markModified('walletBalance');
+//       admin.markModified('walletTransactions');
+      
+//       await admin.save();
+//       console.log('💾 Admin saved successfully');
+//     } else {
+//       console.log('❌ Admin not found in database');
+//     }
+
+//     // 5. Update Restaurant wallet (add restaurant's share)
+//     console.log('\n🏪 RESTAURANT PAYMENT PROCESSING');
+    
+//     // Check and initialize restaurant wallet fields
+//     if (restaurant.walletBalance === undefined) {
+//       restaurant.walletBalance = 0;
+//       console.log('⚠️ Restaurant wallet balance was undefined, set to 0');
+//     }
+//     if (restaurant.totalEarnings === undefined) {
+//       restaurant.totalEarnings = 0;
+//       console.log('⚠️ Restaurant totalEarnings was undefined, set to 0');
+//     }
+//     if (restaurant.totalCommissionPaid === undefined) {
+//       restaurant.totalCommissionPaid = 0;
+//       console.log('⚠️ Restaurant totalCommissionPaid was undefined, set to 0');
+//     }
+    
+//     const restaurantBalanceBefore = restaurant.walletBalance;
+//     const totalEarningsBefore = restaurant.totalEarnings;
+//     const totalCommissionBefore = restaurant.totalCommissionPaid;
+    
+//     restaurant.walletBalance = restaurant.walletBalance + restaurantAmount;
+//     restaurant.totalEarnings = restaurant.totalEarnings + restaurantAmount;
+//     restaurant.totalCommissionPaid = restaurant.totalCommissionPaid + adminCommission;
+    
+//     console.log('🏪 Restaurant wallet updated:', {
+//       walletBalance: {
+//         before: restaurantBalanceBefore.toFixed(2),
+//         added: restaurantAmount.toFixed(2),
+//         after: restaurant.walletBalance.toFixed(2)
+//       },
+//       totalEarnings: {
+//         before: totalEarningsBefore.toFixed(2),
+//         added: restaurantAmount.toFixed(2),
+//         after: restaurant.totalEarnings.toFixed(2)
+//       },
+//       totalCommissionPaid: {
+//         before: totalCommissionBefore.toFixed(2),
+//         added: adminCommission.toFixed(2),
+//         after: restaurant.totalCommissionPaid.toFixed(2)
+//       }
+//     });
+    
+//     // Initialize if not exists
+//     if (!restaurant.walletTransactions || !Array.isArray(restaurant.walletTransactions)) {
+//       restaurant.walletTransactions = [];
+//       console.log('📝 Restaurant wallet transactions array initialized');
+//     }
+    
+//     // Restaurant ke liye transaction object
+//     const restaurantTransaction = {
+//       amount: restaurantAmount,
+//       dateAdded: new Date().toISOString(),
+//       type: "order_payment",
+//       orderId: orderId.toString(),
+//       subtotal: subtotal,
+//       commissionDeducted: adminCommission,
+//       commissionPercentage: commissionPercentage,
+//       netAmount: restaurantAmount,
+//       description: `Payment for order #${orderId.toString().substring(0, 8)} (80% of subtotal)`
+//     };
+    
+//     // Restaurant ke liye JSON string push karo
+//     restaurant.walletTransactions.push(JSON.stringify(restaurantTransaction));
+//     console.log('📋 Restaurant transaction added:', restaurantTransaction.description);
+    
+//     await restaurant.save();
+//     console.log('💾 Restaurant saved successfully');
+
+//     // 6. Update order with commission details
+//     order.adminCommission = adminCommission;
+//     order.restaurantPayout = restaurantAmount;
+//     order.commissionPercentage = commissionPercentage;
+//     order.commissionAppliedOn = "subtotal"; // Indicate commission was applied on subtotal
+//     console.log('📋 Order commission details updated');
+
+//     // ========== FIND USER AND CHECK REFERRAL ==========
+//     console.log('\n👤 CHECKING USER REFERRAL');
+//     const user = await User.findById(order.userId);
+    
+//     let ambassadorCommissionDetails = null;
+//     let userOrderCount = 0;
+
+//     if (user) {
+//       console.log('👤 Order user found:', user._id, '-', user.name || user.email);
+//       console.log('🔍 Checking user.referredBy field:', user.referredBy);
+      
+//       // ========== AMBASSADOR COMMISSION LOGIC ==========
+//       if (user.referredBy) {
+//         console.log('🎯 User has a referrer! Referrer CODE:', user.referredBy);
+        
+//         // Check if the referral code starts with "VEGAMB" (Ambassador code)
+//         if (user.referredBy.startsWith("VEGAMB")) {
+//           console.log('🌟 REFERRAL CODE IS FROM AN AMBASSADOR!');
+          
+//           // Find the ambassador by referral code
+//           const ambassador = await Ambassador.findOne({ referralCode: user.referredBy });
+          
+//           if (ambassador) {
+//             console.log('✅ Ambassador found:', ambassador._id, '-', ambassador.fullName);
+//             console.log('💰 Ambassador commission percentage:', ambassador.commissionPercentage, '%');
+            
+//             // Get ambassador's commission percentage (default to 3% if not set)
+//             const ambassadorCommissionPercent = ambassador.commissionPercentage || 3;
+            
+//             // Calculate ambassador commission based on subtotal
+//             const ambassadorCommission = (subtotal * ambassadorCommissionPercent) / 100;
+            
+//             console.log('📊 Ambassador commission calculation:', {
+//               subtotal: subtotal.toFixed(2),
+//               ambassadorCommissionPercent: `${ambassadorCommissionPercent}%`,
+//               ambassadorCommission: ambassadorCommission.toFixed(2)
+//             });
+            
+//             // Update ambassador's wallet
+//             if (ambassador.wallet === undefined) {
+//               ambassador.wallet = 0;
+//               console.log('⚠️ Ambassador wallet was undefined, set to 0');
+//             }
+            
+//             const ambassadorWalletBefore = ambassador.wallet;
+//             ambassador.wallet = ambassador.wallet + ambassadorCommission;
+            
+//             console.log('💰 Ambassador wallet updated:', {
+//               before: ambassadorWalletBefore.toFixed(2),
+//               added: ambassadorCommission.toFixed(2),
+//               after: ambassador.wallet.toFixed(2),
+//               ambassadorName: ambassador.fullName
+//             });
+            
+//             // 🔥 FIX: Initialize transactionHistory as array of objects (NOT JSON strings)
+//             if (!ambassador.transactionHistory || !Array.isArray(ambassador.transactionHistory)) {
+//               ambassador.transactionHistory = [];
+//               console.log('📝 Ambassador transaction history array initialized');
+//             }
+            
+//             // 🔥 FIX: Add transaction as OBJECT, not JSON string
+//             const ambassadorTransaction = {
+//               orderId: orderId, // This is an ObjectId, not string
+//               userId: user._id, // This is an ObjectId, not string
+//               totalPayable: subtotal,
+//               commission: ambassadorCommission,
+//               date: new Date()
+//             };
+            
+//             // Push as object, NOT stringified
+//             ambassador.transactionHistory.push(ambassadorTransaction);
+//             console.log('📋 Ambassador transaction added as object:', ambassadorTransaction);
+            
+//             // Save ambassador
+//             await ambassador.save();
+//             console.log('💾 Ambassador saved with commission');
+            
+//             // Deduct commission from admin's wallet
+//             if (admin) {
+//               const adminBalanceBeforeDeduction = admin.walletBalance;
+//               admin.walletBalance = admin.walletBalance - ambassadorCommission;
+              
+//               console.log('👑 Admin wallet deduction for ambassador commission:', {
+//                 before: adminBalanceBeforeDeduction.toFixed(2),
+//                 deducted: ambassadorCommission.toFixed(2),
+//                 after: admin.walletBalance.toFixed(2),
+//                 ambassadorName: ambassador.fullName
+//               });
+              
+//               // Add transaction record for deduction
+//               const adminDeductionTransaction = {
+//                 amount: -ambassadorCommission,
+//                 dateAdded: new Date().toISOString(),
+//                 type: "ambassador_commission_payout",
+//                 orderId: orderId.toString(),
+//                 ambassadorId: ambassador._id.toString(),
+//                 ambassadorName: ambassador.fullName,
+//                 ambassadorCode: ambassador.referralCode,
+//                 commissionPercentage: ambassadorCommissionPercent,
+//                 description: `Commission paid to Ambassador ${ambassador.fullName} for referred user's order #${orderId.toString().substring(0, 8)}`
+//               };
+              
+//               admin.walletTransactions.push(JSON.stringify(adminDeductionTransaction));
+//               admin.markModified('walletBalance');
+//               admin.markModified('walletTransactions');
+//               await admin.save();
+//               console.log('💾 Admin saved after ambassador commission deduction');
+//             }
+            
+//             // Store ambassador commission details in order
+//             order.ambassadorCommissionPaid = ambassadorCommission;
+//             order.ambassadorCommissionPercentage = ambassadorCommissionPercent;
+//             order.ambassadorId = ambassador._id;
+//             order.ambassadorName = ambassador.fullName;
+//             order.ambassadorCode = ambassador.referralCode;
+            
+//             ambassadorCommissionDetails = {
+//               ambassadorId: ambassador._id,
+//               ambassadorName: ambassador.fullName,
+//               ambassadorCode: ambassador.referralCode,
+//               commissionPercentage: ambassadorCommissionPercent,
+//               commissionAmount: ambassadorCommission,
+//               deductedFromAdmin: true
+//             };
+            
+//             console.log(`🎁 AMBASSADOR COMMISSION PROCESSED:`);
+//             console.log(`   ₹${ambassadorCommission.toFixed(2)} to Ambassador "${ambassador.fullName}" (${ambassador.referralCode})`);
+//           } else {
+//             console.log('❌ Ambassador not found with referral code:', user.referredBy);
+//           }
+//         } else {
+//           console.log('ℹ️ Referral code is not from an ambassador:', user.referredBy);
+//         }
+//       } else {
+//         console.log('ℹ️ No referrer found for this user (user.referredBy is null/undefined)');
+//       }
+//     } else {
+//       console.log('❌ User not found for order.userId:', order.userId);
+//     }
+
+//     // ========== REFERRAL REWARD LOGIC (EXISTING) ==========
+//     console.log('\n🎁 REFERRAL REWARD PROCESSING STARTED');
+//     let referralRewardDetails = null;
+
+//     // Find the user who placed this order (again if needed, but we already have user)
+//     const orderUser = user;
+    
+//     if (orderUser) {
+//       if (orderUser.referredBy) {
+//         // Check if this is user's first order
+//         userOrderCount = await Order.countDocuments({ userId: orderUser._id });
+//         const isFirstOrder = userOrderCount === 1;
+        
+//         console.log('📊 User order count:', userOrderCount);
+//         console.log('🌟 Is this first order?', isFirstOrder);
+        
+//         if (isFirstOrder) {
+//           console.log('🎉 FIRST ORDER DETECTED - Applying referral rewards');
+          
+//           // Get referral reward settings from referralRewardSchema
+//           const referralRewardSetting = await ReferralReward.findOne({ 
+//             userType: "user" 
+//           });
+          
+//           let userRewardValue = 20; // Default fallback value
+          
+//           if (referralRewardSetting) {
+//             console.log('🎯 Referral reward setting found:', {
+//               userType: referralRewardSetting.userType,
+//               rewardType: referralRewardSetting.rewardType,
+//               rewardValue: referralRewardSetting.rewardValue
+//             });
+            
+//             userRewardValue = referralRewardSetting.rewardValue || 20;
+//             console.log('💰 Using reward value from schema:', userRewardValue);
+//           } else {
+//             console.log('⚠️ No referral reward setting found, using default:', userRewardValue);
+//           }
+          
+//           const referralCommissionPercentage = 6; // 6% of admin commission
+          
+//           // Calculate reward amounts
+//           const referralRewardFromCommission = (adminCommission * referralCommissionPercentage) / 100;
+          
+//           console.log('📐 Referral calculations:', {
+//             adminCommission: adminCommission.toFixed(2),
+//             referralPercentage: `${referralCommissionPercentage}%`,
+//             referralRewardFromCommission: referralRewardFromCommission.toFixed(2),
+//             userFixedReward: userRewardValue.toFixed(2)
+//           });
+          
+//           // Get the referral code from user
+//           const referralCode = orderUser.referredBy;
+          
+//           console.log('🔎 Looking for referrer with CODE:', referralCode);
+          
+//           // Try to find as Ambassador first (but we already did that above)
+//           let referrer = null;
+//           let referrerType = "unknown";
+          
+//           // Skip if it's ambassador (already handled)
+//           if (!referralCode.startsWith("VEGAMB")) {
+//             // If not Ambassador, try as Restaurant
+//             referrer = await Restaurant.findOne({ referralCode: referralCode });
+//             referrerType = "restaurant";
+            
+//             if (referrer) {
+//               console.log('🏪 Referrer found as RESTAURANT:', referrer._id);
+//             } else {
+//               // If still not found, try as User
+//               referrer = await User.findOne({ referralCode: referralCode });
+//               referrerType = "user";
+              
+//               if (referrer) {
+//                 console.log('👤 Referrer found as USER:', referrer._id);
+//               }
+//             }
+//           } else {
+//             console.log('ℹ️ Ambassador referral already handled separately');
+//           }
+          
+//           if (referrer) {
+//             console.log(`✅ Referrer confirmed as ${referrerType.toUpperCase()}:`, referrer._id);
+            
+//             let rewardAmount = 0;
+//             let rewardDescription = "";
+            
+//             // Determine reward based on referrer type
+//             if (referrerType === "restaurant") {
+//               // Restaurant gets 6% of admin commission
+//               rewardAmount = referralRewardFromCommission;
+//               rewardDescription = `6% of admin commission for referring user ${orderUser._id} (${orderUser.name || orderUser.email})`;
+//               console.log(`💰 RESTAURANT reward: ${rewardAmount.toFixed(2)} (6% of admin commission)`);
+//             } else if (referrerType === "user") {
+//               // User gets value from referralRewardSchema
+//               rewardAmount = userRewardValue;
+//               rewardDescription = `₹${userRewardValue} reward from referral system for referring user ${orderUser._id} (${orderUser.name || orderUser.email})`;
+//               console.log(`💰 USER reward: ${rewardAmount.toFixed(2)} (From referralRewardSchema)`);
+//             }
+            
+//             if (rewardAmount > 0) {
+//               // Update referrer's wallet
+//               const referrerWalletBefore = referrer.walletBalance || 0;
+              
+//               if (referrer.walletBalance === undefined) {
+//                 referrer.walletBalance = 0;
+//                 console.log('⚠️ Referrer wallet balance was undefined, set to 0');
+//               }
+              
+//               referrer.walletBalance = referrer.walletBalance + rewardAmount;
+              
+//               console.log(`💰 Referrer wallet updated (${referrerType}):`, {
+//                 before: referrerWalletBefore.toFixed(2),
+//                 added: rewardAmount.toFixed(2),
+//                 after: referrer.walletBalance.toFixed(2)
+//               });
+              
+//               // Initialize wallet transactions if not exists
+//               if (!referrer.walletTransactions || !Array.isArray(referrer.walletTransactions)) {
+//                 referrer.walletTransactions = [];
+//                 console.log('📝 Referrer wallet transactions array initialized');
+//               }
+              
+//               // Add transaction record
+//               const referralTransaction = {
+//                 amount: rewardAmount,
+//                 dateAdded: new Date(),
+//                 type: "referral_reward",
+//                 orderId: orderId,
+//                 referredUserId: orderUser._id,
+//                 referredUserName: orderUser.name || orderUser.email,
+//                 referredUserCode: orderUser.referralCode || 'No code',
+//                 orderAmount: subtotal,
+//                 referralCodeUsed: referralCode,
+//                 description: rewardDescription,
+//                 isFirstOrder: true,
+//                 rewardSource: referrerType === "user" ? "referralRewardSchema" : "6% commission"
+//               };
+              
+//               // Check the model type to determine how to store the transaction
+//               if (referrerType === "user") {
+//                 referrer.walletTransactions.push(referralTransaction);
+//                 console.log('📋 User referral transaction added as object');
+//               } else {
+//                 referrer.walletTransactions.push(JSON.stringify(referralTransaction));
+//                 console.log('📋 Restaurant referral transaction added as JSON string');
+//               }
+              
+//               // Save the referrer
+//               await referrer.save();
+//               console.log(`💾 Referrer (${referrerType}) saved successfully`);
+              
+//               // Deduct from admin
+//               if (admin) {
+//                 const adminBalanceBeforeDeduction = admin.walletBalance;
+//                 admin.walletBalance = admin.walletBalance - rewardAmount;
+                
+//                 console.log('👑 Admin wallet deduction for referral:', {
+//                   before: adminBalanceBeforeDeduction.toFixed(2),
+//                   deducted: rewardAmount.toFixed(2),
+//                   after: admin.walletBalance.toFixed(2),
+//                   referrerType: referrerType
+//                 });
+                
+//                 const adminDeductionTransaction = {
+//                   amount: -rewardAmount,
+//                   dateAdded: new Date().toISOString(),
+//                   type: "referral_payout",
+//                   orderId: orderId.toString(),
+//                   referrerId: referrer._id.toString(),
+//                   referrerType: referrerType,
+//                   referrerName: referrer.name || referrer.restaurantName || referrer._id,
+//                   referrerCode: referrer.referralCode,
+//                   referredUserId: orderUser._id.toString(),
+//                   referredUserName: orderUser.name || orderUser.email,
+//                   referralCodeUsed: referralCode,
+//                   description: `Referral reward of ₹${rewardAmount.toFixed(2)} to ${referrerType} for referring user`
+//                 };
+                
+//                 admin.walletTransactions.push(JSON.stringify(adminDeductionTransaction));
+//                 admin.markModified('walletBalance');
+//                 admin.markModified('walletTransactions');
+//                 await admin.save();
+//                 console.log('💾 Admin saved after referral deduction');
+//               }
+//             }
+//           }
+          
+//           // **IMPORTANT: GIVE REWARD TO THE NEW USER WHO PLACED THE ORDER**
+//           console.log('\n🎁 REWARDING THE NEW USER WHO PLACED THE ORDER');
+//           const newUserReward = userRewardValue;
+          
+//           if (orderUser.walletBalance === undefined) {
+//             orderUser.walletBalance = 0;
+//             console.log('⚠️ User wallet balance was undefined, set to 0');
+//           }
+          
+//           const userWalletBefore = orderUser.walletBalance;
+//           orderUser.walletBalance = orderUser.walletBalance + newUserReward;
+          
+//           console.log('👤 New user wallet updated:', {
+//             before: userWalletBefore.toFixed(2),
+//             added: newUserReward.toFixed(2),
+//             after: orderUser.walletBalance.toFixed(2),
+//             userName: orderUser.name || orderUser.email
+//           });
+          
+//           // Initialize user wallet transactions if not exists
+//           if (!orderUser.walletTransactions || !Array.isArray(orderUser.walletTransactions)) {
+//             orderUser.walletTransactions = [];
+//             console.log('📝 User wallet transactions array initialized');
+//           }
+          
+//           // Add transaction record for new user
+//           const newUserTransaction = {
+//             amount: newUserReward,
+//             dateAdded: new Date(),
+//             type: "referral_signup_bonus",
+//             orderId: orderId,
+//             description: `Welcome bonus of ₹${newUserReward} for completing first order with referral code ${orderUser.referredBy}`,
+//             isFirstOrder: true,
+//             referrerCode: orderUser.referredBy
+//           };
+          
+//           orderUser.walletTransactions.push(newUserTransaction);
+//           console.log('📋 New user bonus transaction added');
+          
+//           // Save the user
+//           await orderUser.save();
+//           console.log('💾 New user saved with bonus');
+          
+//           // Deduct the new user reward from admin
+//           if (admin) {
+//             const adminBalanceBeforeDeduction = admin.walletBalance;
+//             admin.walletBalance = admin.walletBalance - newUserReward;
+            
+//             console.log('👑 Admin wallet deduction for new user bonus:', {
+//               before: adminBalanceBeforeDeduction.toFixed(2),
+//               deducted: newUserReward.toFixed(2),
+//               after: admin.walletBalance.toFixed(2)
+//             });
+            
+//             const adminDeductionTransaction = {
+//               amount: -newUserReward,
+//               dateAdded: new Date().toISOString(),
+//               type: "new_user_bonus",
+//               orderId: orderId.toString(),
+//               userId: orderUser._id.toString(),
+//               userName: orderUser.name || orderUser.email,
+//               referralCodeUsed: orderUser.referredBy,
+//               description: `Welcome bonus of ₹${newUserReward} to new user for first order`
+//             };
+            
+//             admin.walletTransactions.push(JSON.stringify(adminDeductionTransaction));
+//             admin.markModified('walletBalance');
+//             admin.markModified('walletTransactions');
+//             await admin.save();
+//             console.log('💾 Admin saved after new user bonus deduction');
+//           }
+          
+//           // Update order with referral info
+//           order.referredBy = orderUser.referredBy;
+//           order.referrerType = ambassadorCommissionDetails ? "ambassador" : (referrer ? referrerType : "unknown");
+//           order.referralRewardPaid = referrer ? rewardAmount : 0;
+//           order.newUserRewardPaid = newUserReward;
+//           order.referredUserName = orderUser.name || orderUser.email;
+//           order.isFirstOrder = true;
+          
+//           referralRewardDetails = {
+//             referrerType: ambassadorCommissionDetails ? "ambassador" : (referrer ? referrerType : "none"),
+//             referrerId: ambassadorCommissionDetails?.ambassadorId || referrer?._id,
+//             referrerCode: ambassadorCommissionDetails?.ambassadorCode || referrer?.referralCode,
+//             referrerName: ambassadorCommissionDetails?.ambassadorName || referrer?.name || referrer?.restaurantName,
+//             rewardAmount: ambassadorCommissionDetails?.commissionAmount || (referrer ? rewardAmount : 0),
+//             newUserReward: newUserReward,
+//             rewardSource: ambassadorCommissionDetails ? "ambassador_commission" : (referrerType === "user" ? "referralRewardSchema" : "6% commission"),
+//             deductedFromAdmin: true,
+//             referredUserId: orderUser._id,
+//             referredUserName: orderUser.name || orderUser.email,
+//             referralCodeUsed: orderUser.referredBy,
+//             isFirstOrder: true,
+//             userOrderCount: userOrderCount
+//           };
+//         }
+//       }
+//     }
+
+//     // ========== UPDATE DELIVERY BOY WALLET ==========
+//     console.log('\n🚴 DELIVERY BOY PAYMENT PROCESSING');
+    
+//     const deliveryBoyBalanceBefore = deliveryBoy.walletBalance || 0;
+    
+//     // Update the delivery boy's wallet
+//     deliveryBoy.walletBalance = (deliveryBoy.walletBalance || 0) + deliveryCharge;
+    
+//     console.log('💰 Delivery boy wallet updated:', {
+//       before: deliveryBoyBalanceBefore.toFixed(2),
+//       added: deliveryCharge.toFixed(2),
+//       after: deliveryBoy.walletBalance.toFixed(2),
+//       deliveryBoyName: deliveryBoy.name
+//     });
+
+//     // Initialize if not exists
+//     if (!deliveryBoy.walletTransactions || !Array.isArray(deliveryBoy.walletTransactions)) {
+//       deliveryBoy.walletTransactions = [];
+//       console.log('📝 Delivery boy wallet transactions array initialized');
+//     }
+    
+//     // DeliveryBoy ke liye PROPER OBJECT push karo (JSON string nahi)
+//     const deliveryTransaction = {
+//       amount: deliveryCharge,
+//       dateAdded: new Date(),
+//       type: "delivery",
+//       orderId: orderId,
+//       description: `Delivery charge for order #${orderId.toString().substring(0, 8)}`
+//     };
+    
+//     // Push as proper object
+//     deliveryBoy.walletTransactions.push(deliveryTransaction);
+//     console.log('📋 Delivery boy transaction added:', deliveryTransaction.description);
+
+//     // Update the delivery boy's currentOrderStatus to 'Delivered'
+//     deliveryBoy.currentOrderStatus = "Delivered";
+
+//     // Set the delivery boy's currentOrder to false (mark as available again)
+//     deliveryBoy.currentOrder = false;
+    
+//     console.log('🚴 Delivery boy status updated:', {
+//       currentOrderStatus: "Delivered",
+//       currentOrder: false,
+//       available: true
+//     });
+
+//     // Save the updated order and delivery boy
+//     await order.save();
+//     console.log('💾 Order saved with all updates');
+    
+//     await deliveryBoy.save();
+//     console.log('💾 Delivery boy saved with all updates');
+
+//     console.log('\n✅ ALL PROCESSES COMPLETED SUCCESSFULLY');
+//     console.log('📊 FINAL SUMMARY:');
+//     console.log('- Order marked as Delivered');
+//     console.log('- Payment distributed: Admin, Restaurant, Delivery Boy');
+    
+//     if (ambassadorCommissionDetails) {
+//       console.log('- AMBASSADOR COMMISSION processed:', {
+//         ambassadorName: ambassadorCommissionDetails.ambassadorName,
+//         ambassadorCode: ambassadorCommissionDetails.ambassadorCode,
+//         commissionPercentage: ambassadorCommissionDetails.commissionPercentage,
+//         commissionAmount: ambassadorCommissionDetails.commissionAmount.toFixed(2)
+//       });
+//     }
+    
+//     if (referralRewardDetails) {
+//       console.log('- FIRST ORDER referral rewards processed:', {
+//         referrerType: referralRewardDetails.referrerType,
+//         referrerName: referralRewardDetails.referrerName,
+//         referrerCode: referralRewardDetails.referrerCode,
+//         referrerReward: referralRewardDetails.rewardAmount.toFixed(2),
+//         newUserReward: referralRewardDetails.newUserReward.toFixed(2),
+//         totalPaid: (referralRewardDetails.rewardAmount + referralRewardDetails.newUserReward).toFixed(2)
+//       });
+//     } else {
+//       console.log('- No referral reward processed (not first order or no referrer)');
+//     }
+
+//     return res.status(200).json({
+//       success: true,
+//       message: "Order marked as 'Delivered', payment status updated, and funds distributed.",
+//       data: {
+//         order,
+//         paymentDistribution: {
+//           subtotal: subtotal,
+//           deliveryCharge: deliveryCharge,
+//           totalPayable: totalPayable,
+//           commissionPercentage: `${commissionPercentage}%`,
+//           commissionAppliedOn: "subtotal",
+//           adminCommission: adminCommission,
+//           restaurantAmount: restaurantAmount,
+//           deliveryCharge: deliveryCharge,
+//           distribution: {
+//             admin: `${commissionPercentage}% of subtotal`,
+//             restaurant: `${100 - commissionPercentage}% of subtotal`,
+//             deliveryBoy: "100% of delivery charge"
+//           }
+//         },
+//         ambassadorCommission: ambassadorCommissionDetails,
+//         referralReward: referralRewardDetails,
+//         adminUpdated: admin ? {
+//           walletBalance: admin.walletBalance,
+//           hasWalletBalanceField: admin.walletBalance !== undefined
+//         } : null,
+//         logs: {
+//           userFound: !!user,
+//           hadReferrer: !!(user && user.referredBy),
+//           isAmbassadorReferral: !!(user && user.referredBy && user.referredBy.startsWith("VEGAMB")),
+//           ambassadorCommissionProcessed: !!ambassadorCommissionDetails,
+//           userOrderCount: userOrderCount || 0,
+//           isFirstOrder: !!(referralRewardDetails && referralRewardDetails.isFirstOrder)
+//         }
+//       },
+//     });
+//   } catch (error) {
+//     console.error("❌❌❌ ERROR marking order as delivered:", error);
+//     console.error("Error stack:", error.stack);
+//     return res.status(500).json({
+//       success: false,
+//       message: "Server error.",
+//       error: error.message,
+//     });
+//   }
+// };
+
+
+
+// exports.markOrderAsDelivered = async (req, res) => {
+//   try {
+//     const { deliveryBoyId, orderId, paymentType } = req.body;
+
+//     console.log('🔵 MARK ORDER AS DELIVERED STARTED');
+//     console.log('📦 Order ID:', orderId);
+//     console.log('🚴 Delivery Boy ID:', deliveryBoyId);
+//     console.log('💰 Payment Type:', paymentType);
+
+//     // 🔥 TAX CONSTANTS ADDED - SIRF YAHI CHANGES HAI
+//     const GST_RATE = 18; // 18% GST on commission
+//     const TDS_RATE = 0.5; // 0.5% TDS on vendor earnings
+
+//     // Validate the delivery boy
+//     const deliveryBoy = await DeliveryBoy.findById(deliveryBoyId);
+//     if (!deliveryBoy) {
+//       console.log('❌ Delivery boy not found:', deliveryBoyId);
+//       return res.status(404).json({
+//         success: false,
+//         message: "Delivery boy not found.",
+//       });
+//     }
+//     console.log('✅ Delivery boy found:', deliveryBoy._id, '-', deliveryBoy.name);
+
+//     // Validate the order
+//     const order = await Order.findById(orderId).populate('restaurantId');
+//     if (!order) {
+//       console.log('❌ Order not found:', orderId);
+//       return res.status(404).json({
+//         success: false,
+//         message: "Order not found.",
+//       });
+//     }
+//     console.log('✅ Order found:', order._id);
+//     console.log('📊 Order Details:', {
+//       orderStatus: order.orderStatus,
+//       deliveryStatus: order.deliveryStatus,
+//       userId: order.userId,
+//       subTotal: order.subTotal,
+//       deliveryCharge: order.deliveryCharge,
+//       totalPayable: order.totalPayable
+//     });
+
+//     // Ensure the order is in "Picked" status before proceeding to "Delivered"
+//     if (order.orderStatus !== "Picked" || order.deliveryStatus !== "Picked") {
+//       console.log('❌ Order status check failed:', {
+//         orderStatus: order.orderStatus,
+//         deliveryStatus: order.deliveryStatus,
+//         required: 'Picked'
+//       });
+//       return res.status(400).json({
+//         success: false,
+//         message: "Order is not in 'Picked' status.",
+//       });
+//     }
+//     console.log('✅ Order is in "Picked" status');
+
+//     // Mark order as delivered and update statuses
+//     order.orderStatus = "Delivered";
+//     order.deliveryStatus = "Delivered";
+//     console.log('📈 Order status updated to "Delivered"');
+
+//     // Store the paymentType in the order
+//     if (paymentType) {
+//       order.paymentType = paymentType;
+//       console.log('💰 Payment type added to order:', paymentType);
+//     }
+
+//     // Handle payment for COD orders (without UPI ID)
+//     if (order.paymentMethod === "COD") {
+//       order.paymentStatus = "Paid";
+//       console.log('💵 COD order - Payment status set to "Paid"');
+//     } else {
+//       order.paymentStatus = "Completed";
+//       console.log('💳 Non-COD order - Payment status set to "Completed"');
+//     }
+
+//     // ========== DISTRIBUTE PAYMENT TO ADMIN AND RESTAURANT ==========
+//     console.log('\n💸 PAYMENT DISTRIBUTION STARTED');
+    
+//     // 1. Find the restaurant
+//     const restaurant = await Restaurant.findById(order.restaurantId);
+//     if (!restaurant) {
+//       console.log('❌ Restaurant not found for order:', order.restaurantId);
+//       return res.status(404).json({
+//         success: false,
+//         message: "Restaurant not found.",
+//       });
+//     }
+//     console.log('✅ Restaurant found:', restaurant._id, '-', restaurant.restaurantName);
+
+//     // 2. **FIXED: Now always use 20% commission from subtotal**
+//     const commissionPercentage = 20; // FIXED 20% commission
+    
+//     // 3. **CHANGED: Calculate commission from SUBTOTAL, not totalPayable**
+//     const subtotal = order.subTotal || order.totalAmount || 0;
+    
+//     // Delivery charge alag se rahega
+//     const deliveryCharge = order.deliveryCharge || 0;
+//     const totalPayable = order.totalPayable || 0;
+    
+//     // Calculate amounts based on SUBTOTAL
+//     const adminCommission = (subtotal * commissionPercentage) / 100;
+//     const restaurantAmount = subtotal - adminCommission;
+    
+//     console.log("📊 Payment Distribution Details:", {
+//       subtotal: subtotal.toFixed(2),
+//       deliveryCharge: deliveryCharge.toFixed(2),
+//       totalPayable: totalPayable.toFixed(2),
+//       commissionPercentage: `${commissionPercentage}%`,
+//       adminCommission: adminCommission.toFixed(2),
+//       restaurantAmount: restaurantAmount.toFixed(2)
+//     });
+
+//     // 4. Update Admin wallet (add commission) - FIXED
+//     const admin = await adminModel.findOne();
+    
+//     if (admin) {
+//       console.log('👑 Admin found:', admin._id);
+      
+//       // CRITICAL FIX: Check if walletBalance exists, if not create it
+//       if (admin.walletBalance === undefined) {
+//         admin.walletBalance = 0;
+//         console.log('⚠️ Admin wallet balance was undefined, set to 0');
+//       }
+      
+//       const adminBalanceBefore = admin.walletBalance;
+      
+//       // Now add commission
+//       admin.walletBalance = admin.walletBalance + adminCommission;
+      
+//       console.log('💰 Admin wallet updated:', {
+//         before: adminBalanceBefore.toFixed(2),
+//         added: adminCommission.toFixed(2),
+//         after: admin.walletBalance.toFixed(2)
+//       });
+      
+//       // Create transaction object
+//       const transactionObj = {
+//         amount: adminCommission,
+//         dateAdded: new Date().toISOString(),
+//         type: "commission",
+//         orderId: orderId.toString(),
+//         restaurantId: restaurant._id.toString(),
+//         restaurantName: restaurant.restaurantName,
+//         subtotal: subtotal,
+//         commissionPercentage: commissionPercentage,
+//         description: `Commission from order #${orderId.toString().substring(0, 8)} (20% of subtotal)`
+//       };
+      
+//       // Initialize if not exists
+//       if (!admin.walletTransactions || !Array.isArray(admin.walletTransactions)) {
+//         admin.walletTransactions = [];
+//         console.log('📝 Admin wallet transactions array initialized');
+//       }
+      
+//       // Admin ke liye JSON string push karo
+//       admin.walletTransactions.push(JSON.stringify(transactionObj));
+//       console.log('📋 Admin transaction added:', transactionObj.description);
+      
+//       // Mark fields as modified
+//       admin.markModified('walletBalance');
+//       admin.markModified('walletTransactions');
+      
+//       await admin.save();
+//       console.log('💾 Admin saved successfully');
+//     } else {
+//       console.log('❌ Admin not found in database');
+//     }
+
+//     // 5. Update Restaurant wallet (add restaurant's share)
+//     console.log('\n🏪 RESTAURANT PAYMENT PROCESSING');
+    
+//     // Check and initialize restaurant wallet fields
+//     if (restaurant.walletBalance === undefined) {
+//       restaurant.walletBalance = 0;
+//       console.log('⚠️ Restaurant wallet balance was undefined, set to 0');
+//     }
+//     if (restaurant.totalEarnings === undefined) {
+//       restaurant.totalEarnings = 0;
+//       console.log('⚠️ Restaurant totalEarnings was undefined, set to 0');
+//     }
+//     if (restaurant.totalCommissionPaid === undefined) {
+//       restaurant.totalCommissionPaid = 0;
+//       console.log('⚠️ Restaurant totalCommissionPaid was undefined, set to 0');
+//     }
+    
+//     const restaurantBalanceBefore = restaurant.walletBalance;
+//     const totalEarningsBefore = restaurant.totalEarnings;
+//     const totalCommissionBefore = restaurant.totalCommissionPaid;
+    
+//     restaurant.walletBalance = restaurant.walletBalance + restaurantAmount;
+//     restaurant.totalEarnings = restaurant.totalEarnings + restaurantAmount;
+//     restaurant.totalCommissionPaid = restaurant.totalCommissionPaid + adminCommission;
+    
+//     console.log('🏪 Restaurant wallet updated:', {
+//       walletBalance: {
+//         before: restaurantBalanceBefore.toFixed(2),
+//         added: restaurantAmount.toFixed(2),
+//         after: restaurant.walletBalance.toFixed(2)
+//       },
+//       totalEarnings: {
+//         before: totalEarningsBefore.toFixed(2),
+//         added: restaurantAmount.toFixed(2),
+//         after: restaurant.totalEarnings.toFixed(2)
+//       },
+//       totalCommissionPaid: {
+//         before: totalCommissionBefore.toFixed(2),
+//         added: adminCommission.toFixed(2),
+//         after: restaurant.totalCommissionPaid.toFixed(2)
+//       }
+//     });
+    
+//     // Initialize if not exists
+//     if (!restaurant.walletTransactions || !Array.isArray(restaurant.walletTransactions)) {
+//       restaurant.walletTransactions = [];
+//       console.log('📝 Restaurant wallet transactions array initialized');
+//     }
+    
+//     // Restaurant ke liye transaction object
+//     const restaurantTransaction = {
+//       amount: restaurantAmount,
+//       dateAdded: new Date().toISOString(),
+//       type: "order_payment",
+//       orderId: orderId.toString(),
+//       subtotal: subtotal,
+//       commissionDeducted: adminCommission,
+//       commissionPercentage: commissionPercentage,
+//       netAmount: restaurantAmount,
+//       description: `Payment for order #${orderId.toString().substring(0, 8)} (80% of subtotal)`
+//     };
+    
+//     // Restaurant ke liye JSON string push karo
+//     restaurant.walletTransactions.push(JSON.stringify(restaurantTransaction));
+//     console.log('📋 Restaurant transaction added:', restaurantTransaction.description);
+    
+//     await restaurant.save();
+//     console.log('💾 Restaurant saved successfully');
+
+//     // 6. Update order with commission details
+//     order.adminCommission = adminCommission;
+//     order.restaurantPayout = restaurantAmount;
+//     order.commissionPercentage = commissionPercentage;
+//     order.commissionAppliedOn = "subtotal"; // Indicate commission was applied on subtotal
+//     console.log('📋 Order commission details updated');
+
+//     // ========== FIND USER AND CHECK REFERRAL ==========
+//     console.log('\n👤 CHECKING USER REFERRAL');
+//     const user = await User.findById(order.userId);
+    
+//     let ambassadorCommissionDetails = null;
+//     let userOrderCount = 0;
+
+//     if (user) {
+//       console.log('👤 Order user found:', user._id, '-', user.name || user.email);
+//       console.log('🔍 Checking user.referredBy field:', user.referredBy);
+      
+//       // ========== AMBASSADOR COMMISSION LOGIC ==========
+//       if (user.referredBy) {
+//         console.log('🎯 User has a referrer! Referrer CODE:', user.referredBy);
+        
+//         // Check if the referral code starts with "VEGAMB" (Ambassador code)
+//         if (user.referredBy.startsWith("VEGAMB")) {
+//           console.log('🌟 REFERRAL CODE IS FROM AN AMBASSADOR!');
+          
+//           // Find the ambassador by referral code
+//           const ambassador = await Ambassador.findOne({ referralCode: user.referredBy });
+          
+//           if (ambassador) {
+//             console.log('✅ Ambassador found:', ambassador._id, '-', ambassador.fullName);
+//             console.log('💰 Ambassador commission percentage:', ambassador.commissionPercentage, '%');
+            
+//             // Get ambassador's commission percentage (default to 3% if not set)
+//             const ambassadorCommissionPercent = ambassador.commissionPercentage || 3;
+            
+//             // Calculate ambassador commission based on subtotal
+//             const ambassadorCommission = (subtotal * ambassadorCommissionPercent) / 100;
+            
+//             console.log('📊 Ambassador commission calculation:', {
+//               subtotal: subtotal.toFixed(2),
+//               ambassadorCommissionPercent: `${ambassadorCommissionPercent}%`,
+//               ambassadorCommission: ambassadorCommission.toFixed(2)
+//             });
+            
+//             // Update ambassador's wallet
+//             if (ambassador.wallet === undefined) {
+//               ambassador.wallet = 0;
+//               console.log('⚠️ Ambassador wallet was undefined, set to 0');
+//             }
+            
+//             const ambassadorWalletBefore = ambassador.wallet;
+//             ambassador.wallet = ambassador.wallet + ambassadorCommission;
+            
+//             console.log('💰 Ambassador wallet updated:', {
+//               before: ambassadorWalletBefore.toFixed(2),
+//               added: ambassadorCommission.toFixed(2),
+//               after: ambassador.wallet.toFixed(2),
+//               ambassadorName: ambassador.fullName
+//             });
+            
+//             // 🔥 FIX: Initialize transactionHistory as array of objects (NOT JSON strings)
+//             if (!ambassador.transactionHistory || !Array.isArray(ambassador.transactionHistory)) {
+//               ambassador.transactionHistory = [];
+//               console.log('📝 Ambassador transaction history array initialized');
+//             }
+            
+//             // 🔥 FIX: Add transaction as OBJECT, not JSON string
+//             const ambassadorTransaction = {
+//               orderId: orderId, // This is an ObjectId, not string
+//               userId: user._id, // This is an ObjectId, not string
+//               totalPayable: subtotal,
+//               commission: ambassadorCommission,
+//               date: new Date()
+//             };
+            
+//             // Push as object, NOT stringified
+//             ambassador.transactionHistory.push(ambassadorTransaction);
+//             console.log('📋 Ambassador transaction added as object:', ambassadorTransaction);
+            
+//             // Save ambassador
+//             await ambassador.save();
+//             console.log('💾 Ambassador saved with commission');
+            
+//             // Deduct commission from admin's wallet
+//             if (admin) {
+//               const adminBalanceBeforeDeduction = admin.walletBalance;
+//               admin.walletBalance = admin.walletBalance - ambassadorCommission;
+              
+//               console.log('👑 Admin wallet deduction for ambassador commission:', {
+//                 before: adminBalanceBeforeDeduction.toFixed(2),
+//                 deducted: ambassadorCommission.toFixed(2),
+//                 after: admin.walletBalance.toFixed(2),
+//                 ambassadorName: ambassador.fullName
+//               });
+              
+//               // Add transaction record for deduction
+//               const adminDeductionTransaction = {
+//                 amount: -ambassadorCommission,
+//                 dateAdded: new Date().toISOString(),
+//                 type: "ambassador_commission_payout",
+//                 orderId: orderId.toString(),
+//                 ambassadorId: ambassador._id.toString(),
+//                 ambassadorName: ambassador.fullName,
+//                 ambassadorCode: ambassador.referralCode,
+//                 commissionPercentage: ambassadorCommissionPercent,
+//                 description: `Commission paid to Ambassador ${ambassador.fullName} for referred user's order #${orderId.toString().substring(0, 8)}`
+//               };
+              
+//               admin.walletTransactions.push(JSON.stringify(adminDeductionTransaction));
+//               admin.markModified('walletBalance');
+//               admin.markModified('walletTransactions');
+//               await admin.save();
+//               console.log('💾 Admin saved after ambassador commission deduction');
+//             }
+            
+//             // Store ambassador commission details in order
+//             order.ambassadorCommissionPaid = ambassadorCommission;
+//             order.ambassadorCommissionPercentage = ambassadorCommissionPercent;
+//             order.ambassadorId = ambassador._id;
+//             order.ambassadorName = ambassador.fullName;
+//             order.ambassadorCode = ambassador.referralCode;
+            
+//             ambassadorCommissionDetails = {
+//               ambassadorId: ambassador._id,
+//               ambassadorName: ambassador.fullName,
+//               ambassadorCode: ambassador.referralCode,
+//               commissionPercentage: ambassadorCommissionPercent,
+//               commissionAmount: ambassadorCommission,
+//               deductedFromAdmin: true
+//             };
+            
+//             console.log(`🎁 AMBASSADOR COMMISSION PROCESSED:`);
+//             console.log(`   ₹${ambassadorCommission.toFixed(2)} to Ambassador "${ambassador.fullName}" (${ambassador.referralCode})`);
+//           } else {
+//             console.log('❌ Ambassador not found with referral code:', user.referredBy);
+//           }
+//         } else {
+//           console.log('ℹ️ Referral code is not from an ambassador:', user.referredBy);
+//         }
+//       } else {
+//         console.log('ℹ️ No referrer found for this user (user.referredBy is null/undefined)');
+//       }
+//     } else {
+//       console.log('❌ User not found for order.userId:', order.userId);
+//     }
+
+//     // ========== REFERRAL REWARD LOGIC (EXISTING) ==========
+//     console.log('\n🎁 REFERRAL REWARD PROCESSING STARTED');
+//     let referralRewardDetails = null;
+
+//     // Find the user who placed this order (again if needed, but we already have user)
+//     const orderUser = user;
+    
+//     if (orderUser) {
+//       if (orderUser.referredBy) {
+//         // Check if this is user's first order
+//         userOrderCount = await Order.countDocuments({ userId: orderUser._id });
+//         const isFirstOrder = userOrderCount === 1;
+        
+//         console.log('📊 User order count:', userOrderCount);
+//         console.log('🌟 Is this first order?', isFirstOrder);
+        
+//         if (isFirstOrder) {
+//           console.log('🎉 FIRST ORDER DETECTED - Applying referral rewards');
+          
+//           // Get referral reward settings from referralRewardSchema
+//           const referralRewardSetting = await ReferralReward.findOne({ 
+//             userType: "user" 
+//           });
+          
+//           let userRewardValue = 20; // Default fallback value
+          
+//           if (referralRewardSetting) {
+//             console.log('🎯 Referral reward setting found:', {
+//               userType: referralRewardSetting.userType,
+//               rewardType: referralRewardSetting.rewardType,
+//               rewardValue: referralRewardSetting.rewardValue
+//             });
+            
+//             userRewardValue = referralRewardSetting.rewardValue || 20;
+//             console.log('💰 Using reward value from schema:', userRewardValue);
+//           } else {
+//             console.log('⚠️ No referral reward setting found, using default:', userRewardValue);
+//           }
+          
+//           const referralCommissionPercentage = 6; // 6% of admin commission
+          
+//           // Calculate reward amounts
+//           const referralRewardFromCommission = (adminCommission * referralCommissionPercentage) / 100;
+          
+//           console.log('📐 Referral calculations:', {
+//             adminCommission: adminCommission.toFixed(2),
+//             referralPercentage: `${referralCommissionPercentage}%`,
+//             referralRewardFromCommission: referralRewardFromCommission.toFixed(2),
+//             userFixedReward: userRewardValue.toFixed(2)
+//           });
+          
+//           // Get the referral code from user
+//           const referralCode = orderUser.referredBy;
+          
+//           console.log('🔎 Looking for referrer with CODE:', referralCode);
+          
+//           // Try to find as Ambassador first (but we already did that above)
+//           let referrer = null;
+//           let referrerType = "unknown";
+          
+//           // Skip if it's ambassador (already handled)
+//           if (!referralCode.startsWith("VEGAMB")) {
+//             // If not Ambassador, try as Restaurant
+//             referrer = await Restaurant.findOne({ referralCode: referralCode });
+//             referrerType = "restaurant";
+            
+//             if (referrer) {
+//               console.log('🏪 Referrer found as RESTAURANT:', referrer._id);
+//             } else {
+//               // If still not found, try as User
+//               referrer = await User.findOne({ referralCode: referralCode });
+//               referrerType = "user";
+              
+//               if (referrer) {
+//                 console.log('👤 Referrer found as USER:', referrer._id);
+//               }
+//             }
+//           } else {
+//             console.log('ℹ️ Ambassador referral already handled separately');
+//           }
+          
+//           if (referrer) {
+//             console.log(`✅ Referrer confirmed as ${referrerType.toUpperCase()}:`, referrer._id);
+            
+//             let rewardAmount = 0;
+//             let rewardDescription = "";
+            
+//             // Determine reward based on referrer type
+//             if (referrerType === "restaurant") {
+//               // Restaurant gets 6% of admin commission
+//               rewardAmount = referralRewardFromCommission;
+//               rewardDescription = `6% of admin commission for referring user ${orderUser._id} (${orderUser.name || orderUser.email})`;
+//               console.log(`💰 RESTAURANT reward: ${rewardAmount.toFixed(2)} (6% of admin commission)`);
+//             } else if (referrerType === "user") {
+//               // User gets value from referralRewardSchema
+//               rewardAmount = userRewardValue;
+//               rewardDescription = `₹${userRewardValue} reward from referral system for referring user ${orderUser._id} (${orderUser.name || orderUser.email})`;
+//               console.log(`💰 USER reward: ${rewardAmount.toFixed(2)} (From referralRewardSchema)`);
+//             }
+            
+//             if (rewardAmount > 0) {
+//               // Update referrer's wallet
+//               const referrerWalletBefore = referrer.walletBalance || 0;
+              
+//               if (referrer.walletBalance === undefined) {
+//                 referrer.walletBalance = 0;
+//                 console.log('⚠️ Referrer wallet balance was undefined, set to 0');
+//               }
+              
+//               referrer.walletBalance = referrer.walletBalance + rewardAmount;
+              
+//               console.log(`💰 Referrer wallet updated (${referrerType}):`, {
+//                 before: referrerWalletBefore.toFixed(2),
+//                 added: rewardAmount.toFixed(2),
+//                 after: referrer.walletBalance.toFixed(2)
+//               });
+              
+//               // Initialize wallet transactions if not exists
+//               if (!referrer.walletTransactions || !Array.isArray(referrer.walletTransactions)) {
+//                 referrer.walletTransactions = [];
+//                 console.log('📝 Referrer wallet transactions array initialized');
+//               }
+              
+//               // Add transaction record
+//               const referralTransaction = {
+//                 amount: rewardAmount,
+//                 dateAdded: new Date(),
+//                 type: "referral_reward",
+//                 orderId: orderId,
+//                 referredUserId: orderUser._id,
+//                 referredUserName: orderUser.name || orderUser.email,
+//                 referredUserCode: orderUser.referralCode || 'No code',
+//                 orderAmount: subtotal,
+//                 referralCodeUsed: referralCode,
+//                 description: rewardDescription,
+//                 isFirstOrder: true,
+//                 rewardSource: referrerType === "user" ? "referralRewardSchema" : "6% commission"
+//               };
+              
+//               // Check the model type to determine how to store the transaction
+//               if (referrerType === "user") {
+//                 referrer.walletTransactions.push(referralTransaction);
+//                 console.log('📋 User referral transaction added as object');
+//               } else {
+//                 referrer.walletTransactions.push(JSON.stringify(referralTransaction));
+//                 console.log('📋 Restaurant referral transaction added as JSON string');
+//               }
+              
+//               // Save the referrer
+//               await referrer.save();
+//               console.log(`💾 Referrer (${referrerType}) saved successfully`);
+              
+//               // Deduct from admin
+//               if (admin) {
+//                 const adminBalanceBeforeDeduction = admin.walletBalance;
+//                 admin.walletBalance = admin.walletBalance - rewardAmount;
+                
+//                 console.log('👑 Admin wallet deduction for referral:', {
+//                   before: adminBalanceBeforeDeduction.toFixed(2),
+//                   deducted: rewardAmount.toFixed(2),
+//                   after: admin.walletBalance.toFixed(2),
+//                   referrerType: referrerType
+//                 });
+                
+//                 const adminDeductionTransaction = {
+//                   amount: -rewardAmount,
+//                   dateAdded: new Date().toISOString(),
+//                   type: "referral_payout",
+//                   orderId: orderId.toString(),
+//                   referrerId: referrer._id.toString(),
+//                   referrerType: referrerType,
+//                   referrerName: referrer.name || referrer.restaurantName || referrer._id,
+//                   referrerCode: referrer.referralCode,
+//                   referredUserId: orderUser._id.toString(),
+//                   referredUserName: orderUser.name || orderUser.email,
+//                   referralCodeUsed: referralCode,
+//                   description: `Referral reward of ₹${rewardAmount.toFixed(2)} to ${referrerType} for referring user`
+//                 };
+                
+//                 admin.walletTransactions.push(JSON.stringify(adminDeductionTransaction));
+//                 admin.markModified('walletBalance');
+//                 admin.markModified('walletTransactions');
+//                 await admin.save();
+//                 console.log('💾 Admin saved after referral deduction');
+//               }
+//             }
+//           }
+          
+//           // **IMPORTANT: GIVE REWARD TO THE NEW USER WHO PLACED THE ORDER**
+//           console.log('\n🎁 REWARDING THE NEW USER WHO PLACED THE ORDER');
+//           const newUserReward = userRewardValue;
+          
+//           if (orderUser.walletBalance === undefined) {
+//             orderUser.walletBalance = 0;
+//             console.log('⚠️ User wallet balance was undefined, set to 0');
+//           }
+          
+//           const userWalletBefore = orderUser.walletBalance;
+//           orderUser.walletBalance = orderUser.walletBalance + newUserReward;
+          
+//           console.log('👤 New user wallet updated:', {
+//             before: userWalletBefore.toFixed(2),
+//             added: newUserReward.toFixed(2),
+//             after: orderUser.walletBalance.toFixed(2),
+//             userName: orderUser.name || orderUser.email
+//           });
+          
+//           // Initialize user wallet transactions if not exists
+//           if (!orderUser.walletTransactions || !Array.isArray(orderUser.walletTransactions)) {
+//             orderUser.walletTransactions = [];
+//             console.log('📝 User wallet transactions array initialized');
+//           }
+          
+//           // Add transaction record for new user
+//           const newUserTransaction = {
+//             amount: newUserReward,
+//             dateAdded: new Date(),
+//             type: "referral_signup_bonus",
+//             orderId: orderId,
+//             description: `Welcome bonus of ₹${newUserReward} for completing first order with referral code ${orderUser.referredBy}`,
+//             isFirstOrder: true,
+//             referrerCode: orderUser.referredBy
+//           };
+          
+//           orderUser.walletTransactions.push(newUserTransaction);
+//           console.log('📋 New user bonus transaction added');
+          
+//           // Save the user
+//           await orderUser.save();
+//           console.log('💾 New user saved with bonus');
+          
+//           // Deduct the new user reward from admin
+//           if (admin) {
+//             const adminBalanceBeforeDeduction = admin.walletBalance;
+//             admin.walletBalance = admin.walletBalance - newUserReward;
+            
+//             console.log('👑 Admin wallet deduction for new user bonus:', {
+//               before: adminBalanceBeforeDeduction.toFixed(2),
+//               deducted: newUserReward.toFixed(2),
+//               after: admin.walletBalance.toFixed(2)
+//             });
+            
+//             const adminDeductionTransaction = {
+//               amount: -newUserReward,
+//               dateAdded: new Date().toISOString(),
+//               type: "new_user_bonus",
+//               orderId: orderId.toString(),
+//               userId: orderUser._id.toString(),
+//               userName: orderUser.name || orderUser.email,
+//               referralCodeUsed: orderUser.referredBy,
+//               description: `Welcome bonus of ₹${newUserReward} to new user for first order`
+//             };
+            
+//             admin.walletTransactions.push(JSON.stringify(adminDeductionTransaction));
+//             admin.markModified('walletBalance');
+//             admin.markModified('walletTransactions');
+//             await admin.save();
+//             console.log('💾 Admin saved after new user bonus deduction');
+//           }
+          
+//           // Update order with referral info
+//           order.referredBy = orderUser.referredBy;
+//           order.referrerType = ambassadorCommissionDetails ? "ambassador" : (referrer ? referrerType : "unknown");
+//           order.referralRewardPaid = referrer ? rewardAmount : 0;
+//           order.newUserRewardPaid = newUserReward;
+//           order.referredUserName = orderUser.name || orderUser.email;
+//           order.isFirstOrder = true;
+          
+//           referralRewardDetails = {
+//             referrerType: ambassadorCommissionDetails ? "ambassador" : (referrer ? referrerType : "none"),
+//             referrerId: ambassadorCommissionDetails?.ambassadorId || referrer?._id,
+//             referrerCode: ambassadorCommissionDetails?.ambassadorCode || referrer?.referralCode,
+//             referrerName: ambassadorCommissionDetails?.ambassadorName || referrer?.name || referrer?.restaurantName,
+//             rewardAmount: ambassadorCommissionDetails?.commissionAmount || (referrer ? rewardAmount : 0),
+//             newUserReward: newUserReward,
+//             rewardSource: ambassadorCommissionDetails ? "ambassador_commission" : (referrerType === "user" ? "referralRewardSchema" : "6% commission"),
+//             deductedFromAdmin: true,
+//             referredUserId: orderUser._id,
+//             referredUserName: orderUser.name || orderUser.email,
+//             referralCodeUsed: orderUser.referredBy,
+//             isFirstOrder: true,
+//             userOrderCount: userOrderCount
+//           };
+//         }
+//       }
+//     }
+
+//     // ========== UPDATE DELIVERY BOY WALLET ==========
+//     console.log('\n🚴 DELIVERY BOY PAYMENT PROCESSING');
+    
+//     const deliveryBoyBalanceBefore = deliveryBoy.walletBalance || 0;
+    
+//     // Update the delivery boy's wallet
+//     deliveryBoy.walletBalance = (deliveryBoy.walletBalance || 0) + deliveryCharge;
+    
+//     console.log('💰 Delivery boy wallet updated:', {
+//       before: deliveryBoyBalanceBefore.toFixed(2),
+//       added: deliveryCharge.toFixed(2),
+//       after: deliveryBoy.walletBalance.toFixed(2),
+//       deliveryBoyName: deliveryBoy.name
+//     });
+
+//     // Initialize if not exists
+//     if (!deliveryBoy.walletTransactions || !Array.isArray(deliveryBoy.walletTransactions)) {
+//       deliveryBoy.walletTransactions = [];
+//       console.log('📝 Delivery boy wallet transactions array initialized');
+//     }
+    
+//     // DeliveryBoy ke liye PROPER OBJECT push karo (JSON string nahi)
+//     const deliveryTransaction = {
+//       amount: deliveryCharge,
+//       dateAdded: new Date(),
+//       type: "delivery",
+//       orderId: orderId,
+//       description: `Delivery charge for order #${orderId.toString().substring(0, 8)}`
+//     };
+    
+//     // Push as proper object
+//     deliveryBoy.walletTransactions.push(deliveryTransaction);
+//     console.log('📋 Delivery boy transaction added:', deliveryTransaction.description);
+
+//     // Update the delivery boy's currentOrderStatus to 'Delivered'
+//     deliveryBoy.currentOrderStatus = "Delivered";
+
+//     // Set the delivery boy's currentOrder to false (mark as available again)
+//     deliveryBoy.currentOrder = false;
+    
+//     console.log('🚴 Delivery boy status updated:', {
+//       currentOrderStatus: "Delivered",
+//       currentOrder: false,
+//       available: true
+//     });
+
+//     // Save the updated order and delivery boy
+//     await order.save();
+//     console.log('💾 Order saved with all updates');
+    
+//     await deliveryBoy.save();
+//     console.log('💾 Delivery boy saved with all updates');
+
+//     console.log('\n✅ ALL PROCESSES COMPLETED SUCCESSFULLY');
+//     console.log('📊 FINAL SUMMARY:');
+//     console.log('- Order marked as Delivered');
+//     console.log('- Payment distributed: Admin, Restaurant, Delivery Boy');
+    
+//     if (ambassadorCommissionDetails) {
+//       console.log('- AMBASSADOR COMMISSION processed:', {
+//         ambassadorName: ambassadorCommissionDetails.ambassadorName,
+//         ambassadorCode: ambassadorCommissionDetails.ambassadorCode,
+//         commissionPercentage: ambassadorCommissionDetails.commissionPercentage,
+//         commissionAmount: ambassadorCommissionDetails.commissionAmount.toFixed(2)
+//       });
+//     }
+    
+//     if (referralRewardDetails) {
+//       console.log('- FIRST ORDER referral rewards processed:', {
+//         referrerType: referralRewardDetails.referrerType,
+//         referrerName: referralRewardDetails.referrerName,
+//         referrerCode: referralRewardDetails.referrerCode,
+//         referrerReward: referralRewardDetails.rewardAmount.toFixed(2),
+//         newUserReward: referralRewardDetails.newUserReward.toFixed(2),
+//         totalPaid: (referralRewardDetails.rewardAmount + referralRewardDetails.newUserReward).toFixed(2)
+//       });
+//     } else {
+//       console.log('- No referral reward processed (not first order or no referrer)');
+//     }
+
+//     return res.status(200).json({
+//       success: true,
+//       message: "Order marked as 'Delivered', payment status updated, and funds distributed.",
+//       data: {
+//         order,
+//         paymentDistribution: {
+//           subtotal: subtotal,
+//           deliveryCharge: deliveryCharge,
+//           totalPayable: totalPayable,
+//           commissionPercentage: `${commissionPercentage}%`,
+//           commissionAppliedOn: "subtotal",
+//           adminCommission: adminCommission,
+//           restaurantAmount: restaurantAmount,
+//           deliveryCharge: deliveryCharge,
+//           distribution: {
+//             admin: `${commissionPercentage}% of subtotal`,
+//             restaurant: `${100 - commissionPercentage}% of subtotal`,
+//             deliveryBoy: "100% of delivery charge"
+//           }
+//         },
+//         ambassadorCommission: ambassadorCommissionDetails,
+//         referralReward: referralRewardDetails,
+//         adminUpdated: admin ? {
+//           walletBalance: admin.walletBalance,
+//           hasWalletBalanceField: admin.walletBalance !== undefined
+//         } : null,
+//         logs: {
+//           userFound: !!user,
+//           hadReferrer: !!(user && user.referredBy),
+//           isAmbassadorReferral: !!(user && user.referredBy && user.referredBy.startsWith("VEGAMB")),
+//           ambassadorCommissionProcessed: !!ambassadorCommissionDetails,
+//           userOrderCount: userOrderCount || 0,
+//           isFirstOrder: !!(referralRewardDetails && referralRewardDetails.isFirstOrder)
+//         }
+//       },
+//     });
+//   } catch (error) {
+//     console.error("❌❌❌ ERROR marking order as delivered:", error);
+//     console.error("Error stack:", error.stack);
+//     return res.status(500).json({
+//       success: false,
+//       message: "Server error.",
+//       error: error.message,
+//     });
+//   }
+// };
+
+
+
+
 exports.markOrderAsDelivered = async (req, res) => {
   try {
     const { deliveryBoyId, orderId, paymentType } = req.body;
@@ -2990,6 +5459,10 @@ exports.markOrderAsDelivered = async (req, res) => {
     console.log('📦 Order ID:', orderId);
     console.log('🚴 Delivery Boy ID:', deliveryBoyId);
     console.log('💰 Payment Type:', paymentType);
+
+    // 🔥 TAX CONSTANTS ADDED - SIRF YAHI CHANGES HAI
+    const GST_RATE = 18; // 18% GST on commission
+    const TDS_RATE = 0.5; // 0.5% TDS on vendor earnings
 
     // Validate the delivery boy
     const deliveryBoy = await DeliveryBoy.findById(deliveryBoyId);
@@ -3068,11 +5541,14 @@ exports.markOrderAsDelivered = async (req, res) => {
       });
     }
     console.log('✅ Restaurant found:', restaurant._id, '-', restaurant.restaurantName);
-
-    // 2. **FIXED: Now always use 20% commission from subtotal**
-    const commissionPercentage = 20; // FIXED 20% commission
     
-    // 3. **CHANGED: Calculate commission from SUBTOTAL, not totalPayable**
+    console.log('🏪 Restaurant commission from DB:', restaurant.commission, '%');
+
+    // 2. **CHANGED: Use commission from restaurant DB, not static**
+    const commissionPercentage = restaurant.commission || 20; // Default to 20% if not set
+    console.log('💰 Commission percentage used:', commissionPercentage, '%');
+    
+    // 3. Calculate from SUBTOTAL
     const subtotal = order.subTotal || order.totalAmount || 0;
     
     // Delivery charge alag se rahega
@@ -3080,8 +5556,12 @@ exports.markOrderAsDelivered = async (req, res) => {
     const totalPayable = order.totalPayable || 0;
     
     // Calculate amounts based on SUBTOTAL
-    const adminCommission = (subtotal * commissionPercentage) / 100;
-    const restaurantAmount = subtotal - adminCommission;
+    let adminCommission = (subtotal * commissionPercentage) / 100;
+    let restaurantAmount = subtotal - adminCommission;
+    
+    // Round to 2 decimal places to avoid 7.89999 issues
+    adminCommission = Math.round(adminCommission * 100) / 100;
+    restaurantAmount = Math.round(restaurantAmount * 100) / 100;
     
     console.log("📊 Payment Distribution Details:", {
       subtotal: subtotal.toFixed(2),
@@ -3106,8 +5586,8 @@ exports.markOrderAsDelivered = async (req, res) => {
       
       const adminBalanceBefore = admin.walletBalance;
       
-      // Now add commission
-      admin.walletBalance = admin.walletBalance + adminCommission;
+      // Now add commission - round to 2 decimal places
+      admin.walletBalance = Math.round((admin.walletBalance + adminCommission) * 100) / 100;
       
       console.log('💰 Admin wallet updated:', {
         before: adminBalanceBefore.toFixed(2),
@@ -3125,7 +5605,7 @@ exports.markOrderAsDelivered = async (req, res) => {
         restaurantName: restaurant.restaurantName,
         subtotal: subtotal,
         commissionPercentage: commissionPercentage,
-        description: `Commission from order #${orderId.toString().substring(0, 8)} (20% of subtotal)`
+        description: `Commission from order #${orderId.toString().substring(0, 8)} (${commissionPercentage}% of subtotal)`
       };
       
       // Initialize if not exists
@@ -3169,9 +5649,10 @@ exports.markOrderAsDelivered = async (req, res) => {
     const totalEarningsBefore = restaurant.totalEarnings;
     const totalCommissionBefore = restaurant.totalCommissionPaid;
     
-    restaurant.walletBalance = restaurant.walletBalance + restaurantAmount;
-    restaurant.totalEarnings = restaurant.totalEarnings + restaurantAmount;
-    restaurant.totalCommissionPaid = restaurant.totalCommissionPaid + adminCommission;
+    // Round to 2 decimal places
+    restaurant.walletBalance = Math.round((restaurant.walletBalance + restaurantAmount) * 100) / 100;
+    restaurant.totalEarnings = Math.round((restaurant.totalEarnings + restaurantAmount) * 100) / 100;
+    restaurant.totalCommissionPaid = Math.round((restaurant.totalCommissionPaid + adminCommission) * 100) / 100;
     
     console.log('🏪 Restaurant wallet updated:', {
       walletBalance: {
@@ -3207,7 +5688,7 @@ exports.markOrderAsDelivered = async (req, res) => {
       commissionDeducted: adminCommission,
       commissionPercentage: commissionPercentage,
       netAmount: restaurantAmount,
-      description: `Payment for order #${orderId.toString().substring(0, 8)} (80% of subtotal)`
+      description: `Payment for order #${orderId.toString().substring(0, 8)} (${100 - commissionPercentage}% of subtotal)`
     };
     
     // Restaurant ke liye JSON string push karo
@@ -3217,32 +5698,168 @@ exports.markOrderAsDelivered = async (req, res) => {
     await restaurant.save();
     console.log('💾 Restaurant saved successfully');
 
-    // 6. Update order with commission details
+    // 6. Update order with commission details - round all values
     order.adminCommission = adminCommission;
     order.restaurantPayout = restaurantAmount;
     order.commissionPercentage = commissionPercentage;
     order.commissionAppliedOn = "subtotal"; // Indicate commission was applied on subtotal
     console.log('📋 Order commission details updated');
 
-    // ========== NEW: REFERRAL REWARD LOGIC ==========
-    console.log('\n🎁 REFERRAL REWARD PROCESSING STARTED');
-    let referralRewardDetails = null;
-
-    // Find the user who placed this order
+    // ========== FIND USER AND CHECK REFERRAL ==========
+    console.log('\n👤 CHECKING USER REFERRAL');
     const user = await User.findById(order.userId);
     
+    let ambassadorCommissionDetails = null;
+    let userOrderCount = 0;
+
     if (user) {
       console.log('👤 Order user found:', user._id, '-', user.name || user.email);
       console.log('🔍 Checking user.referredBy field:', user.referredBy);
       
+      // ========== AMBASSADOR COMMISSION LOGIC ==========
       if (user.referredBy) {
         console.log('🎯 User has a referrer! Referrer CODE:', user.referredBy);
-        console.log('📧 User email:', user.email);
-        console.log('📞 User phone:', user.phone);
         
+        // Check if the referral code starts with "VEGAMB" (Ambassador code)
+        if (user.referredBy.startsWith("VEGAMB")) {
+          console.log('🌟 REFERRAL CODE IS FROM AN AMBASSADOR!');
+          
+          // Find the ambassador by referral code
+          const ambassador = await Ambassador.findOne({ referralCode: user.referredBy });
+          
+          if (ambassador) {
+            console.log('✅ Ambassador found:', ambassador._id, '-', ambassador.fullName);
+            console.log('💰 Ambassador commission percentage:', ambassador.commissionPercentage, '%');
+            
+            // Get ambassador's commission percentage (default to 3% if not set)
+            const ambassadorCommissionPercent = ambassador.commissionPercentage || 3;
+            
+            // Calculate ambassador commission based on subtotal
+            let ambassadorCommission = (subtotal * ambassadorCommissionPercent) / 100;
+            
+            // Round to 2 decimal places
+            ambassadorCommission = Math.round(ambassadorCommission * 100) / 100;
+            
+            console.log('📊 Ambassador commission calculation:', {
+              subtotal: subtotal.toFixed(2),
+              ambassadorCommissionPercent: `${ambassadorCommissionPercent}%`,
+              ambassadorCommission: ambassadorCommission.toFixed(2)
+            });
+            
+            // Update ambassador's wallet
+            if (ambassador.wallet === undefined) {
+              ambassador.wallet = 0;
+              console.log('⚠️ Ambassador wallet was undefined, set to 0');
+            }
+            
+            const ambassadorWalletBefore = ambassador.wallet;
+            ambassador.wallet = Math.round((ambassador.wallet + ambassadorCommission) * 100) / 100;
+            
+            console.log('💰 Ambassador wallet updated:', {
+              before: ambassadorWalletBefore.toFixed(2),
+              added: ambassadorCommission.toFixed(2),
+              after: ambassador.wallet.toFixed(2),
+              ambassadorName: ambassador.fullName
+            });
+            
+            // 🔥 FIX: Initialize transactionHistory as array of objects (NOT JSON strings)
+            if (!ambassador.transactionHistory || !Array.isArray(ambassador.transactionHistory)) {
+              ambassador.transactionHistory = [];
+              console.log('📝 Ambassador transaction history array initialized');
+            }
+            
+            // 🔥 FIX: Add transaction as OBJECT, not JSON string
+            const ambassadorTransaction = {
+              orderId: orderId, // This is an ObjectId, not string
+              userId: user._id, // This is an ObjectId, not string
+              totalPayable: subtotal,
+              commission: ambassadorCommission,
+              date: new Date()
+            };
+            
+            // Push as object, NOT stringified
+            ambassador.transactionHistory.push(ambassadorTransaction);
+            console.log('📋 Ambassador transaction added as object:', ambassadorTransaction);
+            
+            // Save ambassador
+            await ambassador.save();
+            console.log('💾 Ambassador saved with commission');
+            
+            // Deduct commission from admin's wallet
+            if (admin) {
+              const adminBalanceBeforeDeduction = admin.walletBalance;
+              admin.walletBalance = Math.round((admin.walletBalance - ambassadorCommission) * 100) / 100;
+              
+              console.log('👑 Admin wallet deduction for ambassador commission:', {
+                before: adminBalanceBeforeDeduction.toFixed(2),
+                deducted: ambassadorCommission.toFixed(2),
+                after: admin.walletBalance.toFixed(2),
+                ambassadorName: ambassador.fullName
+              });
+              
+              // Add transaction record for deduction
+              const adminDeductionTransaction = {
+                amount: -ambassadorCommission,
+                dateAdded: new Date().toISOString(),
+                type: "ambassador_commission_payout",
+                orderId: orderId.toString(),
+                ambassadorId: ambassador._id.toString(),
+                ambassadorName: ambassador.fullName,
+                ambassadorCode: ambassador.referralCode,
+                commissionPercentage: ambassadorCommissionPercent,
+                description: `Commission paid to Ambassador ${ambassador.fullName} for referred user's order #${orderId.toString().substring(0, 8)}`
+              };
+              
+              admin.walletTransactions.push(JSON.stringify(adminDeductionTransaction));
+              admin.markModified('walletBalance');
+              admin.markModified('walletTransactions');
+              await admin.save();
+              console.log('💾 Admin saved after ambassador commission deduction');
+            }
+            
+            // Store ambassador commission details in order
+            order.ambassadorCommissionPaid = ambassadorCommission;
+            order.ambassadorCommissionPercentage = ambassadorCommissionPercent;
+            order.ambassadorId = ambassador._id;
+            order.ambassadorName = ambassador.fullName;
+            order.ambassadorCode = ambassador.referralCode;
+            
+            ambassadorCommissionDetails = {
+              ambassadorId: ambassador._id,
+              ambassadorName: ambassador.fullName,
+              ambassadorCode: ambassador.referralCode,
+              commissionPercentage: ambassadorCommissionPercent,
+              commissionAmount: ambassadorCommission,
+              deductedFromAdmin: true
+            };
+            
+            console.log(`🎁 AMBASSADOR COMMISSION PROCESSED:`);
+            console.log(`   ₹${ambassadorCommission.toFixed(2)} to Ambassador "${ambassador.fullName}" (${ambassador.referralCode})`);
+          } else {
+            console.log('❌ Ambassador not found with referral code:', user.referredBy);
+          }
+        } else {
+          console.log('ℹ️ Referral code is not from an ambassador:', user.referredBy);
+        }
+      } else {
+        console.log('ℹ️ No referrer found for this user (user.referredBy is null/undefined)');
+      }
+    } else {
+      console.log('❌ User not found for order.userId:', order.userId);
+    }
+
+    // ========== REFERRAL REWARD LOGIC (EXISTING) ==========
+    console.log('\n🎁 REFERRAL REWARD PROCESSING STARTED');
+    let referralRewardDetails = null;
+
+    // Find the user who placed this order (again if needed, but we already have user)
+    const orderUser = user;
+    
+    if (orderUser) {
+      if (orderUser.referredBy) {
         // Check if this is user's first order
-        const userOrderCount = await Order.countDocuments({ userId: user._id });
-        const isFirstOrder = userOrderCount === 1; // Yeh order hi pehla order hai
+        userOrderCount = await Order.countDocuments({ userId: orderUser._id });
+        const isFirstOrder = userOrderCount === 1;
         
         console.log('📊 User order count:', userOrderCount);
         console.log('🌟 Is this first order?', isFirstOrder);
@@ -3264,7 +5881,6 @@ exports.markOrderAsDelivered = async (req, res) => {
               rewardValue: referralRewardSetting.rewardValue
             });
             
-            // Set reward value based on schema
             userRewardValue = referralRewardSetting.rewardValue || 20;
             console.log('💰 Using reward value from schema:', userRewardValue);
           } else {
@@ -3273,8 +5889,9 @@ exports.markOrderAsDelivered = async (req, res) => {
           
           const referralCommissionPercentage = 6; // 6% of admin commission
           
-          // Calculate reward amounts
-          const referralRewardFromCommission = (adminCommission * referralCommissionPercentage) / 100;
+          // Calculate reward amounts - round to 2 decimal places
+          let referralRewardFromCommission = (adminCommission * referralCommissionPercentage) / 100;
+          referralRewardFromCommission = Math.round(referralRewardFromCommission * 100) / 100;
           
           console.log('📐 Referral calculations:', {
             adminCommission: adminCommission.toFixed(2),
@@ -3284,279 +5901,239 @@ exports.markOrderAsDelivered = async (req, res) => {
           });
           
           // Get the referral code from user
-          const referralCode = user.referredBy;
+          const referralCode = orderUser.referredBy;
           
           console.log('🔎 Looking for referrer with CODE:', referralCode);
           
-          // Try to find as Ambassador first (searching by referralCode field)
-          let referrer = await Ambassador.findOne({ referralCode: referralCode });
-          let referrerType = "ambassador";
+          // Try to find as Ambassador first (but we already did that above)
+          let referrer = null;
+          let referrerType = "unknown";
           
-          if (referrer) {
-            console.log('🎖️ Referrer found as AMBASSADOR:', referrer._id);
-            console.log('📛 Ambassador name:', referrer.name);
-            console.log('📞 Ambassador phone:', referrer.phone);
-            console.log('🔑 Ambassador referral code:', referrer.referralCode);
-          } else {
-            console.log('❌ Not found as Ambassador, trying Restaurant...');
-            
-            // If not found as Ambassador, try as Restaurant (searching by referralCode field)
+          // Skip if it's ambassador (already handled)
+          if (!referralCode.startsWith("VEGAMB")) {
+            // If not Ambassador, try as Restaurant
             referrer = await Restaurant.findOne({ referralCode: referralCode });
             referrerType = "restaurant";
             
             if (referrer) {
               console.log('🏪 Referrer found as RESTAURANT:', referrer._id);
-              console.log('🏬 Restaurant name:', referrer.restaurantName);
-              console.log('🔑 Restaurant referral code:', referrer.referralCode);
             } else {
-              console.log('❌ Not found as Restaurant, trying User...');
-              
-              // If still not found, try as User (searching by referralCode field)
+              // If still not found, try as User
               referrer = await User.findOne({ referralCode: referralCode });
               referrerType = "user";
               
               if (referrer) {
                 console.log('👤 Referrer found as USER:', referrer._id);
-                console.log('📛 User name:', referrer.name);
-                console.log('📞 User phone:', referrer.phone);
-                console.log('🔑 User referral code:', referrer.referralCode);
-              } else {
-                console.log('❌ Referrer not found in any collection with referralCode:', referralCode);
-                console.log('ℹ️ Searching in: Ambassador.referralCode, Restaurant.referralCode, User.referralCode');
               }
             }
+          } else {
+            console.log('ℹ️ Ambassador referral already handled separately');
           }
           
           if (referrer) {
             console.log(`✅ Referrer confirmed as ${referrerType.toUpperCase()}:`, referrer._id);
-            console.log(`🔑 Referrer code: ${referrer.referralCode}`);
             
             let rewardAmount = 0;
             let rewardDescription = "";
             
             // Determine reward based on referrer type
-            if (referrerType === "ambassador" || referrerType === "restaurant") {
-              // Ambassador or Restaurant gets 6% of admin commission
+            if (referrerType === "restaurant") {
+              // Restaurant gets 6% of admin commission
               rewardAmount = referralRewardFromCommission;
-              rewardDescription = `6% of admin commission for referring user ${user._id} (${user.name || user.email})`;
-              console.log(`💰 ${referrerType.toUpperCase()} reward: ${rewardAmount.toFixed(2)} (6% of admin commission)`);
+              rewardDescription = `6% of admin commission for referring user ${orderUser._id} (${orderUser.name || orderUser.email})`;
+              console.log(`💰 RESTAURANT reward: ${rewardAmount.toFixed(2)} (6% of admin commission)`);
             } else if (referrerType === "user") {
-              // User gets value from referralRewardSchema (₹50 or whatever is set)
+              // User gets value from referralRewardSchema
               rewardAmount = userRewardValue;
-              rewardDescription = `₹${userRewardValue} reward from referral system for referring user ${user._id} (${user.name || user.email})`;
+              rewardDescription = `₹${userRewardValue} reward from referral system for referring user ${orderUser._id} (${orderUser.name || orderUser.email})`;
               console.log(`💰 USER reward: ${rewardAmount.toFixed(2)} (From referralRewardSchema)`);
             }
             
-            // Update referrer's wallet
-            const referrerWalletBefore = referrer.walletBalance || 0;
-            
-            if (referrer.walletBalance === undefined) {
-              referrer.walletBalance = 0;
-              console.log('⚠️ Referrer wallet balance was undefined, set to 0');
-            }
-            
-            referrer.walletBalance = referrer.walletBalance + rewardAmount;
-            
-            console.log(`💰 Referrer wallet updated (${referrerType}):`, {
-              before: referrerWalletBefore.toFixed(2),
-              added: rewardAmount.toFixed(2),
-              after: referrer.walletBalance.toFixed(2)
-            });
-            
-            // Initialize wallet transactions if not exists
-            if (!referrer.walletTransactions || !Array.isArray(referrer.walletTransactions)) {
-              referrer.walletTransactions = [];
-              console.log('📝 Referrer wallet transactions array initialized');
-            }
-            
-            // Add transaction record
-            const referralTransaction = {
-              amount: rewardAmount,
-              dateAdded: new Date(),
-              type: "referral_reward",
-              orderId: orderId,
-              referredUserId: user._id,
-              referredUserName: user.name || user.email,
-              referredUserCode: user.referralCode || 'No code',
-              orderAmount: subtotal,
-              referralCodeUsed: referralCode,
-              description: rewardDescription,
-              isFirstOrder: true,
-              rewardSource: referrerType === "user" ? "referralRewardSchema" : "6% commission"
-            };
-            
-            // Check the model type to determine how to store the transaction
-            if (referrerType === "user") {
-              // For User model, store as proper object
-              referrer.walletTransactions.push(referralTransaction);
-              console.log('📋 User referral transaction added as object');
-            } else {
-              // For Ambassador/Restaurant, store as JSON string
-              referrer.walletTransactions.push(JSON.stringify(referralTransaction));
-              console.log('📋 Ambassador/Restaurant referral transaction added as JSON string');
-            }
-            
-            // Save the referrer
-            await referrer.save();
-            console.log(`💾 Referrer (${referrerType}) saved successfully`);
-            
-            // **IMPORTANT: GIVE REWARD TO THE NEW USER WHO PLACED THE ORDER**
-            console.log('\n🎁 REWARDING THE NEW USER WHO PLACED THE ORDER');
-            const newUserReward = userRewardValue; // Same amount from referralRewardSchema
-            
-            if (user.walletBalance === undefined) {
-              user.walletBalance = 0;
-              console.log('⚠️ User wallet balance was undefined, set to 0');
-            }
-            
-            const userWalletBefore = user.walletBalance;
-            user.walletBalance = user.walletBalance + newUserReward;
-            
-            console.log('👤 New user wallet updated:', {
-              before: userWalletBefore.toFixed(2),
-              added: newUserReward.toFixed(2),
-              after: user.walletBalance.toFixed(2),
-              userName: user.name || user.email
-            });
-            
-            // Initialize user wallet transactions if not exists
-            if (!user.walletTransactions || !Array.isArray(user.walletTransactions)) {
-              user.walletTransactions = [];
-              console.log('📝 User wallet transactions array initialized');
-            }
-            
-            // Add transaction record for new user
-            const newUserTransaction = {
-              amount: newUserReward,
-              dateAdded: new Date(),
-              type: "referral_signup_bonus",
-              orderId: orderId,
-              description: `Welcome bonus of ₹${newUserReward} for completing first order with referral code ${referralCode}`,
-              isFirstOrder: true,
-              referrerCode: referralCode,
-              referrerType: referrerType
-            };
-            
-            // User ke liye proper object push karo
-            user.walletTransactions.push(newUserTransaction);
-            console.log('📋 New user bonus transaction added');
-            
-            // Save the user
-            await user.save();
-            console.log('💾 New user saved with bonus');
-            
-            // Deduct the reward from admin's wallet
-            if (admin) {
-              // **Deduct BOTH: referrer reward + new user reward**
-              const totalDeduction = rewardAmount + newUserReward;
-              const adminBalanceBeforeDeduction = admin.walletBalance;
-              admin.walletBalance = admin.walletBalance - totalDeduction;
+            if (rewardAmount > 0) {
+              // Update referrer's wallet - round to 2 decimal places
+              const referrerWalletBefore = referrer.walletBalance || 0;
               
-              console.log('👑 Admin wallet deduction for referrals:', {
-                before: adminBalanceBeforeDeduction.toFixed(2),
-                referrerDeduction: rewardAmount.toFixed(2),
-                newUserDeduction: newUserReward.toFixed(2),
-                totalDeduction: totalDeduction.toFixed(2),
-                after: admin.walletBalance.toFixed(2),
-                referrerType: referrerType,
-                referrerId: referrer._id,
-                referrerCode: referrer.referralCode
+              if (referrer.walletBalance === undefined) {
+                referrer.walletBalance = 0;
+                console.log('⚠️ Referrer wallet balance was undefined, set to 0');
+              }
+              
+              referrer.walletBalance = Math.round((referrer.walletBalance + rewardAmount) * 100) / 100;
+              
+              console.log(`💰 Referrer wallet updated (${referrerType}):`, {
+                before: referrerWalletBefore.toFixed(2),
+                added: rewardAmount.toFixed(2),
+                after: referrer.walletBalance.toFixed(2)
               });
               
-              // Add a transaction record for the deduction
-              const adminDeductionTransaction = {
-                amount: -totalDeduction,
-                dateAdded: new Date().toISOString(),
-                type: "referral_payout",
-                orderId: orderId.toString(),
-                referrerId: referrer._id.toString(),
-                referrerType: referrerType,
-                referrerName: referrer.name || referrer.restaurantName || referrer._id,
-                referrerCode: referrer.referralCode,
-                referredUserId: user._id.toString(),
-                referredUserName: user.name || user.email,
+              // Initialize wallet transactions if not exists
+              if (!referrer.walletTransactions || !Array.isArray(referrer.walletTransactions)) {
+                referrer.walletTransactions = [];
+                console.log('📝 Referrer wallet transactions array initialized');
+              }
+              
+              // Add transaction record
+              const referralTransaction = {
+                amount: rewardAmount,
+                dateAdded: new Date(),
+                type: "referral_reward",
+                orderId: orderId,
+                referredUserId: orderUser._id,
+                referredUserName: orderUser.name || orderUser.email,
+                referredUserCode: orderUser.referralCode || 'No code',
+                orderAmount: subtotal,
                 referralCodeUsed: referralCode,
-                referrerReward: rewardAmount,
-                newUserReward: newUserReward,
-                description: `Referral rewards paid: ₹${rewardAmount.toFixed(2)} to ${referrerType} "${referrer.name || referrer.restaurantName || referrer._id}" + ₹${newUserReward.toFixed(2)} to new user "${user.name || user.email}" for first order #${orderId.toString().substring(0, 8)}`
+                description: rewardDescription,
+                isFirstOrder: true,
+                rewardSource: referrerType === "user" ? "referralRewardSchema" : "6% commission"
               };
               
-              admin.walletTransactions.push(JSON.stringify(adminDeductionTransaction));
-              console.log('📋 Admin deduction transaction added');
+              // Check the model type to determine how to store the transaction
+              if (referrerType === "user") {
+                referrer.walletTransactions.push(referralTransaction);
+                console.log('📋 User referral transaction added as object');
+              } else {
+                referrer.walletTransactions.push(JSON.stringify(referralTransaction));
+                console.log('📋 Restaurant referral transaction added as JSON string');
+              }
               
-              admin.markModified('walletBalance');
-              admin.markModified('walletTransactions');
-              await admin.save();
-              console.log('💾 Admin saved after referral deduction');
+              // Save the referrer
+              await referrer.save();
+              console.log(`💾 Referrer (${referrerType}) saved successfully`);
+              
+              // Deduct from admin
+              if (admin) {
+                const adminBalanceBeforeDeduction = admin.walletBalance;
+                admin.walletBalance = Math.round((admin.walletBalance - rewardAmount) * 100) / 100;
+                
+                console.log('👑 Admin wallet deduction for referral:', {
+                  before: adminBalanceBeforeDeduction.toFixed(2),
+                  deducted: rewardAmount.toFixed(2),
+                  after: admin.walletBalance.toFixed(2),
+                  referrerType: referrerType
+                });
+                
+                const adminDeductionTransaction = {
+                  amount: -rewardAmount,
+                  dateAdded: new Date().toISOString(),
+                  type: "referral_payout",
+                  orderId: orderId.toString(),
+                  referrerId: referrer._id.toString(),
+                  referrerType: referrerType,
+                  referrerName: referrer.name || referrer.restaurantName || referrer._id,
+                  referrerCode: referrer.referralCode,
+                  referredUserId: orderUser._id.toString(),
+                  referredUserName: orderUser.name || orderUser.email,
+                  referralCodeUsed: referralCode,
+                  description: `Referral reward of ₹${rewardAmount.toFixed(2)} to ${referrerType} for referring user`
+                };
+                
+                admin.walletTransactions.push(JSON.stringify(adminDeductionTransaction));
+                admin.markModified('walletBalance');
+                admin.markModified('walletTransactions');
+                await admin.save();
+                console.log('💾 Admin saved after referral deduction');
+              }
             }
+          }
+          
+          // **IMPORTANT: GIVE REWARD TO THE NEW USER WHO PLACED THE ORDER**
+          console.log('\n🎁 REWARDING THE NEW USER WHO PLACED THE ORDER');
+          const newUserReward = userRewardValue;
+          
+          if (orderUser.walletBalance === undefined) {
+            orderUser.walletBalance = 0;
+            console.log('⚠️ User wallet balance was undefined, set to 0');
+          }
+          
+          const userWalletBefore = orderUser.walletBalance;
+          orderUser.walletBalance = Math.round((orderUser.walletBalance + newUserReward) * 100) / 100;
+          
+          console.log('👤 New user wallet updated:', {
+            before: userWalletBefore.toFixed(2),
+            added: newUserReward.toFixed(2),
+            after: orderUser.walletBalance.toFixed(2),
+            userName: orderUser.name || orderUser.email
+          });
+          
+          // Initialize user wallet transactions if not exists
+          if (!orderUser.walletTransactions || !Array.isArray(orderUser.walletTransactions)) {
+            orderUser.walletTransactions = [];
+            console.log('📝 User wallet transactions array initialized');
+          }
+          
+          // Add transaction record for new user
+          const newUserTransaction = {
+            amount: newUserReward,
+            dateAdded: new Date(),
+            type: "referral_signup_bonus",
+            orderId: orderId,
+            description: `Welcome bonus of ₹${newUserReward} for completing first order with referral code ${orderUser.referredBy}`,
+            isFirstOrder: true,
+            referrerCode: orderUser.referredBy
+          };
+          
+          orderUser.walletTransactions.push(newUserTransaction);
+          console.log('📋 New user bonus transaction added');
+          
+          // Save the user
+          await orderUser.save();
+          console.log('💾 New user saved with bonus');
+          
+          // Deduct the new user reward from admin
+          if (admin) {
+            const adminBalanceBeforeDeduction = admin.walletBalance;
+            admin.walletBalance = Math.round((admin.walletBalance - newUserReward) * 100) / 100;
             
-            // Update order with referral info
-            order.referredBy = referralCode; // Store the referral code
-            order.referredById = referrer._id; // Store the actual referrer ID
-            order.referrerType = referrerType;
-            order.referralRewardPaid = rewardAmount;
-            order.newUserRewardPaid = newUserReward;
-            order.referredUserName = user.name || user.email;
-            order.referrerName = referrer.name || referrer.restaurantName || referrer._id;
-            order.referrerCode = referrer.referralCode; // Store the referrer's code
-            order.isFirstOrder = true; // Mark as first order
-            
-            console.log('📋 Order updated with referral info:', {
-              referredByCode: referralCode,
-              referredById: referrer._id,
-              referrerType: referrerType,
-              referrerRewardPaid: rewardAmount.toFixed(2),
-              newUserRewardPaid: newUserReward.toFixed(2),
-              referredUserName: user.name || user.email,
-              referrerName: referrer.name || referrer.restaurantName || referrer._id,
-              referrerCode: referrer.referralCode,
-              isFirstOrder: true
+            console.log('👑 Admin wallet deduction for new user bonus:', {
+              before: adminBalanceBeforeDeduction.toFixed(2),
+              deducted: newUserReward.toFixed(2),
+              after: admin.walletBalance.toFixed(2)
             });
             
-            // Prepare response details
-            referralRewardDetails = {
-              referrerType: referrerType,
-              referrerId: referrer._id,
-              referrerCode: referrer.referralCode,
-              referrerName: referrer.name || referrer.restaurantName || referrer._id,
-              rewardAmount: rewardAmount,
-              newUserReward: newUserReward,
-              rewardSource: referrerType === "user" ? "referralRewardSchema" : "6% of admin commission",
-              deductedFromAdmin: true,
-              adminWalletAfterDeduction: admin ? admin.walletBalance : null,
-              referredUserId: user._id,
-              referredUserName: user.name || user.email,
-              referralCodeUsed: referralCode,
-              isFirstOrder: true,
-              userOrderCount: userOrderCount
+            const adminDeductionTransaction = {
+              amount: -newUserReward,
+              dateAdded: new Date().toISOString(),
+              type: "new_user_bonus",
+              orderId: orderId.toString(),
+              userId: orderUser._id.toString(),
+              userName: orderUser.name || orderUser.email,
+              referralCodeUsed: orderUser.referredBy,
+              description: `Welcome bonus of ₹${newUserReward} to new user for first order`
             };
             
-            console.log(`🎁 FIRST ORDER referral rewards PROCESSED:`);
-            console.log(`   ₹${rewardAmount.toFixed(2)} to ${referrerType} "${referrer.name || referrer.restaurantName || referrer._id}" (code: ${referrer.referralCode})`);
-            console.log(`   ₹${newUserReward.toFixed(2)} to new user "${user.name || user.email}"`);
-          } else {
-            console.log('⚠️ Referrer code found in user.referredBy but no matching referrer found in database');
-            console.log('📝 Store this info in order for manual investigation');
-            
-            // Even if referrer not found, store the code in order for investigation
-            order.referredBy = referralCode;
-            order.referrerType = "unknown";
-            order.referralRewardPaid = 0;
-            order.referredUserName = user.name || user.email;
-            order.referralError = "Referrer code found but referrer not in database";
-            order.isFirstOrder = true;
-            
-            console.log('📋 Order updated with referral error info');
+            admin.walletTransactions.push(JSON.stringify(adminDeductionTransaction));
+            admin.markModified('walletBalance');
+            admin.markModified('walletTransactions');
+            await admin.save();
+            console.log('💾 Admin saved after new user bonus deduction');
           }
-        } else {
-          console.log('ℹ️ Not user\'s first order. Skipping referral rewards.');
-          console.log('ℹ️ Only first orders qualify for referral rewards.');
+          
+          // Update order with referral info
+          order.referredBy = orderUser.referredBy;
+          order.referrerType = ambassadorCommissionDetails ? "ambassador" : (referrer ? referrerType : "unknown");
+          order.referralRewardPaid = referrer ? rewardAmount : 0;
+          order.newUserRewardPaid = newUserReward;
+          order.referredUserName = orderUser.name || orderUser.email;
+          order.isFirstOrder = true;
+          
+          referralRewardDetails = {
+            referrerType: ambassadorCommissionDetails ? "ambassador" : (referrer ? referrerType : "none"),
+            referrerId: ambassadorCommissionDetails?.ambassadorId || referrer?._id,
+            referrerCode: ambassadorCommissionDetails?.ambassadorCode || referrer?.referralCode,
+            referrerName: ambassadorCommissionDetails?.ambassadorName || referrer?.name || referrer?.restaurantName,
+            rewardAmount: ambassadorCommissionDetails?.commissionAmount || (referrer ? rewardAmount : 0),
+            newUserReward: newUserReward,
+            rewardSource: ambassadorCommissionDetails ? "ambassador_commission" : (referrerType === "user" ? "referralRewardSchema" : "6% commission"),
+            deductedFromAdmin: true,
+            referredUserId: orderUser._id,
+            referredUserName: orderUser.name || orderUser.email,
+            referralCodeUsed: orderUser.referredBy,
+            isFirstOrder: true,
+            userOrderCount: userOrderCount
+          };
         }
-      } else {
-        console.log('ℹ️ No referrer found for this user (user.referredBy is null/undefined)');
       }
-    } else {
-      console.log('❌ User not found for order.userId:', order.userId);
     }
 
     // ========== UPDATE DELIVERY BOY WALLET ==========
@@ -3564,8 +6141,8 @@ exports.markOrderAsDelivered = async (req, res) => {
     
     const deliveryBoyBalanceBefore = deliveryBoy.walletBalance || 0;
     
-    // Update the delivery boy's wallet
-    deliveryBoy.walletBalance = (deliveryBoy.walletBalance || 0) + deliveryCharge;
+    // Update the delivery boy's wallet - round to 2 decimal places
+    deliveryBoy.walletBalance = Math.round(((deliveryBoy.walletBalance || 0) + deliveryCharge) * 100) / 100;
     
     console.log('💰 Delivery boy wallet updated:', {
       before: deliveryBoyBalanceBefore.toFixed(2),
@@ -3593,7 +6170,7 @@ exports.markOrderAsDelivered = async (req, res) => {
     deliveryBoy.walletTransactions.push(deliveryTransaction);
     console.log('📋 Delivery boy transaction added:', deliveryTransaction.description);
 
-    // **Update the delivery boy's currentOrderStatus to 'Delivered'**
+    // Update the delivery boy's currentOrderStatus to 'Delivered'
     deliveryBoy.currentOrderStatus = "Delivered";
 
     // Set the delivery boy's currentOrder to false (mark as available again)
@@ -3616,6 +6193,17 @@ exports.markOrderAsDelivered = async (req, res) => {
     console.log('📊 FINAL SUMMARY:');
     console.log('- Order marked as Delivered');
     console.log('- Payment distributed: Admin, Restaurant, Delivery Boy');
+    console.log(`- Commission used: ${commissionPercentage}% from restaurant's DB`);
+    
+    if (ambassadorCommissionDetails) {
+      console.log('- AMBASSADOR COMMISSION processed:', {
+        ambassadorName: ambassadorCommissionDetails.ambassadorName,
+        ambassadorCode: ambassadorCommissionDetails.ambassadorCode,
+        commissionPercentage: ambassadorCommissionDetails.commissionPercentage,
+        commissionAmount: ambassadorCommissionDetails.commissionAmount.toFixed(2)
+      });
+    }
+    
     if (referralRewardDetails) {
       console.log('- FIRST ORDER referral rewards processed:', {
         referrerType: referralRewardDetails.referrerType,
@@ -3639,6 +6227,7 @@ exports.markOrderAsDelivered = async (req, res) => {
           deliveryCharge: deliveryCharge,
           totalPayable: totalPayable,
           commissionPercentage: `${commissionPercentage}%`,
+          commissionSource: "restaurant_database",
           commissionAppliedOn: "subtotal",
           adminCommission: adminCommission,
           restaurantAmount: restaurantAmount,
@@ -3649,6 +6238,7 @@ exports.markOrderAsDelivered = async (req, res) => {
             deliveryBoy: "100% of delivery charge"
           }
         },
+        ambassadorCommission: ambassadorCommissionDetails,
         referralReward: referralRewardDetails,
         adminUpdated: admin ? {
           walletBalance: admin.walletBalance,
@@ -3657,12 +6247,11 @@ exports.markOrderAsDelivered = async (req, res) => {
         logs: {
           userFound: !!user,
           hadReferrer: !!(user && user.referredBy),
+          isAmbassadorReferral: !!(user && user.referredBy && user.referredBy.startsWith("VEGAMB")),
+          ambassadorCommissionProcessed: !!ambassadorCommissionDetails,
           userOrderCount: userOrderCount || 0,
           isFirstOrder: !!(referralRewardDetails && referralRewardDetails.isFirstOrder),
-          referrerType: referralRewardDetails?.referrerType || 'none',
-          referrerCode: referralRewardDetails?.referrerCode || 'none',
-          referrerReward: referralRewardDetails?.rewardAmount || 0,
-          newUserReward: referralRewardDetails?.newUserReward || 0
+          commissionUsed: `${commissionPercentage}% (from restaurant)`
         }
       },
     });
@@ -3679,7 +6268,7 @@ exports.markOrderAsDelivered = async (req, res) => {
 // Controller to generate UPI QR code
 exports.generateUPIQRCode = async (req, res) => {
    try {
-    const upiId = "juleeperween@ybl"; // Hardcoded UPI ID
+    const upiId = "9292103965-xad8-4@ybl"; // Hardcoded UPI ID
 
     // Generate UPI URL for QR code
     const upiUrl = `upi://pay?pa=${upiId}&pn=Receiver&tn=Payment&cu=INR`;

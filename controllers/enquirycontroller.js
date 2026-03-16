@@ -1,5 +1,6 @@
 // controllers/enquiryController.js
 const Enquiry = require("../models/enquiry");
+const SubAdmin = require("../models/SubAdmin");
 
 // 📌 Create a new enquiry
 exports.createEnquiry = async (req, res) => {
@@ -60,20 +61,41 @@ exports.getEnquiryById = async (req, res) => {
 // 📌 Update enquiry
 exports.updateEnquiry = async (req, res) => {
   try {
-    const enquiry = await Enquiry.findByIdAndUpdate(req.params.id, req.body, {
-      new: true,
-      runValidators: true,
-    });
+    const { subAdminId } = req.body;  // Extract subAdminId from request body
+
+    // Find the enquiry by id and update with the provided data
+    const enquiry = await Enquiry.findById(req.params.id);
     if (!enquiry) {
       return res.status(404).json({
         success: false,
         message: "Enquiry not found",
       });
     }
+
+    // Set note based on who is updating the enquiry
+    let note = `Enquiry updated by Admin`; // Default note if no sub-admin is provided
+    if (subAdminId) {
+      const subAdmin = await SubAdmin.findById(subAdminId);
+      if (subAdmin) {
+        note = `Enquiry updated by Sub-admin: ${subAdmin.name}`;
+      } else {
+        return res.status(404).json({ success: false, message: "Sub-admin not found" });
+      }
+    }
+
+    // Add note to the update data
+    const updateData = { ...req.body, note };
+
+    // Update the enquiry with the new data
+    const updatedEnquiry = await Enquiry.findByIdAndUpdate(req.params.id, updateData, {
+      new: true,
+      runValidators: true,
+    });
+
     res.status(200).json({
       success: true,
       message: "Enquiry updated successfully",
-      data: enquiry,
+      data: updatedEnquiry,
     });
   } catch (error) {
     res.status(400).json({

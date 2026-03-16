@@ -16,6 +16,13 @@ const vendorPlanSchema = new mongoose.Schema({
   benefits: [{
     type: String,
   }],
+
+      note: { type: String },
+    updatedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "SubAdmin",
+      default: null,
+    },
   status: {
     type: String,
     enum: ['active', 'inactive'],

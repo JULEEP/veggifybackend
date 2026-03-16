@@ -22,6 +22,9 @@ const ambassadorSchema = new mongoose.Schema({
   resetOTP: {
     type: String,
   },
+   dateOfBirth: {
+    type: String,
+  },
   resetOTPExpires: {
     type: Date,
   },
@@ -74,7 +77,7 @@ const ambassadorSchema = new mongoose.Schema({
   },
   kycStatus: {
     type: String,
-    enum: ['pending', 'verified', 'rejected', 'under_review'],
+    enum: ['pending', 'verified', 'rejected', 'under_review', 'pending_upload'],
     default: 'pending'
   },
   kycSubmittedAt: {
@@ -89,6 +92,14 @@ const ambassadorSchema = new mongoose.Schema({
     type: String,
     default: ""
   },
+
+
+  note: { type: String },
+updatedBy: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: "SubAdmin",
+  default: null,
+},
 
   purchasedPlans: [{
     planId: {

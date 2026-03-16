@@ -40,14 +40,27 @@ const staffSchema = new mongoose.Schema({
     type: String,
     default: 'pending', // Default status for staff
   },
-    mySalary: [
-    {
-      amount: Number,
-      month: String,
-      status: String,
-      date: { type: Date, default: Date.now } // Default to current date
-    }
-  ],
+   mySalary: [
+  {
+    amount: Number,
+    month: String,
+    status: String,
+    date: Date,
+    note: String,
+    addedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "SubAdmin",
+      default: null,
+    },
+  },
+],
+
+  note: { type: String },
+createdBy: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: "SubAdmin",
+  default: null
+},
 }, { timestamps: true }); // Include createdAt & updatedAt automatically
 
 // Create Staff model

@@ -23,6 +23,12 @@ const enquirySchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+          note: { type: String },
+        updatedBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "SubAdmin",
+          default: null,
+        },
   },
   {
     timestamps: true, // adds createdAt and updatedAt

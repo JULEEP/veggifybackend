@@ -6,6 +6,7 @@ const fs = require("fs");
 const mongoose = require("mongoose");
 const streamifier = require("streamifier");
 
+
 // Cloudinary helper
 function uploadBufferToCloudinary(buffer, folder = "") {
   return new Promise((resolve, reject) => {
@@ -229,21 +230,29 @@ exports.getRecommendedByRestaurantId = async (req, res) => {
     const restaurantStatus = restaurant.status || "unknown";
     const restaurantImage = restaurant.image?.url || "";
 
+    // ✅ NEW FIELDS
+    const disclaimers = restaurant.disclaimers || [];
+    const fssaiNo = restaurant.fssaiNo || "";
+
     // Calculate totalRatings and totalReviews
     let totalRatings = 0;
     let totalReviews = 0;
+
     if (Array.isArray(restaurant.reviews) && restaurant.reviews.length > 0) {
       totalReviews = restaurant.reviews.length;
+
       const ratingSum = restaurant.reviews.reduce((sum, r) => sum + (r.stars || 0), 0);
       totalRatings = parseFloat((ratingSum / totalReviews).toFixed(2));
 
       const userIds = restaurant.reviews.map(r => r.userId);
+
       const users = await User.find({ _id: { $in: userIds } })
         .select("firstName lastName profileImg")
         .lean();
 
       restaurant.reviews = restaurant.reviews.map(r => {
         const user = users.find(u => u._id.toString() === r.userId.toString());
+
         return {
           _id: r._id,
           stars: r.stars,
@@ -268,17 +277,20 @@ exports.getRecommendedByRestaurantId = async (req, res) => {
 
     products.forEach(product => {
       if (Array.isArray(product.recommended) && product.recommended.length > 0) {
+
         product.recommended.forEach(item => {
+
           const imageUrl = item.image || product.image || "";
 
           recommendedList.push({
             productId: product._id,
             restaurantName: product.restaurantName,
-            restaurantImage,  // ✅ Include restaurant image
+            restaurantImage,
             locationName: product.locationName,
             type: product.type,
             rating: product.rating,
             viewCount: product.viewCount,
+
             recommendedItem: {
               _id: item._id,
               name: item.name || "",
@@ -292,24 +304,28 @@ exports.getRecommendedByRestaurantId = async (req, res) => {
               category: item.category || null,
               status: item.status,
               preparationTime: item.preparationTime || "",
-              reviews: Array.isArray(item.reviews) ? item.reviews.map(r => ({
-                _id: r._id,
-                stars: r.stars,
-                comment: r.comment,
-                createdAt: r.createdAt,
-                firstName: r.user?.firstName || null,
-                lastName: r.user?.lastName || null,
-                profileImg: r.user?.profileImg || null
-              })) : []
+              reviews: Array.isArray(item.reviews)
+                ? item.reviews.map(r => ({
+                    _id: r._id,
+                    stars: r.stars,
+                    comment: r.comment,
+                    createdAt: r.createdAt,
+                    firstName: r.user?.firstName || null,
+                    lastName: r.user?.lastName || null,
+                    profileImg: r.user?.profileImg || null
+                  }))
+                : []
             }
           });
+
         });
       }
     });
 
-    // Apply filters
+    // Filters
     if (categoryName) {
       const regex = new RegExp(categoryName.trim(), "i");
+
       recommendedList = recommendedList.filter(item =>
         item.recommendedItem.category?.categoryName &&
         regex.test(item.recommendedItem.category.categoryName)
@@ -318,6 +334,7 @@ exports.getRecommendedByRestaurantId = async (req, res) => {
 
     if (name) {
       const regex = new RegExp(name.trim(), "i");
+
       recommendedList = recommendedList.filter(item =>
         item.recommendedItem.name && regex.test(item.recommendedItem.name)
       );
@@ -333,8 +350,14 @@ exports.getRecommendedByRestaurantId = async (req, res) => {
     return res.status(200).json({
       success: true,
       totalRecommendedItems: recommendedList.length,
-      restaurantStatus,  // <-- TOP LEVEL after totalRecommendedItems
-      restaurantImage,   // ✅ Include restaurant image top-level
+      restaurantStatus,
+      restaurantImage,
+
+      // ✅ NEW FIELDS
+      disclaimers,
+      fssaiNo,
+      fullAddress: restaurant.fullAddress || "", // ✅ Added fullAddress
+
       recommendedProducts: recommendedList,
       restaurantReviews: restaurant.reviews || [],
       totalRatings,
@@ -342,15 +365,17 @@ exports.getRecommendedByRestaurantId = async (req, res) => {
     });
 
   } catch (error) {
+
     console.error("Get Recommended Products Error:", error);
+
     return res.status(500).json({
       success: false,
       message: "Server Error",
       error: error.message
     });
+
   }
 };
-
 
 
 

@@ -58,6 +58,13 @@ const deliveryBoySchema = new mongoose.Schema({
     type: { type: String, },  // Type of transaction (e.g., 'delivery')
     orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order' },  // Reference to the order
   }],
+
+  note: { type: String },
+updatedBy: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: "SubAdmin",
+  default: null,
+},
   myAccountDetails: [  // This should be at the root level
     {
       accountNumber: { type: String, },

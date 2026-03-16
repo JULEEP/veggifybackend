@@ -110,7 +110,6 @@ exports.updateCategory = async (req, res) => {
   try {
     const categoryId = req.params.id;
     const { categoryName, status, subAdminId } = req.body;
-    const file = req.files?.image;
 
     const category = await Category.findById(categoryId);
     if (!category) {
@@ -120,37 +119,51 @@ exports.updateCategory = async (req, res) => {
       });
     }
 
-    /* =========================
-       UPDATE FIELDS (SIMPLE)
-    ========================= */
+    /* ======================
+       UPDATE CATEGORY DATA
+    ====================== */
+
     if (categoryName) category.categoryName = categoryName;
     if (status) category.status = status;
+
+    const file = req.files?.image;
 
     if (file) {
       const uploaded = await cloudinary.uploader.upload(file.tempFilePath, {
         folder: "categories"
       });
+
       category.imageUrl = uploaded.secure_url;
     }
 
+    /* ======================
+       UPDATE SUBCATEGORIES
+    ====================== */
+
     if (req.body.subcategories) {
       const subcategories = JSON.parse(req.body.subcategories || "[]");
+
       const updatedSubcategories = [];
 
       for (let i = 0; i < subcategories.length; i++) {
+        const sub = subcategories[i];
+
+        let subImageUrl = sub.subcategoryImageUrl || null;
+
         const subImage = req.files?.[`subcategoryImage_${i}`];
-        let subImageUrl = subcategories[i].subcategoryImageUrl || null;
 
         if (subImage) {
           const uploadedSub = await cloudinary.uploader.upload(
             subImage.tempFilePath,
             { folder: "subcategories" }
           );
+
           subImageUrl = uploadedSub.secure_url;
         }
 
         updatedSubcategories.push({
-          subcategoryName: subcategories[i].subcategoryName,
+          _id: sub._id || new mongoose.Types.ObjectId(), // existing or new
+          subcategoryName: sub.subcategoryName,
           subcategoryImageUrl: subImageUrl
         });
       }
@@ -158,13 +171,18 @@ exports.updateCategory = async (req, res) => {
       category.subcategories = updatedSubcategories;
     }
 
-    /* =========================
-       NOTE: WHO UPDATED ONLY 🔥
-    ========================= */
+    /* ======================
+       NOTE TRACKING
+    ====================== */
+
     if (subAdminId) {
       const subAdmin = await SubAdmin.findById(subAdminId);
+
       if (!subAdmin) {
-        return res.status(404).json({ message: "Sub-admin not found" });
+        return res.status(404).json({
+          success: false,
+          message: "Sub-admin not found"
+        });
       }
 
       category.note = `Updated by Sub-admin: ${subAdmin.name}`;
@@ -174,15 +192,16 @@ exports.updateCategory = async (req, res) => {
 
     await category.save();
 
-    return res.status(200).json({
+    res.status(200).json({
       success: true,
       message: "Category updated successfully ✅",
       data: category
     });
 
   } catch (err) {
-    console.error("Error updating category:", err);
-    return res.status(500).json({
+    console.error("Update category error:", err);
+
+    res.status(500).json({
       success: false,
       message: err.message
     });
@@ -194,22 +213,71 @@ exports.deleteCategory = async (req, res) => {
   try {
     const categoryId = req.params.id;
 
-    // Find and delete category in one step
-    const category = await Category.findByIdAndDelete(categoryId);
+    // body safe handling
+    const subcategoryId = req.body ? req.body.subcategoryId : null;
+
+    const category = await Category.findById(categoryId);
 
     if (!category) {
-      return res.status(404).json({ success: false, message: "Category not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Category not found"
+      });
     }
 
-    // If you have stored cloudinary public_id, delete image from cloudinary here
-    // await cloudinary.uploader.destroy(category.cloudinary_public_id);
+    /* =====================
+       DELETE SUBCATEGORY
+    ===================== */
 
-    res.status(200).json({ success: true, message: "Category deleted successfully" });
+    if (subcategoryId) {
+
+      const subcategoryExists = category.subcategories.some(
+        sub => sub._id.toString() === subcategoryId
+      );
+
+      if (!subcategoryExists) {
+        return res.status(404).json({
+          success: false,
+          message: "Subcategory not found"
+        });
+      }
+
+      category.subcategories = category.subcategories.filter(
+        sub => sub._id.toString() !== subcategoryId
+      );
+
+      await category.save();
+
+      return res.status(200).json({
+        success: true,
+        message: "Subcategory deleted successfully",
+        data: category
+      });
+    }
+
+    /* =====================
+       DELETE FULL CATEGORY
+    ===================== */
+
+    await Category.findByIdAndDelete(categoryId);
+
+    return res.status(200).json({
+      success: true,
+      message: "Category deleted successfully"
+    });
+
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+
+    console.error("Delete category error:", err);
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err.message
+    });
+
   }
 };
-
 exports.getAllCategories = async (req, res) => {
   try {
     const categories = await Category.find();
@@ -319,213 +387,211 @@ exports.deleteVegFood = async (req, res) => {
 
 // ✅ ADDED DISCOUNT FIELD
 // File size limits (in bytes)
-const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB per file
-const MAX_TOTAL_SIZE = 15 * 1024 * 1024; // 15MB total
+const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+const MAX_TOTAL_SIZE = 15 * 1024 * 1024; // 15MB
 
+// Create Restaurant Controller with FSSAI No, Disclaimers, and Full Address fields
 exports.createRestaurant = async (req, res) => {
   try {
     const {
       restaurantName,
       description,
       locationName,
+      fullAddress, // 👈 NEW FIELD ADDED
       email,
       mobile,
       gstNumber,
+      fssaiNo,
       referralCode,
       password,
       lat,
       lng,
       commission,
-      discount
-    } = req.body;
+      discount,
+      disclaimers // Will come as JSON string
+    } = req.body || {};
 
-    // BASIC REQUIRED VALIDATIONS
-    if (!restaurantName) return sendError(res, "Restaurant name is required");
-    if (!locationName) return sendError(res, "Location name is required");
-    if (!email) return sendError(res, "Email is required");
-    if (!mobile) return sendError(res, "Mobile number is required");
-    if (!password) return sendError(res, "Password is required");
-    if (!lat || !lng) return sendError(res, "Location coordinates are required");
-    if (!commission) return sendError(res, "Commission percentage is required");
-    
-    // Commission validation
-    if (isNaN(commission) || parseFloat(commission) < 0 || parseFloat(commission) > 50) {
-      return sendError(res, "Commission must be a valid percentage between 0 and 50");
-    }
-    
-    // Discount validation
-    if (discount && (isNaN(discount) || parseFloat(discount) < 0 || parseFloat(discount) > 100)) {
-      return sendError(res, "Discount must be a valid percentage between 0 and 100");
-    }
+    /* ---------------- OPTIONAL VALIDATIONS ---------------- */
 
-    // CHECK REQUIRED FILES
-    if (!req.files?.image) return sendError(res, "Restaurant image is required");
-    if (!req.files?.fssaiLicense) return sendError(res, "FSSAI license is required");
-    if (!req.files?.panCard) return sendError(res, "PAN card is required");
-    if (!req.files?.aadharCardFront) return sendError(res, "Aadhar Card Front is required");
-
-    // FILE SIZE VALIDATION
-    let totalSize = 0;
-    for (const [key, file] of Object.entries(req.files)) {
-      if (file.size > MAX_FILE_SIZE) {
-        return sendError(res, `${key} size exceeds 5MB limit`);
+    if (commission !== undefined) {
+      if (isNaN(commission) || commission < 0 || commission > 50) {
+        return sendError(res, "Commission must be between 0 and 50");
       }
-      totalSize += file.size;
-    }
-    
-    if (totalSize > MAX_TOTAL_SIZE) {
-      return sendError(res, "Total files size exceeds 15MB limit. Please compress your files.");
     }
 
-    // COMPRESS AND UPLOAD FUNCTION
-    const uploadAndCompressFile = async (file, folder, quality = 80) => {
+    if (discount !== undefined) {
+      if (isNaN(discount) || discount < 0 || discount > 100) {
+        return sendError(res, "Discount must be between 0 and 100");
+      }
+    }
+
+    // Validate FSSAI No if provided
+    if (fssaiNo && fssaiNo.trim() !== "") {
+      const fssaiRegex = /^\d{14}$/;
+      if (!fssaiRegex.test(fssaiNo.replace(/\s/g, ''))) {
+        return sendError(res, "Please enter a valid 14-digit FSSAI license number");
+      }
+    }
+
+    // Validate full address if provided
+    if (fullAddress && fullAddress.trim() === "") {
+      return sendError(res, "Full address cannot be empty");
+    }
+
+    // Parse disclaimers if it's a string
+    let parsedDisclaimers = [];
+    if (disclaimers) {
       try {
-        // Compress image before upload (only for images)
-        const isImage = file.mimetype.startsWith('image/');
-        
-        // For images, compress them
-        const uploadOptions = {
-          folder,
-          resource_type: 'auto',
-          transformation: isImage ? [
-            { quality: 'auto:good', fetch_format: 'auto' }
-          ] : []
-        };
+        parsedDisclaimers = typeof disclaimers === 'string' ? JSON.parse(disclaimers) : disclaimers;
+      } catch (e) {
+        // If parsing fails, treat as single disclaimer string
+        parsedDisclaimers = [disclaimers];
+      }
+    }
 
-        const result = await cloudinary.uploader.upload(file.tempFilePath, uploadOptions);
-        
-        // Delete temp file
-        try {
-          fs.unlinkSync(file.tempFilePath);
-        } catch (err) {
-          console.log(`Could not delete temp file: ${file.tempFilePath}`);
+    /* ---------------- FILE SIZE VALIDATION ---------------- */
+    let totalSize = 0;
+
+    if (req.files) {
+      for (const [key, file] of Object.entries(req.files)) {
+        if (!file) continue;
+
+        if (file.size > MAX_FILE_SIZE) {
+          return sendError(res, `${key} exceeds 5MB limit`);
         }
 
-        return {
-          public_id: result.public_id,
-          url: result.secure_url,
-          format: result.format,
-          size: result.bytes
-        };
-      } catch (uploadErr) {
-        console.error(`Upload error for ${file.name}:`, uploadErr);
-        throw new Error(`Failed to upload ${file.name}`);
+        totalSize += file.size;
       }
-    };
 
-    // Upload all files in parallel for better performance
-    const uploadPromises = {
-      image: uploadAndCompressFile(req.files.image, "restaurants/images", 85),
-      fssaiLicense: uploadAndCompressFile(req.files.fssaiLicense, "restaurants/documents"),
-      panCard: uploadAndCompressFile(req.files.panCard, "restaurants/documents"),
-      aadharCardFront: uploadAndCompressFile(req.files.aadharCardFront, "restaurants/documents/aadhar")
-    };
-
-    // Add optional files if present
-    if (req.files.gstCertificate) {
-      uploadPromises.gstCertificate = uploadAndCompressFile(req.files.gstCertificate, "restaurants/documents/gst");
-    }
-    
-    if (req.files.aadharCardBack) {
-      uploadPromises.aadharCardBack = uploadAndCompressFile(req.files.aadharCardBack, "restaurants/documents/aadhar");
+      if (totalSize > MAX_TOTAL_SIZE) {
+        return sendError(res, "Total file size exceeds 15MB");
+      }
     }
 
-    // Execute all uploads
-    const uploadedFiles = await Promise.all(Object.values(uploadPromises))
-      .then(results => {
-        const keys = Object.keys(uploadPromises);
-        const obj = {};
-        keys.forEach((key, index) => {
-          obj[key] = results[index];
-        });
-        return obj;
+    /* ---------------- UPLOAD FUNCTION ---------------- */
+    const uploadAndCompressFile = async (file, folder) => {
+      if (!file) return null;
+
+      const isImage = file.mimetype?.startsWith("image/");
+
+      const result = await cloudinary.uploader.upload(file.tempFilePath, {
+        folder,
+        resource_type: "auto",
+        transformation: isImage
+          ? [{ quality: "auto:good", fetch_format: "auto" }]
+          : []
       });
 
-    // Check if restaurant with same email or mobile already exists
-    const existingRestaurant = await Restaurant.findOne({
-      $or: [{ email }, { mobile }]
-    });
+      try {
+        fs.unlinkSync(file.tempFilePath);
+      } catch {}
 
-    if (existingRestaurant) {
-      return sendError(res, "Restaurant with this email or mobile already exists");
+      return {
+        public_id: result.public_id,
+        url: result.secure_url,
+        format: result.format,
+        size: result.bytes
+      };
+    };
+
+    /* ---------------- FILE UPLOADS ---------------- */
+    const uploadedFiles = {};
+
+    if (req.files?.image) {
+      uploadedFiles.image = await uploadAndCompressFile(
+        req.files.image,
+        "restaurants/images"
+      );
     }
 
-    // Generate Referral Code
-    const count = await Restaurant.countDocuments();
-    const generatedReferralCode = `VEGVEN${String(count + 1).padStart(5, '0')}`;
+    if (req.files?.fssaiLicense) {
+      uploadedFiles.fssaiLicense = await uploadAndCompressFile(
+        req.files.fssaiLicense,
+        "restaurants/documents"
+      );
+    }
 
-    // CREATE RESTAURANT
+    if (req.files?.panCard) {
+      uploadedFiles.panCard = await uploadAndCompressFile(
+        req.files.panCard,
+        "restaurants/documents"
+      );
+    }
+
+    if (req.files?.aadharCardFront) {
+      uploadedFiles.aadharCardFront = await uploadAndCompressFile(
+        req.files.aadharCardFront,
+        "restaurants/documents/aadhar"
+      );
+    }
+
+    if (req.files?.aadharCardBack) {
+      uploadedFiles.aadharCardBack = await uploadAndCompressFile(
+        req.files.aadharCardBack,
+        "restaurants/documents/aadhar"
+      );
+    }
+
+    if (req.files?.gstCertificate) {
+      uploadedFiles.gstCertificate = await uploadAndCompressFile(
+        req.files.gstCertificate,
+        "restaurants/documents/gst"
+      );
+    }
+
+    /* ---------------- CREATE RESTAURANT ---------------- */
+    const count = await Restaurant.countDocuments();
+    const generatedReferralCode = `VEGVEN${String(count + 1).padStart(5, "0")}`;
+
     const restaurant = await Restaurant.create({
-      restaurantName,
-      description: description || '',
-      locationName,
-      email,
-      mobile,
+      restaurantName: restaurantName || null,
+      description: description || null,
+      locationName: locationName || null,
+      fullAddress: fullAddress || null, // 👈 NEW FIELD ADDED
+      email: email || null,
+      mobile: mobile || null,
       gstNumber: gstNumber || null,
-      commission: parseFloat(commission),
-      discount: discount ? parseFloat(discount) : 0,
-      password,
+      fssaiNo: fssaiNo || null,
+      commission: commission !== undefined ? Number(commission) : null,
+      discount: discount !== undefined ? Number(discount) : null,
+      password: password || null,
       referredBy: referralCode || null,
       referralCode: generatedReferralCode,
-      location: {
+      disclaimers: parsedDisclaimers, // Save disclaimers array
+      location: lat && lng ? {
         type: "Point",
-        coordinates: [parseFloat(lng), parseFloat(lat)]
-      },
-      image: uploadedFiles.image,
+        coordinates: [Number(lng), Number(lat)]
+      } : null,
+      image: uploadedFiles.image || null,
       gstCertificate: uploadedFiles.gstCertificate || null,
-      fssaiLicense: uploadedFiles.fssaiLicense,
-      panCard: uploadedFiles.panCard,
-      aadharCardFront: uploadedFiles.aadharCardFront,
+      fssaiLicense: uploadedFiles.fssaiLicense || null,
+      panCard: uploadedFiles.panCard || null,
+      aadharCardFront: uploadedFiles.aadharCardFront || null,
       aadharCardBack: uploadedFiles.aadharCardBack || null,
       status: "pending",
-      walletBalance: 0,
-      createdAt: new Date(),
-      updatedAt: new Date()
+      walletBalance: 0
     });
 
-    // Don't send password in response
-    const restaurantResponse = restaurant.toObject();
-    delete restaurantResponse.password;
+    const response = restaurant.toObject();
+    delete response.password;
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       message: "Restaurant created successfully",
-      data: restaurantResponse,
+      data: response,
       referralCode: generatedReferralCode
     });
 
   } catch (err) {
     console.error("Create Restaurant Error:", err);
-    
-    // Handle specific errors
-    if (err.message.includes('upload')) {
-      return res.status(400).json({
-        success: false,
-        message: err.message
-      });
-    }
-    
-    if (err.code === 11000) {
-      return res.status(400).json({
-        success: false,
-        message: "Duplicate entry found. Restaurant with this email or mobile already exists."
-      });
-    }
-    
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: "Internal server error. Please try again later.",
-      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+      message: err.message || "Internal server error"
     });
   }
 };
-
-// Helper function for error responses
 function sendError(res, msg) {
-  return res.status(400).json({ 
-    success: false, 
-    message: msg 
-  });
+  return res.status(400).json({ success: false, message: msg });
 }
 
 
@@ -815,9 +881,11 @@ exports.getRestaurantById = async (req, res) => {
 
 
 
+// Update Restaurant Controller with Category Support
 exports.updateRestaurant = async (req, res) => {
   try {
     const { id } = req.params;
+    const { subAdminId, categories } = req.body; // 👈 added categories
 
     // Find restaurant
     let restaurant = await Restaurant.findById(id);
@@ -828,7 +896,7 @@ exports.updateRestaurant = async (req, res) => {
       });
     }
 
-    // Allowed updatable fields (no location, no startingPrice)
+    // Allowed updatable fields
     const updatableFields = [
       "restaurantName",
       "description",
@@ -838,10 +906,10 @@ exports.updateRestaurant = async (req, res) => {
       "commission",
       "email",
       "mobile",
-      "gstNumber"
+      "gstNumber",
     ];
 
-    // Update simple text fields
+    // Update simple fields
     updatableFields.forEach((field) => {
       if (req.body[field] !== undefined && req.body[field] !== "") {
         restaurant[field] = req.body[field];
@@ -855,23 +923,55 @@ exports.updateRestaurant = async (req, res) => {
       if (isNaN(commission) || commission < 0 || commission > 50) {
         return res.status(400).json({
           success: false,
-          message: "Commission must be a valid percentage between 0 and 50",
+          message: "Commission must be between 0 and 50",
         });
       }
 
       restaurant.commission = commission;
     }
 
-    // ✅ Image update (express-fileupload compatible)
+    // ✅ Categories update
+    if (categories !== undefined) {
+      // If categories is a string (coming from form data), parse it
+      let categoryArray = categories;
+      
+      if (typeof categories === 'string') {
+        try {
+          categoryArray = JSON.parse(categories);
+        } catch (e) {
+          // If it's not JSON, treat as comma-separated string
+          categoryArray = categories.split(',').map(id => id.trim());
+        }
+      }
+
+      // Validate that all category IDs exist (using already imported Category model)
+      if (Array.isArray(categoryArray) && categoryArray.length > 0) {
+        // Category model already imported at the top of the file
+        const validCategories = await Category.find({
+          '_id': { $in: categoryArray },
+          status: 'active'
+        });
+
+        if (validCategories.length !== categoryArray.length) {
+          return res.status(400).json({
+            success: false,
+            message: "One or more categories are invalid or inactive",
+          });
+        }
+      }
+
+      // Update categories array
+      restaurant.categories = Array.isArray(categoryArray) ? categoryArray : [];
+    }
+
+    // ✅ Image update
     if (req.files && req.files.image) {
       const file = req.files.image;
 
-      // Optional: delete old image from Cloudinary
       if (restaurant.image?.public_id) {
         await cloudinary.uploader.destroy(restaurant.image.public_id);
       }
 
-      // Upload new image using tempFilePath
       const result = await cloudinary.uploader.upload(file.tempFilePath, {
         folder: "restaurants",
       });
@@ -882,17 +982,40 @@ exports.updateRestaurant = async (req, res) => {
       };
     }
 
+    // ✅ NOTE & UPDATED BY logic
+    let note = "Updated by Admin";
+    let updatedBy = null;
+
+    if (subAdminId) {
+      // SubAdmin model already imported at the top of the file
+      const subAdmin = await SubAdmin.findById(subAdminId);
+      if (!subAdmin) {
+        return res.status(404).json({
+          success: false,
+          message: "Sub-admin not found",
+        });
+      }
+
+      note = `Updated by Sub-admin: ${subAdmin.name}`;
+      updatedBy = subAdminId;
+    }
+
+    restaurant.note = note;
+    restaurant.updatedBy = updatedBy;
+
     await restaurant.save();
+
+    // Populate categories before sending response
+    await restaurant.populate('categories');
 
     return res.status(200).json({
       success: true,
-      message: "Restaurant updated successfully",
+      message: "Restaurant updated successfully ✅",
       data: restaurant,
     });
 
   } catch (err) {
     console.error("Update Restaurant Error:", err);
-
     return res.status(500).json({
       success: false,
       message: "Server error",
@@ -919,10 +1042,7 @@ exports.deleteRestaurant = async (req, res) => {
 };
 
 
-// @desc    Get top-rated restaurants near a user's location
-// @route   GET /api/restaurants/top-rated-nearby/:userId
-// @access  Public
-// @query   [limit] Optional, number of restaurants to return (default: 5)
+
 
 // ✅ Get Top Rated Restaurants Nearby (from already nearby)
 exports.getTopRatedNearbyRestaurants = async (req, res) => {
@@ -985,41 +1105,82 @@ exports.getTopRatedNearbyRestaurants = async (req, res) => {
 exports.getNearbyRestaurants = async (req, res) => {
   try {
     const { userId } = req.params;
-    // const { maxDistance = 5000 } = req.query; // Default 5km (commented out)
 
-    // 1. Validate userId
+    // 1️⃣ Validate userId
     if (!mongoose.Types.ObjectId.isValid(userId)) {
-      return res.status(400).json({ success: false, message: "Invalid userId" });
+      return res.status(400).json({
+        success: false,
+        message: "Invalid userId"
+      });
     }
 
-    // 2. Find user and check location (currently commented out)
-    /*
+    // 2️⃣ Get user location
     const user = await User.findById(userId);
     if (!user || !user.location || !Array.isArray(user.location.coordinates)) {
-      return res.status(404).json({ success: false, message: "User not found or location missing" });
+      return res.status(404).json({
+        success: false,
+        message: "User location not found"
+      });
     }
 
-    const userCoords = user.location.coordinates;
-    */
+    const [userLng, userLat] = user.location.coordinates;
 
-    // 3. Fetch all restaurants (ignoring location for now)
-    const restaurants = await Restaurant.find().select("-__v"); // Exclude unnecessary fields
+    // 3️⃣ Fetch all restaurants
+    const restaurants = await Restaurant.find().select("-__v");
 
+    // 4️⃣ Correct Haversine formula
+    const calculateDistance = (lat1, lon1, lat2, lon2) => {
+      const R = 6371; // Earth radius in km
+      const toRad = (deg) => deg * (Math.PI / 180);
+
+      const dLat = toRad(lat2 - lat1);
+      const dLon = toRad(lon2 - lon1);
+
+      const a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(toRad(lat1)) *
+        Math.cos(toRad(lat2)) *
+        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return R * c; // distance in km
+    };
+
+    // 5️⃣ Add distance field for each restaurant
+    const restaurantsWithDistance = restaurants.map((rest) => {
+      if (rest.location && rest.location.coordinates?.length === 2) {
+        const [restLng, restLat] = rest.location.coordinates;
+
+        const distance = calculateDistance(userLat, userLng, restLat, restLng);
+
+        return {
+          ...rest.toObject(),
+          distance: Number(distance.toFixed(2)) + " km"
+        };
+      }
+
+      return {
+        ...rest.toObject(),
+        distance: null
+      };
+    });
+
+    // 6️⃣ Send response
     res.status(200).json({
       success: true,
-      count: restaurants.length,
-      data: restaurants,
+      count: restaurantsWithDistance.length,
+      data: restaurantsWithDistance
     });
+
   } catch (error) {
     console.error("Error fetching nearby restaurants:", error);
     res.status(500).json({
       success: false,
       message: "Server error",
-      error: error.message,
+      error: error.message
     });
   }
 };
-
 // Helper function to calculate distance between two points (in meters)
 function getDistance(coord1, coord2) {
   const [lon1, lat1] = coord1;
@@ -1057,103 +1218,44 @@ function calculateDistanceKm(lat1, lon1, lat2, lon2) {
 
 exports.getNearbyRestaurantsByCategoryV2 = async (req, res) => {
   try {
-    const { userId } = req.params;
-    const { categoryName, maxDistance = 5000 } = req.query;
+    const { userId } = req.params;          // userId path param se
+    const { categoryId } = req.query;       // categoryId query param se
 
     // ---------------- Validation ----------------
     if (!mongoose.Types.ObjectId.isValid(userId)) {
       return res.status(400).json({ success: false, message: "Invalid userId" });
     }
-    if (!categoryName || categoryName.trim() === "") {
-      return res.status(400).json({ success: false, message: "Category name is required" });
+    if (!categoryId || !mongoose.Types.ObjectId.isValid(categoryId)) {
+      return res.status(400).json({ success: false, message: "Valid categoryId is required" });
     }
 
     // ---------------- Fetch user ----------------
     const user = await User.findById(userId).select("location");
-    if (!user || !user.location?.coordinates?.length) {
-      return res.status(404).json({ success: false, message: "User or location not found" });
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
     }
-    const [userLon, userLat] = user.location.coordinates;
 
-    // ---------------- Get category ID ----------------
-    const category = await Category.findOne({
-      categoryName: { $regex: new RegExp(`^${categoryName}$`, "i") }
-    });
-    if (!category) {
-      return res.status(404).json({ success: false, message: `Category '${categoryName}' not found` });
+    // ---------------- Query Restaurants ----------------
+    const restaurants = await Restaurant.find({
+      categories: { $in: [new mongoose.Types.ObjectId(categoryId)] },
+      status: "active",
+      isDeleted: false
+    }).select("-__v"); // remove version field
+
+    if (!restaurants.length) {
+      return res.status(404).json({ success: false, message: "No restaurants found for this category" });
     }
-    const categoryId = category._id;
 
-    // ---------------- Query RestaurantProduct ----------------
-    let products = await RestaurantProduct.find({
-      "recommended.category": categoryId,
-      status: "active"
-    })
-    .populate({
-      path: "restaurantId",
-      select: "restaurantName locationName location image description rating"
-    })
-    .lean();
-
-    // ---------------- Group products by restaurant ----------------
-    const restaurantMap = new Map();
-
-    products.forEach(product => {
-      const restaurant = product.restaurantId;
-      if (!restaurant) return;
-
-      const matchingRecommended = product.recommended.filter(item =>
-        item.category && item.category.toString() === categoryId.toString()
-      );
-
-      if (!matchingRecommended.length) return;
-
-      if (!restaurantMap.has(restaurant._id.toString())) {
-        restaurantMap.set(restaurant._id.toString(), {
-          ...restaurant,
-          recommended: matchingRecommended
-        });
-      } else {
-        // Append recommended items if restaurant already exists
-        restaurantMap.get(restaurant._id.toString()).recommended.push(...matchingRecommended);
-      }
-    });
-
-    // ---------------- Calculate distance & time ----------------
-    const nearbyRestaurants = Array.from(restaurantMap.values())
-      .map(restaurant => {
-        if (!restaurant.location?.coordinates) {
-          return { ...restaurant, timeAndKm: { distance: "N/A", time: "N/A" } };
-        }
-
-        const [restLon, restLat] = restaurant.location.coordinates;
-        const distanceKm = calculateDistanceKm(userLat, userLon, restLat, restLon);
-        const timeMins = Math.ceil(distanceKm / 0.5); // assume 30 km/h
-
-        return {
-          ...restaurant,
-          timeAndKm: {
-            distance: `${distanceKm.toFixed(2)} km`,
-            time: `${timeMins} mins`
-          }
-        };
-      })
-      .filter(r => {
-        const distStr = r.timeAndKm.distance;
-        if (distStr === "N/A") return false;
-        const distNum = parseFloat(distStr);
-        return distNum <= maxDistance / 1000; // convert meters → km
-      });
-
+    // ---------------- Response ----------------
     res.status(200).json({
       success: true,
-      message: `Nearby restaurants with products in '${categoryName}' category`,
-      count: nearbyRestaurants.length,
-      data: nearbyRestaurants
+      message: `Nearby restaurants with products in this category`,
+      count: restaurants.length,
+      data: restaurants
     });
 
   } catch (error) {
-    console.error("❌ Error in getNearbyRestaurantsByCategoryV2:", error);
+    console.error("Error fetching restaurants by categoryId:", error);
     res.status(500).json({
       success: false,
       message: "Server error",
@@ -1161,7 +1263,6 @@ exports.getNearbyRestaurantsByCategoryV2 = async (req, res) => {
     });
   }
 };
-
 // vendor transaction module
 
 
@@ -1839,13 +1940,13 @@ exports.getAllWithdrawalRequests = async (req, res) => {
 
 exports.updateWithdrawalStatus = async (req, res) => {
   try {
-    const { withdrawalId } = req.params; // changed from requestId
-    const { status } = req.body; // "approved" or "rejected"
+    const { withdrawalId } = req.params;
+    const { status, subAdminId } = req.body; // 👈 subAdminId added
 
     if (!["approved", "rejected"].includes(status)) {
       return res.status(400).json({
         success: false,
-        message: "Invalid status. Must be 'approved' or 'rejected'."
+        message: "Invalid status. Must be 'approved' or 'rejected'.",
       });
     }
 
@@ -1853,7 +1954,7 @@ exports.updateWithdrawalStatus = async (req, res) => {
     if (!withdrawalRequest) {
       return res.status(404).json({
         success: false,
-        message: "Withdrawal request not found."
+        message: "Withdrawal request not found.",
       });
     }
 
@@ -1861,7 +1962,7 @@ exports.updateWithdrawalStatus = async (req, res) => {
     if (withdrawalRequest.status !== "pending") {
       return res.status(400).json({
         success: false,
-        message: "This request has already been processed."
+        message: "This request has already been processed.",
       });
     }
 
@@ -1869,35 +1970,112 @@ exports.updateWithdrawalStatus = async (req, res) => {
     if (!restaurant) {
       return res.status(404).json({
         success: false,
-        message: "Associated restaurant not found."
+        message: "Associated restaurant not found.",
       });
     }
 
-    if (status === "approved") {
-      // Wallet was already deducted at request creation
-    } else if (status === "rejected") {
-      // Refund the amount back to wallet
+    // ✅ NOTE & UPDATED BY logic
+    let note = `Withdrawal ${status} by Admin`;
+    let updatedBy = null;
+
+    if (subAdminId) {
+      const subAdmin = await SubAdmin.findById(subAdminId);
+      if (!subAdmin) {
+        return res.status(404).json({
+          success: false,
+          message: "Sub-admin not found",
+        });
+      }
+
+      note = `Withdrawal ${status} by Sub-admin: ${subAdmin.name}`;
+      updatedBy = subAdminId;
+    }
+
+    if (status === "rejected") {
+      // Refund amount
       restaurant.walletBalance += withdrawalRequest.amount;
       await restaurant.save();
     }
 
     withdrawalRequest.status = status;
+    withdrawalRequest.note = note;
+    withdrawalRequest.updatedBy = updatedBy;
+
     await withdrawalRequest.save();
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: `Withdrawal request has been ${status}.`,
-      data: withdrawalRequest
+      message: `Withdrawal request has been ${status} ✅`,
+      data: withdrawalRequest,
     });
+
   } catch (error) {
     console.error("Error updating withdrawal status:", error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Internal server error.",
+      error: error.message,
+    });
+  }
+};
+
+
+
+exports.deleteWithdrawalRequest = async (req, res) => {
+  try {
+    const { withdrawalId } = req.params;
+    const { subAdminId } = req.body;
+
+    const withdrawalRequest = await WithdrawalRequest.findById(withdrawalId);
+
+    if (!withdrawalRequest) {
+      return res.status(404).json({
+        success: false,
+        message: "Withdrawal request not found."
+      });
+    }
+
+    // NOTE logic
+    let note = "Withdrawal request deleted by Admin";
+
+    if (subAdminId) {
+      const subAdmin = await SubAdmin.findById(subAdminId);
+
+      if (!subAdmin) {
+        return res.status(404).json({
+          success: false,
+          message: "Sub-admin not found"
+        });
+      }
+
+      note = `Withdrawal request deleted by Sub-admin: ${subAdmin.name}`;
+    }
+
+    // If pending -> refund amount
+    if (withdrawalRequest.status === "pending") {
+      restaurant.walletBalance += withdrawalRequest.amount;
+      await restaurant.save();
+    }
+
+    await WithdrawalRequest.findByIdAndDelete(withdrawalId);
+
+    return res.status(200).json({
+      success: true,
+      message: "Withdrawal request deleted successfully ✅",
+      note
+    });
+
+  } catch (error) {
+    console.error("Error deleting withdrawal request:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
       error: error.message
     });
   }
 };
+
 
 
 

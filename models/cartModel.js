@@ -58,13 +58,7 @@ const cartSchema = new mongoose.Schema({
   perKmRate: { type: Number, default: 0 }, // Per km rate for delivery
   
   appliedCouponId: { type: mongoose.Schema.Types.ObjectId, ref: "Coupon", default: null },
-  appliedCoupon: { // snapshot of coupon
-    code: String,
-    discountPercentage: Number,
-    maxDiscountAmount: Number,
-    minCartAmount: Number,
-    expiresAt: Date
-  },
+
   totalDiscount: { type: Number, default: 0 },
   discount: { type: Number, default: 0 }, // cart-level discount
   
@@ -94,6 +88,35 @@ const cartSchema = new mongoose.Schema({
     gstOnDelivery: {
       rate: { type: Number, default: 0 },
       amount: { type: Number, default: 0 }
+    },
+
+     couponDiscount: {
+      couponId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Coupon",
+        default: null
+      },
+      couponCode: {
+        type: String,
+        default: ""
+      },
+      discountType: {
+        type: String,
+        enum: ["percentage", "flat", ""],
+        default: ""
+      },
+      discountValue: {
+        type: Number,
+        default: 0
+      },
+      amount: {
+        type: Number,
+        default: 0
+      },
+      calculation: {
+        type: String,
+        default: ""
+      }
     }
   },
   

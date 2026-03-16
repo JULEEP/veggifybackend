@@ -14,6 +14,13 @@ const dotenv = require("dotenv");
 const VendorAccount = require("../models/VendorAccount");
 const orderModel = require("../models/orderModel");
 const crypto = require('crypto');
+const SubAdmin = require("../models/SubAdmin");
+const cloudinary = require("cloudinary");
+const Reel = require("../models/Reel");
+const path = require('path');
+const multer = require('multer');
+const fs = require('fs');
+
 
 
 dotenv.config();
@@ -48,7 +55,6 @@ dotenv.config();
 
 
 
-// Step 1: Vendor Login → generate OTP + send email
 // Vendor login — generate OTP + send email
 exports.vendorLogin = async (req, res) => {
   try {
@@ -118,10 +124,12 @@ exports.vendorLogin = async (req, res) => {
       });
     }
 
+    // ✅ Send OTP in response as well
     res.status(200).json({
       success: true,
       message: "OTP sent to your email",
-      vendorId: vendor._id
+      vendorId: vendor._id,
+      otp: otpCode
     });
 
   } catch (error) {
@@ -133,7 +141,6 @@ exports.vendorLogin = async (req, res) => {
     });
   }
 };
-
 exports.verifyOtp = async (req, res) => {
   try {
     const { vendorId, otp } = req.body;
@@ -239,7 +246,7 @@ exports.getOrdersByVendorId = async (req, res) => {
     }
 
     // Current time minus 2 minutes
-    const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000);
+    const twoMinutesAgo = new Date(Date.now() - 1 * 60 * 1000);
 
     // Fetch orders created at least 2 min ago
     const orders = await Order.find({
@@ -249,7 +256,7 @@ exports.getOrdersByVendorId = async (req, res) => {
       .sort({ createdAt: -1 }) // newest first
       .populate("restaurantId", "restaurantName location")
       .populate("userId", "firstName lastName email phoneNumber")
-      .populate("deliveryBoyId", "fullName email mobileNumber") // optional
+  .populate("riderId", "fullName mobileNumber vehicleType email isActive") // ✅ rider details
       .populate({
         path: "cartId",
         populate: {
@@ -277,7 +284,7 @@ exports.getOrdersByVendorId = async (req, res) => {
 
 exports.updateOrderById = async (req, res) => {
   const { orderId } = req.params;
-  const updateData = req.body; // Data to update, like status, paymentStatus, etc.
+  const updateData = req.body;
 
   try {
     if (!orderId) {
@@ -288,8 +295,8 @@ exports.updateOrderById = async (req, res) => {
     }
 
     const updatedOrder = await Order.findByIdAndUpdate(orderId, updateData, {
-      new: true, // return the updated document
-      runValidators: true, // validate before update
+      new: true,
+      runValidators: true,
     })
       .populate("restaurantId", "restaurantName locationName")
       .populate("userId", "firstName lastName email phoneNumber")
@@ -308,6 +315,52 @@ exports.updateOrderById = async (req, res) => {
       });
     }
 
+    // ✅ Sirf Accepted aur Rejected ke liye notification
+    try {
+      let notificationTitle = "";
+      let notificationMessage = "";
+
+      // Agar orderStatus update ho raha hai
+      if (updateData.orderStatus) {
+        if (updateData.orderStatus === 'Accepted') {
+          notificationTitle = "✅ Order Accepted";
+          notificationMessage = `Your order #${updatedOrder.orderNumber || updatedOrder._id.toString().slice(-6)} has been accepted by the restaurant`;
+        } 
+        else if (updateData.orderStatus === 'Rejected') {
+          notificationTitle = "❌ Order Rejected";
+          notificationMessage = `Your order #${updatedOrder.orderNumber || updatedOrder._id.toString().slice(-6)} has been rejected by the restaurant`;
+        }
+      }
+
+      // Sirf notification tab bhejo agar Accepted ya Rejected hai
+      if (notificationTitle && notificationMessage) {
+        const userNotification = {
+          type: 'order_updated',
+          title: notificationTitle,
+          message: notificationMessage,
+          timestamp: new Date(),
+          status: 'unread'
+        };
+
+        await User.findByIdAndUpdate(
+          updatedOrder.userId,
+          {
+            $push: {
+              notifications: {
+                $each: [userNotification],
+                $position: 0,
+                $slice: 50
+              }
+            }
+          }
+        );
+        
+        console.log(`User notification sent for order ${updateData.orderStatus}`);
+      }
+    } catch (userNotifError) {
+      console.error('User notification failed:', userNotifError.message);
+    }
+
     return res.status(200).json({
       success: true,
       message: "Order updated successfully",
@@ -322,7 +375,6 @@ exports.updateOrderById = async (req, res) => {
     });
   }
 };
-
 
 exports.deleteOrderById = async (req, res) => {
   const { orderId } = req.params;
@@ -583,12 +635,20 @@ const razorpay = new Razorpay({
 
 
 
-// Capture Vendor Payment — FIXED VERSION
+// Cloudinary Configuration
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
+
+// Capture Vendor Payment — FIXED WITH SCREENSHOT UPLOAD
 exports.captureVendorPayment = async (req, res) => {
   try {
-    console.log('🔔 [Payment Capture] Function called');
+    console.log('🔔 [Vendor Payment Capture] Function called');
     console.log('📦 Request params:', req.params);
     console.log('📦 Request body:', req.body);
+    console.log('📁 Files:', req.files);
 
     const { vendorId } = req.params;
     const { planId, transactionId, paymentMethod = 'razorpay', bankDetails } = req.body;
@@ -637,9 +697,100 @@ exports.captureVendorPayment = async (req, res) => {
 
     // 4️⃣ Check payment method
     if (paymentMethod === 'bank_transfer' || paymentMethod === 'bank') {
-      // Handle bank transfer - keep status as pending but set dates
+      // Handle bank transfer - screenshot upload ke saath
       console.log('🏦 Processing bank transfer payment');
-      console.log('📦 Bank details received:', bankDetails);
+      
+      // Parse bank details
+      let bankDetailsData = {};
+      if (bankDetails) {
+        try {
+          if (typeof bankDetails === 'string') {
+            bankDetailsData = JSON.parse(bankDetails);
+          } else if (typeof bankDetails === 'object') {
+            bankDetailsData = bankDetails;
+          }
+        } catch (error) {
+          console.warn('⚠️ Bank details parse error:', error.message);
+        }
+      }
+      
+      // Default bank details agar nahi hai
+      if (!bankDetailsData.accountName) {
+        bankDetailsData = {
+          accountName: "VEGIFFY PRIVATE LIMITED",
+          accountNumber: "50200067111965",
+          bankName: "HDFC Bank",
+          ifscCode: "HDFC0001252",
+          branch: "Sector 62, Noida",
+          upiId: "vegiffy@hdfcbank"
+        };
+      }
+      
+      console.log('📦 Bank details:', bankDetailsData);
+
+      // Check for payment screenshot - OPTIONAL (ambassador ke jaise)
+      let uploadedScreenshotUrl = "";
+      
+      if (req.files && req.files.paymentScreenshot) {
+        const paymentScreenshot = req.files.paymentScreenshot;
+
+        // Validate file type
+        const validImageTypes = ['image/jpeg', 'image/jpg', 'image/png', 'application/pdf', 'image/webp'];
+        if (!validImageTypes.includes(paymentScreenshot.mimetype)) {
+          return res.status(400).json({
+            success: false,
+            message: "Invalid file type for payment screenshot. Only JPG, PNG, PDF, WebP allowed.",
+          });
+        }
+
+        // Validate file size (max 5MB)
+        const maxSize = 5 * 1024 * 1024; // 5MB
+        if (paymentScreenshot.size > maxSize) {
+          return res.status(400).json({
+            success: false,
+            message: "File size too large. Maximum size is 5MB.",
+          });
+        }
+
+        // Upload to Cloudinary
+        try {
+          console.log('📤 Uploading payment screenshot to Cloudinary...');
+          
+          let result;
+          if (paymentScreenshot.tempFilePath) {
+            result = await cloudinary.uploader.upload(paymentScreenshot.tempFilePath, {
+              folder: "veggyfy/vendors/payment_screenshots",
+              resource_type: "auto",
+              public_id: `vendor_payment_${vendorId}_${Date.now()}`,
+              overwrite: false,
+              transformation: [
+                { quality: "auto:good" },
+                { fetch_format: "auto" }
+              ]
+            });
+          } else if (paymentScreenshot.data) {
+            // For buffer/base64
+            result = await cloudinary.uploader.upload(
+              `data:${paymentScreenshot.mimetype};base64,${paymentScreenshot.data.toString('base64')}`,
+              {
+                folder: "veggyfy/vendors/payment_screenshots",
+                resource_type: "auto",
+                public_id: `vendor_payment_${vendorId}_${Date.now()}`,
+                overwrite: false
+              }
+            );
+          }
+          
+          uploadedScreenshotUrl = result.secure_url;
+          console.log('✅ Cloudinary upload successful:', uploadedScreenshotUrl);
+        } catch (uploadError) {
+          console.error('❌ Cloudinary upload error:', uploadError);
+          // Continue without screenshot, don't block payment
+          console.log('⚠️ Continuing without screenshot upload');
+        }
+      } else {
+        console.log('⚠️ No payment screenshot provided');
+      }
       
       // Calculate GST
       const baseAmount = plan.price;
@@ -650,40 +801,40 @@ exports.captureVendorPayment = async (req, res) => {
       // Generate a transaction ID for bank payment
       const bankTransactionId = `BANK_${Date.now()}_${vendor.restaurantName.replace(/\s+/g, '_')}`;
       
-      // Prepare dates - Bank transfer mein bhi dates set karo
+      // Prepare dates
       const purchaseDate = new Date();
       const expiryDate = new Date(
         purchaseDate.getTime() + plan.validity * 24 * 60 * 60 * 1000
       );
       
-      // Save payment - Bank transfer ke liye bhi isPurchased: true rakho
+      // Save payment - Ambassador ke jaise fields add kiye
       const payment = new VendorPayment({
         vendorId,
         planId,
         transactionId: bankTransactionId,
         paymentMethod: 'bank_transfer',
-        isPurchased: true, // ✅ Bank transfer ke liye bhi true
-        planPurchaseDate: purchaseDate, // ✅ Date set karo
-        expiryDate: expiryDate, // ✅ Expiry date set karo
+        isPurchased: true,
+        planPurchaseDate: purchaseDate,
+        expiryDate: expiryDate,
         amount: baseAmount,
         gstAmount: gstAmount,
         totalAmount: totalAmount,
-        status: "pending_verification", // ✅ Sirf status pending rakhna hai
-        verificationNotes: "Awaiting admin verification - Bank transfer",
+        status: "pending_verification",
+        verificationNotes: uploadedScreenshotUrl ? 
+          "Payment screenshot uploaded, awaiting admin verification" : 
+          "Bank payment submitted, awaiting admin verification",
         submittedAt: purchaseDate,
-        verifiedAt: null, // ❌ VerifiedAt null rahega (admin verify karega)
-        verifiedBy: null, // ❌ VerifiedBy null rahega
-        // Store bank details
-        bankDetails: bankDetails || {
-          accountName: "VEGIFFY PRIVATE LIMITED",
-          accountNumber: "50200067111965",
-          bankName: "HDFC Bank",
-          ifscCode: "HDFC0001252"
-        }
+        verifiedAt: null,
+        verifiedBy: null,
+        // Ambassador ke jaise bank details aur screenshot
+        bankDetails: bankDetailsData,
+        paymentScreenshot: uploadedScreenshotUrl, // ✅ Ambassador ke jaise
+        screenshotUploadedAt: uploadedScreenshotUrl ? purchaseDate : null,
+        isActive: false // ✅ Ambassador ke jaise
       });
 
       await payment.save();
-      console.log('✅ Bank payment saved with dates set (status: pending_verification)');
+      console.log('✅ Bank payment saved with screenshot option');
 
       // Update restaurant with plan but status pending
       await Restaurant.findByIdAndUpdate(
@@ -691,19 +842,21 @@ exports.captureVendorPayment = async (req, res) => {
         {
           currentPlan: planId,
           planExpiry: expiryDate,
-          planStatus: "pending_verification", // ✅ Status pending
+          planStatus: "pending_verification",
           planPurchaseDate: purchaseDate,
-          isPlanActive: false, // ❌ Active nahi hai abhi
+          isPlanActive: false,
           $push: {
             myPlans: {
               planId: planId,
               purchaseDate: purchaseDate,
               expiryDate: expiryDate,
-              isPurchased: true, // ✅ Purchased true
-              status: "pending_verification", // ✅ Status pending
+              isPurchased: true,
+              status: "pending_verification",
               transactionId: bankTransactionId,
               paymentMethod: 'bank_transfer',
-              bankDetails: bankDetails
+              bankDetails: bankDetailsData,
+              paymentScreenshot: uploadedScreenshotUrl, // ✅ Ambassador ke jaise
+              screenshotUploadedAt: uploadedScreenshotUrl ? purchaseDate : null
             },
           },
         },
@@ -711,10 +864,12 @@ exports.captureVendorPayment = async (req, res) => {
       );
       console.log('✅ Restaurant updated with plan (pending verification)');
 
-      // Response for bank payment
+      // Response for bank payment - Ambassador ke jaise
       return res.status(200).json({
         success: true,
-        message: "Bank payment submitted. Your plan will be activated after verification (1-2 hours).",
+        message: uploadedScreenshotUrl ? 
+          "Bank payment submitted with screenshot. Plan will activate after verification." : 
+          "Bank payment submitted. Plan will activate after verification.",
         data: {
           payment: {
             id: payment._id,
@@ -725,7 +880,8 @@ exports.captureVendorPayment = async (req, res) => {
             expiryDate: payment.expiryDate,
             submittedAt: payment.submittedAt,
             verificationStatus: "pending",
-            bankDetails: payment.bankDetails
+            bankDetails: payment.bankDetails,
+            paymentScreenshot: payment.paymentScreenshot // ✅ Ambassador ke jaise
           },
           vendor: {
             id: vendor._id,
@@ -739,16 +895,16 @@ exports.captureVendorPayment = async (req, res) => {
           },
           verification: {
             estimatedTime: "1-2 hours",
-            contactEmail: "vendor@vegiffy.in"
+            contactEmail: "vendor@vegiffy.in",
+            screenshotUploaded: !!uploadedScreenshotUrl
           }
         },
       });
 
     } else {
-      // Handle Razorpay/UPI payment - auto complete
+      // Handle Razorpay/UPI payment - auto complete (same as before)
       console.log('💳 Processing Razorpay/UPI payment...', transactionId);
       
-      // Razorpay ke liye transactionId required hai
       if (!transactionId) {
         return res.status(400).json({
           success: false,
@@ -766,7 +922,6 @@ exports.captureVendorPayment = async (req, res) => {
           captured: paymentDetails.captured
         });
 
-        // Check if payment is already captured
         if (paymentDetails.captured) {
           console.log('⚠️ Payment already captured');
           return res.status(400).json({
@@ -818,9 +973,10 @@ exports.captureVendorPayment = async (req, res) => {
           gstAmount: gstAmount,
           totalAmount: totalAmountInINR,
           razorpayAmount: authorizedAmount,
-          status: "completed", // ✅ Razorpay ke liye completed
-          verifiedAt: purchaseDate, // ✅ Auto-verified
-          verifiedBy: "system", // ✅ System verified
+          status: "completed",
+          verifiedAt: purchaseDate,
+          verifiedBy: "system",
+          isActive: true // ✅ Ambassador ke jaise
         };
 
         if (!payment) {
@@ -838,18 +994,19 @@ exports.captureVendorPayment = async (req, res) => {
           {
             currentPlan: planId,
             planExpiry: expiryDate,
-            planStatus: "active", // ✅ Razorpay ke liye active
+            planStatus: "active",
             planPurchaseDate: purchaseDate,
-            isPlanActive: true, // ✅ Active hai
+            isPlanActive: true,
             $push: {
               myPlans: {
                 planId: planId,
                 purchaseDate: purchaseDate,
                 expiryDate: expiryDate,
                 isPurchased: true,
-                status: "active", // ✅ Active status
+                status: "active",
                 transactionId: transactionId,
-                paymentMethod: paymentMethod
+                paymentMethod: paymentMethod,
+                isActive: true // ✅ Ambassador ke jaise
               },
             },
           },
@@ -872,6 +1029,7 @@ exports.captureVendorPayment = async (req, res) => {
               isPurchased: payment.isPurchased,
               purchaseDate: payment.planPurchaseDate,
               expiryDate: payment.expiryDate,
+              isActive: payment.isActive // ✅ Ambassador ke jaise
             },
             vendor: {
               id: vendor._id,
@@ -924,11 +1082,10 @@ exports.captureVendorPayment = async (req, res) => {
 };
 
 
-
 exports.updateVendorPaymentStatus = async (req, res) => {
   try {
     const { id } = req.params; // VendorPayment ID
-    const { status } = req.body; // new status
+    const { status, subAdminId } = req.body || {}; // ✅ subAdminId optional
 
     if (!id) {
       return res.status(400).json({
@@ -944,7 +1101,7 @@ exports.updateVendorPaymentStatus = async (req, res) => {
       });
     }
 
-    // 1️⃣ Find payment
+    /* ---------------- FIND PAYMENT ---------------- */
     const payment = await VendorPayment.findById(id);
     if (!payment) {
       return res.status(404).json({
@@ -953,18 +1110,36 @@ exports.updateVendorPaymentStatus = async (req, res) => {
       });
     }
 
-    // 2️⃣ Update status
-    payment.status = status;
+    /* ---------------- CREATOR INFO ---------------- */
+    let note = "Updated by Admin";
+    let updatedBy = null;
 
-    // If admin verifies bank payment
+    if (subAdminId) {
+      const subAdmin = await SubAdmin.findById(subAdminId);
+      if (!subAdmin) {
+        return res.status(404).json({
+          success: false,
+          message: "Sub-admin not found",
+        });
+      }
+
+      note = `Updated by Sub-admin: ${subAdmin.name}`;
+      updatedBy = subAdminId;
+    }
+
+    /* ---------------- UPDATE PAYMENT ---------------- */
+    payment.status = status;
+    payment.note = note;
+    payment.updatedBy = updatedBy;
+
     if (status === "completed" || status === "verified") {
       payment.verifiedAt = new Date();
-      payment.verifiedBy = "admin";
+      payment.verifiedBy = subAdminId ? "sub-admin" : "admin";
     }
 
     await payment.save();
 
-    // 3️⃣ Fetch vendor
+    /* ---------------- FIND VENDOR ---------------- */
     const vendor = await Restaurant.findById(payment.vendorId);
     if (!vendor) {
       return res.status(404).json({
@@ -973,78 +1148,65 @@ exports.updateVendorPaymentStatus = async (req, res) => {
       });
     }
 
-    // 4️⃣ Update vendor plan status (optional but correct)
+    /* ---------------- UPDATE VENDOR PLAN ---------------- */
     let vendorPlanStatus = vendor.planStatus;
+    let isPlanActive = vendor.isPlanActive;
 
     if (status === "completed" || status === "verified") {
       vendorPlanStatus = "active";
-      vendor.isPlanActive = true;
+      isPlanActive = true;
     } else if (status === "rejected") {
       vendorPlanStatus = "rejected";
-      vendor.isPlanActive = false;
+      isPlanActive = false;
     }
 
     await Restaurant.findByIdAndUpdate(vendor._id, {
       planStatus: vendorPlanStatus,
-      isPlanActive: vendor.isPlanActive,
+      isPlanActive,
     });
 
-    // 5️⃣ Send Email to Vendor
+    /* ---------------- SEND EMAIL ---------------- */
     const subject = `Payment Status Update - ${status.toUpperCase()}`;
 
     const html = `
-  <div style="font-family: Arial, sans-serif; background:#f9f9f9; padding:20px;">
-    <div style="max-width:600px; margin:auto; background:#ffffff; padding:25px; border-radius:8px;">
-      
-      <h2 style="color:#2e7d32; text-align:center;">
-        🎉 Congratulations ${vendor.restaurantName}!
-      </h2>
+      <div style="font-family: Arial, sans-serif; background:#f9f9f9; padding:20px;">
+        <div style="max-width:600px; margin:auto; background:#ffffff; padding:25px; border-radius:8px;">
+          <h2 style="color:#2e7d32; text-align:center;">
+            🎉 Congratulations ${vendor.restaurantName}!
+          </h2>
 
-      <p style="font-size:15px; color:#333;">
-        We are happy to inform you that your payment has been <strong>successfully verified</strong>.
-      </p>
+          <p>Your payment has been <strong>${status}</strong>.</p>
 
-      <p style="font-size:15px; color:#333;">
-        ✅ Your subscription plan is now <strong>ACTIVE</strong> and your vendor panel has been fully unlocked.
-      </p>
+          <p>
+            Plan Status:
+            <strong>${vendorPlanStatus.toUpperCase()}</strong>
+          </p>
 
-      <div style="background:#f1f8e9; padding:15px; border-radius:6px; margin:20px 0;">
-        <p style="margin:0; font-size:14px;">
-          <strong>Plan Status:</strong> Active
-        </p>
-        <p style="margin:6px 0 0; font-size:14px;">
-          <strong>Access:</strong> Vendor Dashboard Enabled
-        </p>
+          <p style="margin-top:20px;">
+            Updated by: <strong>${subAdminId ? "Sub-admin" : "Admin"}</strong>
+          </p>
+
+          <p style="margin-top:30px;">
+            Regards,<br/>
+            <strong>Vegiffy Team</strong>
+          </p>
+        </div>
       </div>
-
-      <p style="font-size:14px; color:#555;">
-        You can now start managing your business, orders, and services directly from your panel.
-      </p>
-
-      <p style="font-size:14px; color:#555;">
-        If you need any assistance, feel free to contact our support team.
-      </p>
-
-      <p style="margin-top:30px; font-size:14px; color:#333;">
-        Regards,<br/>
-        <strong>Vegiffy Team</strong>
-      </p>
-    </div>
-  </div>
-`;
-
+    `;
 
     if (vendor.email) {
       await sendEmail(vendor.email, subject, html);
     }
 
-    // 6️⃣ Response
+    /* ---------------- RESPONSE ---------------- */
     return res.status(200).json({
       success: true,
-      message: "Payment status updated and vendor notified",
+      message: "Payment status updated successfully",
       data: {
         paymentId: payment._id,
         status: payment.status,
+        note: payment.note,
+        updatedBy: subAdminId ? "sub-admin" : "admin",
         vendor: {
           id: vendor._id,
           name: vendor.restaurantName,
@@ -1052,6 +1214,7 @@ exports.updateVendorPaymentStatus = async (req, res) => {
         },
       },
     });
+
   } catch (error) {
     console.error("❌ Error updating vendor payment status:", error);
     return res.status(500).json({
@@ -1244,10 +1407,10 @@ exports.verifyBankPayment = async (req, res) => {
 };
 
 
-// Get Vendor Payment Details by Vendor ID
+// Get Vendor Payment Details by Vendor ID (ONLY COMPLETED)
 exports.getVendorPaymentDetails = async (req, res) => {
   try {
-    const { vendorId } = req.params; // Get the vendorId from the route params
+    const { vendorId } = req.params;
 
     if (!vendorId) {
       return res.status(400).json({
@@ -1256,28 +1419,31 @@ exports.getVendorPaymentDetails = async (req, res) => {
       });
     }
 
-    // Find the payment details by vendorId
-    const paymentDetails = await VendorPayment.findOne({ vendorId });
+    // ✅ Sirf completed status wala record
+    const paymentDetails = await VendorPayment.findOne({
+      vendorId,
+      status: "completed",
+      isPurchased: true
+    });
 
     if (!paymentDetails) {
       return res.status(404).json({
         success: false,
-        message: "Payment details not found for this vendor",
+        message: "No completed payment found for this vendor",
       });
     }
 
-    // Respond with payment details
     res.status(200).json({
       success: true,
-      message: "Vendor payment details fetched successfully",
+      message: "Vendor completed payment details fetched successfully",
       data: paymentDetails,
     });
 
   } catch (err) {
-    console.error('❌ Error fetching vendor payment details:', err);
+    console.error("❌ Error fetching vendor payment details:", err);
     res.status(500).json({
       success: false,
-      message: 'Server error while fetching vendor payment details',
+      message: "Server error while fetching vendor payment details",
       error: err.message,
     });
   }
@@ -1796,6 +1962,53 @@ exports.getRestaurantNotifications = async (req, res) => {
 
 
 
+exports.deleteRestaurantNotifications = async (req, res) => {
+  try {
+    const { vendorId } = req.params;
+    const { notificationIds } = req.body;
+
+    if (!Array.isArray(notificationIds) || notificationIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "notificationIds array is required in body",
+      });
+    }
+
+    // Validate vendor exists
+    const restaurant = await Restaurant.findById(vendorId);
+    if (!restaurant) {
+      return res.status(404).json({
+        success: false,
+        message: "Vendor not found",
+      });
+    }
+
+    // Filter out notifications which are NOT in notificationIds
+    restaurant.notifications = restaurant.notifications.filter(
+      notif => !notificationIds.includes(notif._id.toString())
+    );
+
+    // Save updated restaurant
+    await restaurant.save();
+
+    res.json({
+      success: true,
+      message: `${notificationIds.length} notification${notificationIds.length === 1 ? '' : 's'} deleted successfully`,
+      data: restaurant.notifications,
+    });
+
+  } catch (error) {
+    console.error("Delete notifications error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  }
+};
+
+
+
+
 
 exports.getAllOrdersByRestaurant = async (req, res) => {
   try {
@@ -2022,3 +2235,329 @@ exports.deleteRestaurantByAdmin = async (req, res) => {
 };
 
 
+
+// Create Reel with all fields
+exports.createReel = async (req, res) => {
+  try {
+    console.log('🎥 [Reel Upload] Function called');
+    console.log('📦 Params:', req.params);
+    console.log('📁 Files:', req.files);
+    console.log('📝 Body:', req.body);
+
+    const { vendorId } = req.params;
+    const { title, description, deepLink, isHot, status } = req.body;
+
+    // 1️⃣ Vendor ID check
+    if (!vendorId) {
+      return res.status(400).json({
+        success: false,
+        message: "Vendor ID chahiye"
+      });
+    }
+
+    // 2️⃣ File check - video zaroori hai
+    if (!req.files || !req.files.video) {
+      return res.status(400).json({
+        success: false,
+        message: "Video file bhejna zaroori hai"
+      });
+    }
+
+    const videoFile = req.files.video;
+
+    // 3️⃣ Validate video file type
+    const validTypes = ['video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/webm', 'video/3gpp'];
+    if (!validTypes.includes(videoFile.mimetype)) {
+      return res.status(400).json({
+        success: false,
+        message: "Sirf video files allowed hain (MP4, MOV, AVI, WEBM, 3GP)"
+      });
+    }
+
+    // 4️⃣ Validate video file size (100MB)
+    if (videoFile.size > 100 * 1024 * 1024) {
+      return res.status(400).json({
+        success: false,
+        message: "Video size 100MB se kam hona chahiye"
+      });
+    }
+
+    // 5️⃣ Vendor exist karta hai?
+    const vendor = await Restaurant.findById(vendorId);
+    if (!vendor) {
+      return res.status(404).json({
+        success: false,
+        message: "Vendor nahi mila"
+      });
+    }
+
+    // 6️⃣ Make sure uploads/reels folder exists
+    const reelsDir = path.join(__dirname, '../uploads/reels');
+    if (!fs.existsSync(reelsDir)) {
+      fs.mkdirSync(reelsDir, { recursive: true });
+    }
+
+    // 7️⃣ Unique filename for video
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const videoExt = path.extname(videoFile.name);
+    const videoFilename = `reel_video_${vendorId}_${uniqueSuffix}${videoExt}`;
+    const videoPath = path.join(reelsDir, videoFilename);
+
+    // 8️⃣ Save video file
+    await videoFile.mv(videoPath);
+    console.log('✅ Video saved:', videoPath);
+
+    // 9️⃣ Handle thumbnail if uploaded
+    let thumbFilename = '';
+    let thumbUrl = '';
+    
+    if (req.files && req.files.thumbnail) {
+      const thumbFile = req.files.thumbnail;
+      
+      // Validate thumbnail image type
+      const validImageTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+      if (validImageTypes.includes(thumbFile.mimetype)) {
+        
+        // Validate thumbnail size (5MB)
+        if (thumbFile.size <= 5 * 1024 * 1024) {
+          const thumbExt = path.extname(thumbFile.name);
+          thumbFilename = `reel_thumb_${vendorId}_${uniqueSuffix}${thumbExt}`;
+          const thumbPath = path.join(reelsDir, thumbFilename);
+          
+          await thumbFile.mv(thumbPath);
+          console.log('✅ Thumbnail saved:', thumbPath);
+        }
+      }
+    }
+
+    // 🔟 Generate URLs
+    const baseUrl = 'https://api.vegiffyy.com';
+    const videoUrl = `${baseUrl}/uploads/reels/${videoFilename}`;
+    thumbUrl = thumbFilename ? `${baseUrl}/uploads/reels/${thumbFilename}` : '';
+
+    // 1️⃣1️⃣ Create Reel in database
+    const reelData = {
+      vendorId,
+      videoUrl,
+      thumbUrl,
+      title: title || '',
+      description: description || '',
+      deepLink: deepLink || '',
+      status: status || 'active',
+      isHot: isHot === 'true' || isHot === true
+    };
+
+    const reel = new Reel(reelData);
+    await reel.save();
+
+    // 1️⃣2️⃣ Also save reference in vendor (optional)
+    if (!vendor.reels) {
+      vendor.reels = [];
+    }
+    
+    vendor.reels.push({
+      reelId: reel._id,
+      videoUrl,
+      uploadedAt: new Date()
+    });
+    
+    await vendor.save();
+
+    // 1️⃣3️⃣ Success response
+    return res.status(201).json({
+      success: true,
+      message: "Reel create ho gayi",
+      data: reel
+    });
+
+  } catch (err) {
+    console.error("❌ Error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Kuch gadbad ho gayi",
+      error: err.message
+    });
+  }
+};
+
+// ------------------------
+// GET All Reels
+// ------------------------
+// Get all reels with populated vendor details
+exports.getAllReels = async function (req, res) {
+  try {
+    const reels = await Reel.find()
+      .populate({
+        path: 'vendorId',
+        select: 'restaurantName logo' // Sirf restaurantName aur logo chahiye
+      })
+      .sort({ createdAt: -1 });
+
+    // Transform data to match required format
+    const formattedReels = reels.map(reel => {
+      const reelObj = reel.toObject();
+      
+      return {
+        _id: reelObj._id,
+        videoUrl: reelObj.videoUrl,
+        thumbUrl: reelObj.thumbUrl || '',
+        title: reelObj.title || '',
+        description: reelObj.description || '',
+        restaurantName: reelObj.vendorId?.restaurantName || 'Unknown Restaurant',
+        restaurantId: reelObj.vendorId?._id || reelObj.vendorId,
+        deepLink: reelObj.deepLink || '',
+        createdAt: reelObj.createdAt,
+        updatedAt: reelObj.updatedAt
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "Reels fetched successfully",
+      data: formattedReels,
+    });
+
+  } catch (error) {
+    console.error("Error fetching reels:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
+  }
+};
+
+// ------------------------
+// GET Reels by Vendor ID
+// ------------------------
+exports.getReelsByVendor = async function (req, res) {
+  try {
+    const vendorId = req.params.vendorId;
+    if (!vendorId) {
+      return res.status(400).json({ success: false, message: "vendorId is required" });
+    }
+
+    const reels = await Reel.find({ vendorId }).sort({ createdAt: -1 });
+    res.status(200).json({
+      success: true,
+      message: "Vendor reels fetched successfully",
+      data: reels,
+    });
+  } catch (error) {
+    console.error("Error fetching vendor reels:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
+  }
+};
+
+// ------------------------
+// UPDATE Reel by ID
+// ------------------------
+// ==================== UPDATE REEL ====================
+exports.updateReel = async (req, res) => {
+  try {
+    console.log('✏️ [UPDATE] Function called');
+    console.log('📦 Params:', req.params);
+    console.log('📝 Body:', req.body);
+    console.log('📁 Files:', req.files);
+
+    const { reelId } = req.params;
+    const { title, description, deepLink, isHot, status } = req.body;
+
+    // 1️⃣ Reel exist karti hai?
+    const reel = await Reel.findById(reelId);
+    if (!reel) {
+      return res.status(404).json({
+        success: false,
+        message: "Reel nahi mili"
+      });
+    }
+
+    // 2️⃣ Update fields (jo bheja hai wahi update karo)
+    if (title !== undefined) reel.title = title;
+    if (description !== undefined) reel.description = description;
+    if (deepLink !== undefined) reel.deepLink = deepLink;
+    if (status !== undefined) reel.status = status;
+    if (isHot !== undefined) reel.isHot = isHot === 'true' || isHot === true;
+
+    // 3️⃣ Agar naya thumbnail upload kiya hai to
+    if (req.files && req.files.thumbnail) {
+      const thumbFile = req.files.thumbnail;
+      
+      // Validate thumbnail
+      const validImageTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+      if (validImageTypes.includes(thumbFile.mimetype)) {
+        
+        if (thumbFile.size <= 5 * 1024 * 1024) {
+          // Purana thumbnail delete karo
+          if (reel.thumbUrl) {
+            const oldThumbPath = path.join(__dirname, '../uploads/reels', path.basename(reel.thumbUrl));
+            if (fs.existsSync(oldThumbPath)) {
+              fs.unlinkSync(oldThumbPath);
+              console.log('✅ Old thumbnail deleted');
+            }
+          }
+
+          // Naya thumbnail save karo
+          const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+          const thumbExt = path.extname(thumbFile.name);
+          const thumbFilename = `reel_thumb_${reel.vendorId}_${uniqueSuffix}${thumbExt}`;
+          const thumbPath = path.join(__dirname, '../uploads/reels', thumbFilename);
+          
+          await thumbFile.mv(thumbPath);
+          
+          const baseUrl = 'https://api.vegiffyy.com';
+          reel.thumbUrl = `${baseUrl}/uploads/reels/${thumbFilename}`;
+          console.log('✅ New thumbnail saved:', thumbFilename);
+        }
+      }
+    }
+
+    // 4️⃣ Save karo
+    await reel.save();
+    console.log('✅ Reel updated:', reel._id);
+
+    return res.status(200).json({
+      success: true,
+      message: "Reel update ho gayi",
+      data: reel
+    });
+
+  } catch (err) {
+    console.error("❌ Update Error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Kuch gadbad ho gayi",
+      error: err.message
+    });
+  }
+};
+// ------------------------
+// DELETE Reel by ID
+// ------------------------
+exports.deleteReel = async function (req, res) {
+  try {
+    const reelId = req.params.reelId;
+    if (!reelId) {
+      return res.status(400).json({ success: false, message: "reelId is required" });
+    }
+
+    const reel = await Reel.findByIdAndDelete(reelId);
+    if (!reel) return res.status(404).json({ success: false, message: "Reel not found" });
+
+    res.status(200).json({
+      success: true,
+      message: "Reel deleted successfully",
+    });
+  } catch (error) {
+    console.error("Error deleting reel:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
+  }
+};

@@ -1,5 +1,6 @@
 const AboutUs = require('../models/aboutUsModel');
 
+
 // Create or update "About Us"
 const upsertAboutUs = async (req, res) => {
   const { content } = req.body;

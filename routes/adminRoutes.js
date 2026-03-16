@@ -34,25 +34,18 @@ router.get('/dashboard', authMiddleware, (req, res) => {
 });
 
 // Endpoint to issue coupon token (POST, no auth required)
-router.post('/token', adminController.getCouponToken);
 
 // Create coupon
-router.post('/coupons',couponAuthMiddleware, adminController.createCoupon);
 
 // Get all coupons
-router.get('/coupons',adminController.getAllCoupons);
 
 // Get single coupon
-router.get('/coupons/:couponId', adminController.getCouponById);
 
 // Update coupon
-router.put('/coupon/:couponId', adminController.updateCoupon);
 
 // Delete coupon
-router.delete('/coupon/:couponId', adminController.deleteCoupon);
 
 // Toggle active/inactive
-router.patch('/coupon/:couponId/toggle', adminController.toggleCouponStatus);
 router.get('/users',adminController.getAllUsers);
 router.delete('/deleteuser/:id', adminController.deleteUser);
 router.get('/dashboarddata',adminController.getDashboardData);
@@ -148,6 +141,11 @@ router.put('/updatecredential/:credentialId', adminController.updateCredential);
 
 // Delete credential
 router.delete('/deletecredential/:credentialId', adminController.deleteCredential);
+
+
+router.post("/createcoupon", adminController.createCoupon);
+router.put("/updatecoupon/:id", adminController.updateCoupon);
+router.delete("/deletecoupon/:id", adminController.deleteCoupon);
 
 
 module.exports = router;

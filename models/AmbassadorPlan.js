@@ -14,6 +14,12 @@ const AmbassadorPlanSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+    note: { type: String },
+  updatedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "SubAdmin",
+    default: null,
+  },
   benefits: {
     type: [String], // array of benefit descriptions
     default: [],

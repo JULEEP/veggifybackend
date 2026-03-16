@@ -43,7 +43,13 @@ const {
   getPendinBanners,
   getPendingBanners,
   updateEnquiry,
-  deleteEnquiry
+  deleteEnquiry,
+  getAllCoupons,
+  getActiveCoupons,
+  applyCoupon,
+  removeCoupon,
+  deleteUserNotifications,
+  setDefaultAddress
   
 } = require('../controllers/userController');
 const upload = require('../utils/multer');
@@ -71,12 +77,16 @@ router.put('/updateuser/:userId', updateUserSimply);
 // Delete profile image by userId
 router.delete('/users/:userId/profile-image', deleteProfileImage);
 router.get('/getnotification/:userId', getNotificationsForUser);
+router.delete("/delete-notifications/:userId", deleteUserNotifications);
+
 
 
 // ➕ Add address
 router.post("/addaddress/:userId", addAddress);
 // Get all addresses for a user
 router.get('/getaddresses/:userId', getAllAddresses);
+router.put("/setaddressdefault/:userId", setDefaultAddress);
+
 
 // Get a single address by addressId for a user
 router.get('/users/:userId/addresses/:addressId', getAddressById);
@@ -159,6 +169,11 @@ router.get("/maintenance-status", getMaintenanceStatus);
 router.get('/userwallet/:userId', getUserWallet);
 
 router.get('/getallcredential', getAllCredentials);
+router.get("/getallcoupons", getAllCoupons);
+router.get("/getallactivecoupons/:userId", getActiveCoupons);
+
+router.post('/apply-coupon', applyCoupon);
+router.post('/remove-coupon', removeCoupon);
 
 
 module.exports = router;

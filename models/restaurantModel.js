@@ -11,12 +11,10 @@ const restaurantSchema = new mongoose.Schema(
       type: String,
       trim: true
     },
-    rating: {
-      type: Number,
-      min: [0, 'Rating must be at least 0'],
-      max: [5, 'Rating cannot exceed 5'],
-      default: 0
-    },
+rating: {
+  type: Number,
+  default: 0.0
+},
     categories: [
       {
         type: Schema.Types.ObjectId,
@@ -31,6 +29,9 @@ const restaurantSchema = new mongoose.Schema(
     public_id: String,
     url: String
   },
+    fssaiNo: {
+    type: String,
+  },
       reviews: [
     {
       userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", },
@@ -39,6 +40,18 @@ const restaurantSchema = new mongoose.Schema(
       createdAt: { type: Date, default: Date.now }
     }
   ],
+
+   disclaimers: [{
+    type: String,
+    trim: true
+  }],
+
+    fullAddress: { type: String, },
+
+
+
+  note: { type: String },
+updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "SubAdmin", default: null },
 
   // restaurantSchema में notifications array add करें:
 notifications: [{

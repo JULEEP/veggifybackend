@@ -46,9 +46,15 @@ const orderSchema = new mongoose.Schema(
 
   orderStatus: {
     type: String,
-    enum: ["Pending", "Accepted", "Rejected", "Picked", "Completed", "Rider Accepted", "Rider Rejected", "Delivered", "Cancelled", "Rider Accepted"],
+    enum: ["Pending", "Accepted", "Rejected", "Picked", "Prepared", "Completed", "Rider Accepted", "Rider Rejected", "Delivered", "Cancelled", "Rider Accepted", "Out For Delivery", "Confirmed"],
     default: "Pending"
   },
+
+  riderId: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: "DeliveryBoy",
+  default: null
+},
 
 
    paymentType: {
@@ -136,6 +142,13 @@ const orderSchema = new mongoose.Schema(
       discountAmount: { type: Number, default: 0 }    // <-- add this
   }],
 
+
+      note: { type: String },
+    updatedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "SubAdmin",
+      default: null,
+    },
   // ✅ Optional timestamps
   acceptedAt: Date,
   pickedAt: Date,
@@ -159,6 +172,13 @@ const orderSchema = new mongoose.Schema(
       default: 0
     }, 
     distanceKm: { type: Number, default: 0 },
+
+     // ✅ Coupon related fields
+    appliedCouponId: { 
+      type: mongoose.Schema.Types.ObjectId, 
+      ref: "Coupon", 
+      default: null 
+    },
 
     // Add these fields:
 totalDiscount: { type: Number, default: 0 },
@@ -196,7 +216,35 @@ originalPrice: { type: Number, default: 0 },
   gstOnDelivery: {
     rate: { type: Number, default: 0 },
     amount: { type: Number, default: 0 }
-  }
+  },
+   couponDiscount: {
+          couponId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Coupon",
+            default: null
+          },
+          couponCode: {
+            type: String,
+            default: ""
+          },
+          discountType: {
+            type: String,
+            enum: ["percentage", "flat", ""],
+            default: ""
+          },
+          discountValue: {
+            type: Number,
+            default: 0
+          },
+          amount: {
+            type: Number,
+            default: 0
+          },
+          calculation: {
+            type: String,
+            default: ""
+          }
+        },
 },
 
 appliedCharges: {
@@ -233,6 +281,9 @@ appliedCharges: {
     unit: { type: String, default: '%' }
   }
 },
+
+  // ✅ Applied coupon details
+    appliedCoupon: { type: mongoose.Schema.Types.Mixed, default: null },
    
   },
   {

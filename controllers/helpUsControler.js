@@ -1,6 +1,7 @@
 const HelpUs = require('../models/helpUsModel');
 const cloudinary = require("cloudinary").v2;
 const dotenv = require("dotenv");
+const SubAdmin = require('../models/SubAdmin');
 
 dotenv.config();
 
@@ -123,7 +124,7 @@ const getIssuesByUser = async (req, res) => {
 const updateHelpUs = async (req, res) => {
   try {
     const { issueId } = req.params; // Extract issueId from URL params
-    const { status } = req.body;  // Extract status from the request body
+    const { status, subAdminId } = req.body;  // Extract status and subAdminId from the request body
 
     // Check if status is provided
     if (!status) {
@@ -136,8 +137,20 @@ const updateHelpUs = async (req, res) => {
       return res.status(404).json({ message: "Issue not found" });
     }
 
-    // Update the status
+    // Find the sub-admin (if subAdminId is provided) and add note
+    let note = `Issue status updated by Admin`; // Default note if no sub-admin
+    if (subAdminId) {
+      const subAdmin = await SubAdmin.findById(subAdminId);
+      if (subAdmin) {
+        note = `Issue status updated by Sub-admin: ${subAdmin.name}`;
+      } else {
+        return res.status(404).json({ success: false, message: "Sub-admin not found" });
+      }
+    }
+
+    // Update the status and note
     issue.status = status;
+    issue.note = note;
 
     // Save the updated issue
     await issue.save();
@@ -150,6 +163,7 @@ const updateHelpUs = async (req, res) => {
     res.status(500).json({ message: "Server Error", error: error.message });
   }
 };
+
 
 // DELETE: Delete an issue (by issueId)
 const deleteHelpUs = async (req, res) => {

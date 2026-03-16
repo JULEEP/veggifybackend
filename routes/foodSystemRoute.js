@@ -56,6 +56,7 @@ router.get('/getwallet/:restaurantId', controller.getRestaurantWalletBalance);
 router.post("/walletwithdraw/:restaurantId", controller.createWithdrawalRequest);
 router.get("/allwithdrawrequest", controller.getAllWithdrawalRequests);
 router.put("/withdrawalstatus/:withdrawalId", controller.updateWithdrawalStatus);
+router.delete("/withdrawal/:withdrawalId", controller.deleteWithdrawalRequest);
 router.get('/profile/:restaurantId', controller.getRestaurantProfile);
 
 

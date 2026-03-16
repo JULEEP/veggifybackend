@@ -22,6 +22,13 @@ const chargeSchema = new mongoose.Schema({
     default: 'fixed',
     enum: ['fixed', 'percentage']
   },
+
+      note: { type: String },
+    updatedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "SubAdmin",
+      default: null,
+    },
   // Delivery charge specific fields
   distance: {
     type: Number,
