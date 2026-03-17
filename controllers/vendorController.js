@@ -2386,7 +2386,7 @@ exports.createReel = async (req, res) => {
 // Get all reels with populated vendor details
 exports.getAllReels = async function (req, res) {
   try {
-    const reels = await Reel.find()
+    const reels = await Reel.find({ status: "active" }) // ✅ yahi add kiya
       .populate({
         path: 'vendorId',
         select: 'restaurantName logo' // Sirf restaurantName aur logo chahiye
@@ -2554,6 +2554,32 @@ exports.deleteReel = async function (req, res) {
     });
   } catch (error) {
     console.error("Error deleting reel:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
+  }
+};
+
+
+exports.getAllReelsAdmin = async function (req, res) {
+  try {
+    const reels = await Reel.find()
+      .populate({
+        path: 'vendorId',
+        select: 'restaurantName' // ✅ sirf ye field (id by default aata hai)
+      })
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({
+      success: true,
+      message: "All reels fetched (Admin)",
+      data: reels, // ✅ full reels + limited vendor
+    });
+
+  } catch (error) {
+    console.error("Error fetching reels (Admin):", error);
     res.status(500).json({
       success: false,
       message: "Server error",
