@@ -505,9 +505,15 @@ exports.removeFromWishlist = async (req, res) => {
 // -------------------- ORDER CONTROLLERS --------------------
 
 
+// const razorpay = new Razorpay({
+//   key_id: process.env.RAZORPAY_KEY_ID || "rzp_test_RgqXPvDLbgEIVv",
+//   key_secret: process.env.RAZORPAY_KEY_SECRET || "1FQJrX3Ol38hWDeZ4CRI7O3i",
+// });
+
+
 const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID || "rzp_test_RgqXPvDLbgEIVv",
-  key_secret: process.env.RAZORPAY_KEY_SECRET || "1FQJrX3Ol38hWDeZ4CRI7O3i",
+  key_id: "rzp_live_SSf33nIx6Os3GH",
+  key_secret: "668kGY9tFPa5y7RVH3IYsTl9",
 });
 
 
