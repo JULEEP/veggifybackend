@@ -5,6 +5,8 @@ const cloudinary = require("../config/cloudinary");
 const fs = require("fs");
 const mongoose = require("mongoose");
 const streamifier = require("streamifier");
+const path = require('path');
+
 
 
 // Cloudinary helper
@@ -48,6 +50,30 @@ const uploadToCloudinary = async (file, folder) => {
   }
 };
 
+// Upload directories
+const UPLOADS_DIR = path.join(__dirname, '../uploads');
+const RECOMMENDED_DIR = path.join(UPLOADS_DIR, 'recommended');
+
+// Ensure directory exists
+if (!fs.existsSync(RECOMMENDED_DIR)) {
+  fs.mkdirSync(RECOMMENDED_DIR, { recursive: true });
+  console.log(`📁 Created recommended directory: ${RECOMMENDED_DIR}`);
+}
+
+// Base URL
+const BASE_URL = 'https://api.vegiffyy.com';
+
+// Helper function to upload image locally
+const uploadLocalImage = async (file, folder) => {
+  const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+  const ext = path.extname(file.name);
+  const filename = `${folder}-${uniqueSuffix}${ext}`;
+  const uploadPath = path.join(RECOMMENDED_DIR, filename);
+  await file.mv(uploadPath);
+  return `${BASE_URL}/uploads/recommended/${filename}`;
+};
+
+// ✅ CREATE RESTAURANT PRODUCT
 exports.createRestaurantProduct = async (req, res) => {
   try {
     const { restaurantId } = req.body;
@@ -73,39 +99,37 @@ exports.createRestaurantProduct = async (req, res) => {
         : [req.files.recommendedImages];
     }
 
-    // ✅ Map recommended items with preparationTime
-   const formattedRecommended = await Promise.all(
-  recommended.map(async (item, i) => {
-    let imageUrl = "";
-    if (recommendedFiles[i]) {
-      try {
-        imageUrl = await uploadToCloudinary(
-          recommendedFiles[i],
-          "restaurant-recommended"
-        );
-      } catch (err) {
-        console.error("Cloudinary Upload Error:", err);
-        imageUrl = "";
-      }
-    }
+    // ✅ Map recommended items with local image upload
+    const formattedRecommended = await Promise.all(
+      recommended.map(async (item, i) => {
+        let imageUrl = "";
+        if (recommendedFiles[i]) {
+          try {
+            imageUrl = await uploadLocalImage(recommendedFiles[i], "recommended");
+            console.log(`✅ Recommended image saved: ${imageUrl}`);
+          } catch (err) {
+            console.error("Image Upload Error:", err);
+            imageUrl = "";
+          }
+        }
 
-    const price = parseFloat(item.price) || 0;
+        const price = parseFloat(item.price) || 0;
 
-    return {
-      name: item.name,
-      price: price,
-      halfPlatePrice: parseFloat(item.halfPlatePrice) || 0,
-      fullPlatePrice: price, // ✅ fullPlatePrice now equals price
-      discount: parseFloat(item.discount) || 0,
-      tags: Array.isArray(item.tags) ? item.tags : [],
-      content: item.content || "",
-      image: imageUrl,
-      category: item.category || null,
-      preparationTime: item.preparationTime || "",
-      status: "inactive",
-    };
-  })
-);
+        return {
+          name: item.name,
+          price: price,
+          halfPlatePrice: parseFloat(item.halfPlatePrice) || 0,
+          fullPlatePrice: price,
+          discount: parseFloat(item.discount) || 0,
+          tags: Array.isArray(item.tags) ? item.tags : [],
+          content: item.content || "",
+          image: imageUrl,
+          category: item.category || null,
+          preparationTime: item.preparationTime || "",
+          status: "inactive",
+        };
+      })
+    );
 
     // --- Create Restaurant Product ---
     const newProduct = new RestaurantProduct({
@@ -134,7 +158,6 @@ exports.createRestaurantProduct = async (req, res) => {
     });
   }
 };
-
 
 // Get all restaurant products
 exports.getAllRestaurantProducts = async (req, res) => {
@@ -379,6 +402,7 @@ exports.getRecommendedByRestaurantId = async (req, res) => {
 
 
 
+// ✅ UPDATE RESTAURANT PRODUCT (NO CLOUDINARY)
 exports.updateRestaurantProduct = async (req, res) => {
   try {
     const { productId, recommendedId } = req.params;
@@ -411,13 +435,23 @@ exports.updateRestaurantProduct = async (req, res) => {
       itemUpdate = typeof req.body.recommended === "string" ? JSON.parse(req.body.recommended) : req.body.recommended;
     }
 
-    // Handle image upload
+    // Handle image upload - LOCAL STORAGE (NO CLOUDINARY)
     let imageUrl = existingProduct.recommended[existingItemIndex].image;
     if (req.files && req.files.recommendedImage) {
       try {
-        imageUrl = await uploadToCloudinary(req.files.recommendedImage, "restaurant-recommended");
+        // Delete old image if exists
+        if (imageUrl) {
+          deleteLocalFile(imageUrl);
+          console.log(`🗑️ Old image deleted: ${imageUrl}`);
+        }
+        
+        // Upload new image locally
+        const file = req.files.recommendedImage;
+        imageUrl = await uploadLocalImage(file, "recommended");
+        console.log(`✅ New image saved: ${imageUrl}`);
       } catch (err) {
-        console.error("Cloudinary Upload Error:", err);
+        console.error("Local Image Upload Error:", err);
+        // Keep old image if upload fails
       }
     }
 

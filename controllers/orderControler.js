@@ -47,15 +47,48 @@ function calculateDistance(lon1, lat1, lon2, lat2) {
 }
 
 
-// Helper to upload images to Cloudinary
+// Upload directories
+const UPLOADS_DIR = path.join(__dirname, '../uploads');
+const GENERAL_UPLOADS_DIR = path.join(UPLOADS_DIR, 'general');
+
+// Ensure directory exists
+if (!fs.existsSync(GENERAL_UPLOADS_DIR)) {
+  fs.mkdirSync(GENERAL_UPLOADS_DIR, { recursive: true });
+}
+
+// Base URL
+const BASE_URL = 'https://api.vegiffyy.com';
+
+// Helper to upload images locally (NO CLOUDINARY)
 async function uploadFilesToCloudinary(files) {
   if (!files) return [];
+  
   const filesArray = Array.isArray(files) ? files : [files];
   const urls = [];
+  
   for (const file of filesArray) {
-    const result = await cloudinary.uploader.upload(file.path);
-    urls.push(result.secure_url);
+    try {
+      // Generate unique filename
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+      const ext = path.extname(file.name);
+      const filename = `upload-${uniqueSuffix}${ext}`;
+      const uploadPath = path.join(GENERAL_UPLOADS_DIR, filename);
+      
+      // Move file to uploads directory
+      await file.mv(uploadPath);
+      
+      // Generate URL
+      const relativePath = uploadPath.split('uploads')[1];
+      const fileUrl = `${BASE_URL}/uploads${relativePath}`;
+      
+      urls.push(fileUrl);
+      console.log(`✅ File uploaded: ${fileUrl}`);
+    } catch (error) {
+      console.error("Error uploading file:", error);
+      // Continue with other files even if one fails
+    }
   }
+  
   return urls;
 }
 

@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const { vendorLogin, getOrdersByVendorId, updateOrderById, deleteOrderById, getVendorProfile, getDashboardData, getAllUsersByRestaurant, captureVendorPayment, getVendorPaymentDetails, getAllVendorPayments, getVendorStatus, updateVendorStatus, verifyOtp, forgotPassword, resetPasswordWithOtp, addAccount, getVendorAccounts, updateAccount, deleteAccount, getRestaurantNotifications, getAllOrdersByRestaurant, updateVendorPaymentStatus, deleteVendorPayment, deleteRestaurantAccount, confirmDeleteRestaurantAccount, deleteRestaurantByAdmin, deleteRestaurantNotifications, createReel, getAllReels, getReelsByVendor, updateReel, deleteReel, getAllReelsAdmin} = require("../controllers/vendorController");
+const { vendorLogin, getOrdersByVendorId, updateOrderById, deleteOrderById, getVendorProfile, getDashboardData, getAllUsersByRestaurant, captureVendorPayment, getVendorPaymentDetails, getAllVendorPayments, getVendorStatus, updateVendorStatus, verifyOtp, forgotPassword, resetPasswordWithOtp, addAccount, getVendorAccounts, updateAccount, deleteAccount, getRestaurantNotifications, getAllOrdersByRestaurant, updateVendorPaymentStatus, deleteVendorPayment, deleteRestaurantAccount, confirmDeleteRestaurantAccount, deleteRestaurantByAdmin, deleteRestaurantNotifications, createReel, getAllReels, getReelsByVendor, updateReel, deleteReel, getAllReelsAdmin, createAdminReel} = require("../controllers/vendorController");
 
 const upload = require('../config/upload');
 
@@ -47,6 +47,11 @@ router.delete('/delete-vendor/:vendorId', deleteRestaurantByAdmin);
 router.post(
   '/createreel/:vendorId',
   createReel
+);
+
+router.post(
+  '/createreelbyadmin/:adminId',
+  createAdminReel
 );
 router.get('/getallreels', getAllReels);
 router.get('/getallreelsforadmin', getAllReelsAdmin);

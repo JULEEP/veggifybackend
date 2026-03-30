@@ -26,23 +26,20 @@ const app = express();
 const server = http.createServer(app);
 
 // ========================
-// 🔥 IMPORTANT: File Upload & Body Parser Limits
-// ========================
-// ========================
-// 🔥 FIX: Body Parser LIMIT 200MB KAR (sabse pehle)
+// Body Parser LIMIT
 // ========================
 app.use(express.json({ limit: '200mb' }));
 app.use(express.urlencoded({ extended: true, limit: '200mb' }));
 
 // ========================
-// 🔥 FIX: File Upload LIMIT 200MB KAR
+// File Upload
 // ========================
 app.use(fileUpload({
   useTempFiles: true,
   tempFileDir: "/tmp/",
   createParentPath: true,
   limits: { 
-    fileSize: 200 * 1024 * 1024  // 200MB
+    fileSize: 200 * 1024 * 1024
   },
   abortOnLimit: true,
   responseOnLimit: 'File too large! Maximum 200MB allowed.'
@@ -51,29 +48,16 @@ app.use(fileUpload({
 app.use('/uploads', express.static('uploads'));
 
 // ========================
-// 🔥 FIX: Raw body parser middleware (YE ADD KAR)
+// Timeout middleware
 // ========================
 app.use((req, res, next) => {
-  // Increase timeout
-  req.setTimeout(30 * 60 * 1000); // 30 minutes
-  res.setTimeout(30 * 60 * 1000); // 30 minutes
+  req.setTimeout(30 * 60 * 1000);
+  res.setTimeout(30 * 60 * 1000);
   next();
 });
 
 // ========================
-// 🔥 FIX: CORS (EK BAAR MEIN SAB)
-// ========================
-app.use(cors({
-  origin: true, // Ya specific origins
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
-  credentials: true,
-  optionsSuccessStatus: 200
-}));
-
-
-// ========================
-// CORS Configuration
+// CORS - FIXED (Duplicate HATAYA)
 // ========================
 app.use(cors({
   origin: [
@@ -87,11 +71,13 @@ app.use(cors({
     'https://vendor.vegiffy.in',
     'https://vegiffypanel.vegiffy.in'
   ],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-  credentials: true
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'subAdminId'],
+  credentials: true,
+  optionsSuccessStatus: 200
 }));
 
-// Socket.IO setup with proper CORS
+// Socket.IO setup
 const io = socketIo(server, {
   cors: {
     origin: [
@@ -105,11 +91,9 @@ const io = socketIo(server, {
     methods: ["GET", "POST"],
     credentials: true
   },
-  // Increase max HTTP request size for socket.io
-  maxHttpBufferSize: 1e7 // 10 MB
+  maxHttpBufferSize: 1e7
 });
 
-// Make io available globally
 global.io = io;
 
 // Connect to MongoDB
@@ -140,103 +124,87 @@ app.get("/api/getchat/:deliveryBoyId/:userId", (req, res) => {
   userController.getChatHistory(req, res);
 });
 
-// Live location route
 app.get("/api/location/:deliveryBoyId/:userId", (req, res) => {
   console.log('🎯 Get live location route hit');
   const DeliveryBoy = require('./controllers/deliveryBoyController');
   DeliveryBoy.getLiveLocation(req, res);
 });
 
-// ========================
-// 🔥 IMPORTANT: Global Error Handler for File Size
-// ========================
+// Global Error Handler
 app.use((err, req, res, next) => {
-  // Handle payload too large error
   if (err.type === 'entity.too.large') {
     return res.status(413).json({
       success: false,
-      message: 'Request entity too large. Maximum 50MB allowed.'
+      message: 'Request entity too large. Maximum 200MB allowed.'
     });
   }
   
-  // Handle multer/fileupload errors
   if (err.code === 'LIMIT_FILE_SIZE') {
     return res.status(413).json({
       success: false,
-      message: 'File too large. Maximum 50MB total allowed.'
+      message: 'File too large. Maximum 200MB total allowed.'
     });
   }
   
   console.error('Server Error:', err);
   res.status(500).json({
     success: false,
-    message: 'Internal server error'
+    message: err.message || 'Internal server error'
   });
 });
 
-// Socket.IO connection handling with detailed logging
+// Socket.IO connection handling
 io.on('connection', (socket) => {
   console.log('🟢 A user connected:', socket.id);
 
-  // Join specific room for chat
   socket.on('joinChat', (data) => {
     const { deliveryBoyId, userId } = data;
     const roomId = `${deliveryBoyId}_${userId}`;
     socket.join(roomId);
-    console.log(`🔷 User ${socket.id} joined chat room: ${roomId}`);
+    console.log(`🔷 User joined chat room: ${roomId}`);
   });
 
-  // Delivery boy joins his location room
   socket.on('joinDeliveryBoyLocation', (deliveryBoyId) => {
     const roomName = `location_${deliveryBoyId}`;
     socket.join(roomName);
-    console.log(`🚴 Delivery boy ${deliveryBoyId} joined location room: ${roomName}`);
+    console.log(`🚴 Delivery boy joined location room: ${roomName}`);
   });
 
-  // User joins to listen to delivery boy location
   socket.on('joinUserLocation', (userId) => {
     const roomName = `user_${userId}`;
     socket.join(roomName);
-    console.log(`👤 User ${userId} joined location room: ${roomName}`);
+    console.log(`👤 User joined location room: ${roomName}`);
   });
 
-  // User joins specific delivery boy location room
   socket.on('joinDeliveryBoyTracking', (deliveryBoyId) => {
     const roomName = `location_${deliveryBoyId}`;
     socket.join(roomName);
     console.log(`👤 User joined delivery boy tracking room: ${roomName}`);
   });
 
-  // Leave room
   socket.on('leaveChat', (data) => {
     const { deliveryBoyId, userId } = data;
     const roomId = `${deliveryBoyId}_${userId}`;
     socket.leave(roomId);
-    console.log(`🔶 User ${socket.id} left room: ${roomId}`);
+    console.log(`🔶 User left room: ${roomId}`);
   });
 
-  // Location update from delivery boy
   socket.on('updateLocation', (data) => {
     const { deliveryBoyId, latitude, longitude } = data;
     const roomName = `location_${deliveryBoyId}`;
-    
-    // Broadcast to all users tracking this delivery boy
     socket.to(roomName).emit('locationUpdated', {
       deliveryBoyId,
       latitude,
       longitude,
       timestamp: new Date()
     });
-    
-    console.log(`📍 Location updated for delivery boy ${deliveryBoyId}: ${latitude}, ${longitude}`);
+    console.log(`📍 Location updated for delivery boy ${deliveryBoyId}`);
   });
 
-  // Handle socket disconnection
   socket.on('disconnect', (reason) => {
     console.log('🔴 A user disconnected:', socket.id, 'Reason:', reason);
   });
 
-  // Error handling
   socket.on('error', (error) => {
     console.error('Socket error:', error);
   });
@@ -247,5 +215,5 @@ const PORT = process.env.PORT || 5050;
 server.listen(PORT, () => {
   console.log(`🚀 Server running at http://localhost:${PORT}`);
   console.log(`🔌 Socket.IO server is ready`);
-  console.log(`📁 File upload limit: 50MB`);
+  console.log(`📁 File upload limit: 200MB`);
 });

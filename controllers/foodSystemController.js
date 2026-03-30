@@ -16,6 +16,8 @@ const Ambassador = require("../models/ambassadorModel");
 const userModel = require("../models/userModel");
 const Commission = require("../models/Commission");
 const SubAdmin = require("../models/SubAdmin");
+const path = require('path');
+
 
 
 // Cloudinary config
@@ -25,8 +27,32 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
+const UPLOADS_DIR = path.join(__dirname, '../uploads');
+
+
+// Upload directories
+const CATEGORIES_DIR = path.join(UPLOADS_DIR, 'categories');
+const SUBCATEGORIES_DIR = path.join(UPLOADS_DIR, 'subcategories');
+
+// Ensure directories exist
+if (!fs.existsSync(CATEGORIES_DIR)) {
+  fs.mkdirSync(CATEGORIES_DIR, { recursive: true });
+  console.log(`📁 Created categories directory: ${CATEGORIES_DIR}`);
+}
+if (!fs.existsSync(SUBCATEGORIES_DIR)) {
+  fs.mkdirSync(SUBCATEGORIES_DIR, { recursive: true });
+  console.log(`📁 Created subcategories directory: ${SUBCATEGORIES_DIR}`);
+}
+
+// Base URL
+const BASE_URL = 'https://api.vegiffyy.com';
+
+// ✅ CREATE CATEGORY
 exports.createCategory = async (req, res) => {
   try {
+    console.log('📁 Received files:', req.files);
+    console.log('📝 Received body:', req.body);
+
     const { categoryName, subAdminId } = req.body;
     const file = req.files?.image;
 
@@ -38,28 +64,39 @@ exports.createCategory = async (req, res) => {
       return res.status(400).json({ message: "Main category image is required" });
     }
 
-    // 🔹 Upload category image
-    const uploaded = await cloudinary.uploader.upload(file.tempFilePath, {
-      folder: "categories",
-    });
+    // 🔹 Upload category image locally
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const ext = path.extname(file.name);
+    const filename = `category-${uniqueSuffix}${ext}`;
+    const uploadPath = path.join(CATEGORIES_DIR, filename);
+    await file.mv(uploadPath);
+
+    const imageUrl = `${BASE_URL}/uploads/categories/${filename}`;
+    console.log(`✅ Category image saved: ${imageUrl}`);
 
     // 🔹 Default → Admin
     let createdBy = null;
     let note = "Created by Admin";
 
     // 🔹 If SubAdmin
-    if (subAdminId) {
+    if (subAdminId && subAdminId !== 'null' && subAdminId !== 'undefined') {
       const subAdmin = await SubAdmin.findById(subAdminId);
       if (!subAdmin) {
         return res.status(404).json({ message: "Sub-admin not found" });
       }
 
-      createdBy = subAdmin._id;   // ✅ IMPORTANT FIX
-      note = `Created by Sub-admin: ${subAdmin.name}`;
+      createdBy = subAdmin._id;
+      note = `Created by Sub-admin: ${subAdmin.name} on ${new Date().toLocaleDateString()}`;
     }
 
     // 🔹 Subcategories
-    const subcategories = JSON.parse(req.body.subcategories || "[]");
+    let subcategories = [];
+    try {
+      subcategories = JSON.parse(req.body.subcategories || "[]");
+    } catch (e) {
+      subcategories = [];
+    }
+
     const formattedSubcategories = [];
 
     for (let i = 0; i < subcategories.length; i++) {
@@ -67,11 +104,14 @@ exports.createCategory = async (req, res) => {
       let subImageUrl = null;
 
       if (subImage) {
-        const uploadedSub = await cloudinary.uploader.upload(
-          subImage.tempFilePath,
-          { folder: "subcategories" }
-        );
-        subImageUrl = uploadedSub.secure_url;
+        const subUniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        const subExt = path.extname(subImage.name);
+        const subFilename = `subcategory-${subUniqueSuffix}${subExt}`;
+        const subUploadPath = path.join(SUBCATEGORIES_DIR, subFilename);
+        await subImage.mv(subUploadPath);
+
+        subImageUrl = `${BASE_URL}/uploads/subcategories/${subFilename}`;
+        console.log(`✅ Subcategory image saved: ${subImageUrl}`);
       }
 
       formattedSubcategories.push({
@@ -83,10 +123,10 @@ exports.createCategory = async (req, res) => {
     // 🔹 SAVE CATEGORY
     const category = await Category.create({
       categoryName,
-      imageUrl: uploaded.secure_url,
+      imageUrl: imageUrl,
       subcategories: formattedSubcategories,
       status: "pending",
-      createdBy,   // ✅ STORE HERE
+      createdBy,
       note
     });
 
@@ -105,7 +145,7 @@ exports.createCategory = async (req, res) => {
   }
 };
 
-
+// ✅ UPDATE CATEGORY
 exports.updateCategory = async (req, res) => {
   try {
     const categoryId = req.params.id;
@@ -129,11 +169,24 @@ exports.updateCategory = async (req, res) => {
     const file = req.files?.image;
 
     if (file) {
-      const uploaded = await cloudinary.uploader.upload(file.tempFilePath, {
-        folder: "categories"
-      });
+      // Delete old image
+      if (category.imageUrl) {
+        const oldImagePath = path.join(CATEGORIES_DIR, path.basename(category.imageUrl));
+        if (fs.existsSync(oldImagePath)) {
+          fs.unlinkSync(oldImagePath);
+          console.log(`🗑️ Deleted old category image: ${oldImagePath}`);
+        }
+      }
 
-      category.imageUrl = uploaded.secure_url;
+      // Upload new image
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+      const ext = path.extname(file.name);
+      const filename = `category-${uniqueSuffix}${ext}`;
+      const uploadPath = path.join(CATEGORIES_DIR, filename);
+      await file.mv(uploadPath);
+
+      category.imageUrl = `${BASE_URL}/uploads/categories/${filename}`;
+      console.log(`✅ New category image saved: ${category.imageUrl}`);
     }
 
     /* ======================
@@ -141,7 +194,12 @@ exports.updateCategory = async (req, res) => {
     ====================== */
 
     if (req.body.subcategories) {
-      const subcategories = JSON.parse(req.body.subcategories || "[]");
+      let subcategories = [];
+      try {
+        subcategories = JSON.parse(req.body.subcategories);
+      } catch (e) {
+        subcategories = [];
+      }
 
       const updatedSubcategories = [];
 
@@ -153,16 +211,28 @@ exports.updateCategory = async (req, res) => {
         const subImage = req.files?.[`subcategoryImage_${i}`];
 
         if (subImage) {
-          const uploadedSub = await cloudinary.uploader.upload(
-            subImage.tempFilePath,
-            { folder: "subcategories" }
-          );
+          // Delete old subcategory image if exists
+          if (subImageUrl && !subImageUrl.startsWith('http')) {
+            const oldSubImagePath = path.join(SUBCATEGORIES_DIR, path.basename(subImageUrl));
+            if (fs.existsSync(oldSubImagePath)) {
+              fs.unlinkSync(oldSubImagePath);
+              console.log(`🗑️ Deleted old subcategory image: ${oldSubImagePath}`);
+            }
+          }
 
-          subImageUrl = uploadedSub.secure_url;
+          // Upload new subcategory image
+          const subUniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+          const subExt = path.extname(subImage.name);
+          const subFilename = `subcategory-${subUniqueSuffix}${subExt}`;
+          const subUploadPath = path.join(SUBCATEGORIES_DIR, subFilename);
+          await subImage.mv(subUploadPath);
+
+          subImageUrl = `${BASE_URL}/uploads/subcategories/${subFilename}`;
+          console.log(`✅ New subcategory image saved: ${subImageUrl}`);
         }
 
         updatedSubcategories.push({
-          _id: sub._id || new mongoose.Types.ObjectId(), // existing or new
+          _id: sub._id || new mongoose.Types.ObjectId(),
           subcategoryName: sub.subcategoryName,
           subcategoryImageUrl: subImageUrl
         });
@@ -175,7 +245,7 @@ exports.updateCategory = async (req, res) => {
        NOTE TRACKING
     ====================== */
 
-    if (subAdminId) {
+    if (subAdminId && subAdminId !== 'null' && subAdminId !== 'undefined') {
       const subAdmin = await SubAdmin.findById(subAdminId);
 
       if (!subAdmin) {
@@ -185,9 +255,9 @@ exports.updateCategory = async (req, res) => {
         });
       }
 
-      category.note = `Updated by Sub-admin: ${subAdmin.name}`;
+      category.note = `Updated by Sub-admin: ${subAdmin.name} on ${new Date().toLocaleDateString()}`;
     } else {
-      category.note = "Updated by Admin";
+      category.note = `Updated by Admin on ${new Date().toLocaleDateString()}`;
     }
 
     await category.save();
@@ -200,13 +270,13 @@ exports.updateCategory = async (req, res) => {
 
   } catch (err) {
     console.error("Update category error:", err);
-
     res.status(500).json({
       success: false,
       message: err.message
     });
   }
 };
+
 
 
 exports.deleteCategory = async (req, res) => {
@@ -390,14 +460,67 @@ exports.deleteVegFood = async (req, res) => {
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 const MAX_TOTAL_SIZE = 15 * 1024 * 1024; // 15MB
 
-// Create Restaurant Controller with FSSAI No, Disclaimers, and Full Address fields
+// Upload directories
+const RESTAURANTS_DIR = path.join(UPLOADS_DIR, 'restaurants');
+const DOCUMENTS_DIR = path.join(RESTAURANTS_DIR, 'documents');
+const AADHAR_DIR = path.join(DOCUMENTS_DIR, 'aadhar');
+const GST_DIR = path.join(DOCUMENTS_DIR, 'gst');
+
+// Ensure directories exist
+if (!fs.existsSync(RESTAURANTS_DIR)) {
+  fs.mkdirSync(RESTAURANTS_DIR, { recursive: true });
+}
+if (!fs.existsSync(DOCUMENTS_DIR)) {
+  fs.mkdirSync(DOCUMENTS_DIR, { recursive: true });
+}
+if (!fs.existsSync(AADHAR_DIR)) {
+  fs.mkdirSync(AADHAR_DIR, { recursive: true });
+}
+if (!fs.existsSync(GST_DIR)) {
+  fs.mkdirSync(GST_DIR, { recursive: true });
+}
+
+console.log('📁 Restaurant upload directories created');
+
+
+// Helper function to upload file locally
+const uploadLocalFile = async (file, folderPath, subFolder = '') => {
+  if (!file) return null;
+
+  const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+  const ext = path.extname(file.name);
+  const filename = `${uniqueSuffix}${ext}`;
+
+  let uploadPath;
+  if (subFolder) {
+    uploadPath = path.join(folderPath, subFolder, filename);
+  } else {
+    uploadPath = path.join(folderPath, filename);
+  }
+
+  await file.mv(uploadPath);
+
+  // Return URL relative to uploads folder
+  if (subFolder) {
+    return `${BASE_URL}/uploads/restaurants/${subFolder}/${filename}`;
+  }
+  return `${BASE_URL}/uploads/restaurants/${filename}`;
+};
+
+
+
+function sendError(res, msg) {
+  return res.status(400).json({ success: false, message: msg });
+}
+
+// Create Restaurant Controller
 exports.createRestaurant = async (req, res) => {
   try {
     const {
       restaurantName,
       description,
       locationName,
-      fullAddress, // 👈 NEW FIELD ADDED
+      fullAddress,
       email,
       mobile,
       gstNumber,
@@ -408,7 +531,7 @@ exports.createRestaurant = async (req, res) => {
       lng,
       commission,
       discount,
-      disclaimers // Will come as JSON string
+      disclaimers
     } = req.body || {};
 
     /* ---------------- OPTIONAL VALIDATIONS ---------------- */
@@ -444,7 +567,6 @@ exports.createRestaurant = async (req, res) => {
       try {
         parsedDisclaimers = typeof disclaimers === 'string' ? JSON.parse(disclaimers) : disclaimers;
       } catch (e) {
-        // If parsing fails, treat as single disclaimer string
         parsedDisclaimers = [disclaimers];
       }
     }
@@ -468,75 +590,62 @@ exports.createRestaurant = async (req, res) => {
       }
     }
 
-    /* ---------------- UPLOAD FUNCTION ---------------- */
-    const uploadAndCompressFile = async (file, folder) => {
-      if (!file) return null;
-
-      const isImage = file.mimetype?.startsWith("image/");
-
-      const result = await cloudinary.uploader.upload(file.tempFilePath, {
-        folder,
-        resource_type: "auto",
-        transformation: isImage
-          ? [{ quality: "auto:good", fetch_format: "auto" }]
-          : []
-      });
-
-      try {
-        fs.unlinkSync(file.tempFilePath);
-      } catch {}
-
-      return {
-        public_id: result.public_id,
-        url: result.secure_url,
-        format: result.format,
-        size: result.bytes
-      };
-    };
-
-    /* ---------------- FILE UPLOADS ---------------- */
+    /* ---------------- LOCAL FILE UPLOADS ---------------- */
     const uploadedFiles = {};
 
+    // Upload restaurant image
     if (req.files?.image) {
-      uploadedFiles.image = await uploadAndCompressFile(
+      uploadedFiles.image = await uploadLocalFile(
         req.files.image,
-        "restaurants/images"
+        RESTAURANTS_DIR,
+        'images'
       );
+      console.log(`✅ Restaurant image saved: ${uploadedFiles.image}`);
     }
 
+    // Upload FSSAI License
     if (req.files?.fssaiLicense) {
-      uploadedFiles.fssaiLicense = await uploadAndCompressFile(
+      uploadedFiles.fssaiLicense = await uploadLocalFile(
         req.files.fssaiLicense,
-        "restaurants/documents"
+        DOCUMENTS_DIR
       );
+      console.log(`✅ FSSAI License saved: ${uploadedFiles.fssaiLicense}`);
     }
 
+    // Upload PAN Card
     if (req.files?.panCard) {
-      uploadedFiles.panCard = await uploadAndCompressFile(
+      uploadedFiles.panCard = await uploadLocalFile(
         req.files.panCard,
-        "restaurants/documents"
+        DOCUMENTS_DIR
       );
+      console.log(`✅ PAN Card saved: ${uploadedFiles.panCard}`);
     }
 
+    // Upload Aadhar Card Front
     if (req.files?.aadharCardFront) {
-      uploadedFiles.aadharCardFront = await uploadAndCompressFile(
+      uploadedFiles.aadharCardFront = await uploadLocalFile(
         req.files.aadharCardFront,
-        "restaurants/documents/aadhar"
+        AADHAR_DIR
       );
+      console.log(`✅ Aadhar Front saved: ${uploadedFiles.aadharCardFront}`);
     }
 
+    // Upload Aadhar Card Back
     if (req.files?.aadharCardBack) {
-      uploadedFiles.aadharCardBack = await uploadAndCompressFile(
+      uploadedFiles.aadharCardBack = await uploadLocalFile(
         req.files.aadharCardBack,
-        "restaurants/documents/aadhar"
+        AADHAR_DIR
       );
+      console.log(`✅ Aadhar Back saved: ${uploadedFiles.aadharCardBack}`);
     }
 
+    // Upload GST Certificate
     if (req.files?.gstCertificate) {
-      uploadedFiles.gstCertificate = await uploadAndCompressFile(
+      uploadedFiles.gstCertificate = await uploadLocalFile(
         req.files.gstCertificate,
-        "restaurants/documents/gst"
+        GST_DIR
       );
+      console.log(`✅ GST Certificate saved: ${uploadedFiles.gstCertificate}`);
     }
 
     /* ---------------- CREATE RESTAURANT ---------------- */
@@ -547,7 +656,7 @@ exports.createRestaurant = async (req, res) => {
       restaurantName: restaurantName || null,
       description: description || null,
       locationName: locationName || null,
-      fullAddress: fullAddress || null, // 👈 NEW FIELD ADDED
+      fullAddress: fullAddress || null,
       email: email || null,
       mobile: mobile || null,
       gstNumber: gstNumber || null,
@@ -557,7 +666,7 @@ exports.createRestaurant = async (req, res) => {
       password: password || null,
       referredBy: referralCode || null,
       referralCode: generatedReferralCode,
-      disclaimers: parsedDisclaimers, // Save disclaimers array
+      disclaimers: parsedDisclaimers,
       location: lat && lng ? {
         type: "Point",
         coordinates: [Number(lng), Number(lat)]
@@ -590,9 +699,6 @@ exports.createRestaurant = async (req, res) => {
     });
   }
 };
-function sendError(res, msg) {
-  return res.status(400).json({ success: false, message: msg });
-}
 
 
 
@@ -646,7 +752,7 @@ exports.getAllRestaurants = async (req, res) => {
     });
 
     // 🔹 Step 4: Fetch all restaurants normally (full details)
-const restaurants = await Restaurant.find({ status: "active" });
+    const restaurants = await Restaurant.find({ status: "active" });
     // 🔹 Step 5: Merge stats and user count into restaurant objects
     const result = restaurants.map(restaurant => {
       // Use null checks to prevent errors
@@ -812,7 +918,7 @@ exports.getAllPendingRestaurants = async (req, res) => {
     });
 
     // 🔹 Step 4: Fetch all restaurants normally (full details)
-const restaurants = await Restaurant.find({ status: "pending" });
+    const restaurants = await Restaurant.find({ status: "pending" });
     // 🔹 Step 5: Merge stats and user count into restaurant objects
     const result = restaurants.map(restaurant => {
       // Use null checks to prevent errors
@@ -859,10 +965,10 @@ exports.getRestaurantById = async (req, res) => {
     // Calculate totalRatings as average stars
     const totalRatings = restaurant.reviews.length > 0
       ? parseFloat(
-          (
-            restaurant.reviews.reduce((acc, r) => acc + r.stars, 0) / restaurant.reviews.length
-          ).toFixed(2)
-        )
+        (
+          restaurant.reviews.reduce((acc, r) => acc + r.stars, 0) / restaurant.reviews.length
+        ).toFixed(2)
+      )
       : 0;
 
     res.status(200).json({
@@ -881,11 +987,11 @@ exports.getRestaurantById = async (req, res) => {
 
 
 
-// Update Restaurant Controller with Category Support
+// Update Restaurant Controller with Category Support (NO CLOUDINARY)
 exports.updateRestaurant = async (req, res) => {
   try {
     const { id } = req.params;
-    const { subAdminId, categories } = req.body; // 👈 added categories
+    const { subAdminId, categories } = req.body;
 
     // Find restaurant
     let restaurant = await Restaurant.findById(id);
@@ -904,9 +1010,12 @@ exports.updateRestaurant = async (req, res) => {
       "rating",
       "status",
       "commission",
+      "discount",
       "email",
       "mobile",
       "gstNumber",
+      "fullAddress",
+      "fssaiNo"
     ];
 
     // Update simple fields
@@ -919,34 +1028,40 @@ exports.updateRestaurant = async (req, res) => {
     // Commission validation
     if (req.body.commission !== undefined) {
       const commission = parseFloat(req.body.commission);
-
       if (isNaN(commission) || commission < 0 || commission > 50) {
         return res.status(400).json({
           success: false,
           message: "Commission must be between 0 and 50",
         });
       }
-
       restaurant.commission = commission;
+    }
+
+    // Discount validation
+    if (req.body.discount !== undefined) {
+      const discount = parseFloat(req.body.discount);
+      if (isNaN(discount) || discount < 0 || discount > 100) {
+        return res.status(400).json({
+          success: false,
+          message: "Discount must be between 0 and 100",
+        });
+      }
+      restaurant.discount = discount;
     }
 
     // ✅ Categories update
     if (categories !== undefined) {
-      // If categories is a string (coming from form data), parse it
       let categoryArray = categories;
-      
+
       if (typeof categories === 'string') {
         try {
           categoryArray = JSON.parse(categories);
         } catch (e) {
-          // If it's not JSON, treat as comma-separated string
           categoryArray = categories.split(',').map(id => id.trim());
         }
       }
 
-      // Validate that all category IDs exist (using already imported Category model)
       if (Array.isArray(categoryArray) && categoryArray.length > 0) {
-        // Category model already imported at the top of the file
         const validCategories = await Category.find({
           '_id': { $in: categoryArray },
           status: 'active'
@@ -960,34 +1075,57 @@ exports.updateRestaurant = async (req, res) => {
         }
       }
 
-      // Update categories array
       restaurant.categories = Array.isArray(categoryArray) ? categoryArray : [];
     }
 
-    // ✅ Image update
+    // ✅ Image update (LOCAL - NO CLOUDINARY)
     if (req.files && req.files.image) {
       const file = req.files.image;
 
-      if (restaurant.image?.public_id) {
-        await cloudinary.uploader.destroy(restaurant.image.public_id);
+      // Delete old image if exists
+      if (restaurant.image) {
+        const oldImagePath = path.join(RESTAURANT_IMAGES_DIR, path.basename(restaurant.image));
+        if (fs.existsSync(oldImagePath)) {
+          fs.unlinkSync(oldImagePath);
+          console.log(`🗑️ Deleted old restaurant image: ${oldImagePath}`);
+        }
       }
 
-      const result = await cloudinary.uploader.upload(file.tempFilePath, {
-        folder: "restaurants",
-      });
+      // Upload new image locally
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+      const ext = path.extname(file.name);
+      const filename = `restaurant-${uniqueSuffix}${ext}`;
+      const uploadPath = path.join(RESTAURANT_IMAGES_DIR, filename);
+      await file.mv(uploadPath);
 
-      restaurant.image = {
-        public_id: result.public_id,
-        url: result.secure_url,
+      restaurant.image = `${BASE_URL}/uploads/restaurants/images/${filename}`;
+      console.log(`✅ New restaurant image saved: ${restaurant.image}`);
+    }
+
+    // ✅ Location update
+    if (req.body.lat && req.body.lng) {
+      restaurant.location = {
+        type: "Point",
+        coordinates: [Number(req.body.lng), Number(req.body.lat)]
       };
     }
 
+    // ✅ Disclaimers update
+    if (req.body.disclaimers) {
+      try {
+        restaurant.disclaimers = typeof req.body.disclaimers === 'string'
+          ? JSON.parse(req.body.disclaimers)
+          : req.body.disclaimers;
+      } catch (e) {
+        restaurant.disclaimers = [req.body.disclaimers];
+      }
+    }
+
     // ✅ NOTE & UPDATED BY logic
-    let note = "Updated by Admin";
+    let note = `Updated by Admin on ${new Date().toLocaleDateString()}`;
     let updatedBy = null;
 
-    if (subAdminId) {
-      // SubAdmin model already imported at the top of the file
+    if (subAdminId && subAdminId !== 'null' && subAdminId !== 'undefined') {
       const subAdmin = await SubAdmin.findById(subAdminId);
       if (!subAdmin) {
         return res.status(404).json({
@@ -996,7 +1134,7 @@ exports.updateRestaurant = async (req, res) => {
         });
       }
 
-      note = `Updated by Sub-admin: ${subAdmin.name}`;
+      note = `Updated by Sub-admin: ${subAdmin.name} on ${new Date().toLocaleDateString()}`;
       updatedBy = subAdminId;
     }
 
@@ -1024,23 +1162,42 @@ exports.updateRestaurant = async (req, res) => {
   }
 };
 
-
-// ✅ Delete Restaurant
+// ✅ Delete Restaurant (NO CLOUDINARY)
 exports.deleteRestaurant = async (req, res) => {
   try {
-    const restaurant = await Restaurant.findByIdAndDelete(req.params.id);
-    if (!restaurant) return res.status(404).json({ success: false, message: "Restaurant not found" });
-
-    if (restaurant.image?.public_id) {
-      await cloudinary.uploader.destroy(restaurant.image.public_id);
+    const restaurant = await Restaurant.findById(req.params.id);
+    if (!restaurant) {
+      return res.status(404).json({
+        success: false,
+        message: "Restaurant not found"
+      });
     }
 
-    res.status(200).json({ success: true, message: "Restaurant deleted" });
+    // ✅ Delete image if exists
+    if (restaurant.image) {
+      const imagePath = path.join(__dirname, '../uploads/restaurants/images', path.basename(restaurant.image));
+      if (fs.existsSync(imagePath)) {
+        fs.unlinkSync(imagePath);
+      }
+    }
+
+    // ✅ Delete restaurant from database
+    await Restaurant.findByIdAndDelete(req.params.id);
+
+    res.status(200).json({
+      success: true,
+      message: "Restaurant deleted successfully ✅"
+    });
+
   } catch (err) {
-    res.status(500).json({ success: false, message: "Server error", error: err.message });
+    console.error("Delete Restaurant Error:", err);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err.message
+    });
   }
 };
-
 
 
 
@@ -1125,8 +1282,10 @@ exports.getNearbyRestaurants = async (req, res) => {
 
     const [userLng, userLat] = user.location.coordinates;
 
-    // 3️⃣ Fetch all restaurants
-    const restaurants = await Restaurant.find().select("-__v");
+const restaurants = await Restaurant.find({
+  status: { $ne: "pending" } // exclude pending
+}).select("-__v");
+
 
     // 4️⃣ Correct Haversine formula
     const calculateDistance = (lat1, lon1, lat2, lon2) => {
@@ -1146,31 +1305,38 @@ exports.getNearbyRestaurants = async (req, res) => {
       return R * c; // distance in km
     };
 
-    // 5️⃣ Add distance field for each restaurant
-    const restaurantsWithDistance = restaurants.map((rest) => {
-      if (rest.location && rest.location.coordinates?.length === 2) {
-        const [restLng, restLat] = rest.location.coordinates;
+   // 5️⃣ Add distance field for each restaurant
+const restaurantsWithDistance = restaurants.map((rest) => {
+  if (rest.location && rest.location.coordinates?.length === 2) {
+    const [restLng, restLat] = rest.location.coordinates;
 
-        const distance = calculateDistance(userLat, userLng, restLat, restLng);
+    const distance = calculateDistance(userLat, userLng, restLat, restLng);
 
-        return {
-          ...rest.toObject(),
-          distance: Number(distance.toFixed(2)) + " km"
-        };
-      }
+    return {
+      ...rest.toObject(),
+      distance: Number(distance.toFixed(2)) + " km"
+    };
+  }
 
-      return {
-        ...rest.toObject(),
-        distance: null
-      };
-    });
+  return {
+    ...rest.toObject(),
+    distance: null
+  };
+});
 
-    // 6️⃣ Send response
-    res.status(200).json({
-      success: true,
-      count: restaurantsWithDistance.length,
-      data: restaurantsWithDistance
-    });
+// ✅ ADD THIS SORTING
+restaurantsWithDistance.sort((a, b) => {
+  const distA = a.distance ? parseFloat(a.distance) : Infinity;
+  const distB = b.distance ? parseFloat(b.distance) : Infinity;
+  return distA - distB;
+});
+
+// 6️⃣ Send response
+res.status(200).json({
+  success: true,
+  count: restaurantsWithDistance.length,
+  data: restaurantsWithDistance
+});
 
   } catch (error) {
     console.error("Error fetching nearby restaurants:", error);
@@ -1185,17 +1351,17 @@ exports.getNearbyRestaurants = async (req, res) => {
 function getDistance(coord1, coord2) {
   const [lon1, lat1] = coord1;
   const [lon2, lat2] = coord2;
-  
-  const R = 6371e3; // Earth radius in meters
-  const φ1 = lat1 * Math.PI/180;
-  const φ2 = lat2 * Math.PI/180;
-  const Δφ = (lat2-lat1) * Math.PI/180;
-  const Δλ = (lon2-lon1) * Math.PI/180;
 
-  const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
-            Math.cos(φ1) * Math.cos(φ2) *
-            Math.sin(Δλ/2) * Math.sin(Δλ/2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  const R = 6371e3; // Earth radius in meters
+  const φ1 = lat1 * Math.PI / 180;
+  const φ2 = lat2 * Math.PI / 180;
+  const Δφ = (lat2 - lat1) * Math.PI / 180;
+  const Δλ = (lon2 - lon1) * Math.PI / 180;
+
+  const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+    Math.cos(φ1) * Math.cos(φ2) *
+    Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
   return R * c; // Distance in meters
 }
@@ -1235,12 +1401,11 @@ exports.getNearbyRestaurantsByCategoryV2 = async (req, res) => {
       return res.status(404).json({ success: false, message: "User not found" });
     }
 
-    // ---------------- Query Restaurants ----------------
-    const restaurants = await Restaurant.find({
-      categories: { $in: [new mongoose.Types.ObjectId(categoryId)] },
-      status: "active",
-      isDeleted: false
-    }).select("-__v"); // remove version field
+const restaurants = await Restaurant.find({
+  categories: { $in: [new mongoose.Types.ObjectId(categoryId)] },
+  status: { $ne: "pending" }, // pending ko exclude kar diya
+  isDeleted: false
+}).select("-__v");
 
     if (!restaurants.length) {
       return res.status(404).json({ success: false, message: "No restaurants found for this category" });
@@ -1556,7 +1721,7 @@ exports.processWithdrawalRequest = async (req, res) => {
     // Find withdrawal request
     const withdrawalRequest = await WithdrawalRequest.findById(requestId)
       .populate('restaurantId');
-    
+
     if (!withdrawalRequest) {
       return res.status(404).json({
         success: false,
@@ -2144,9 +2309,26 @@ exports.getRestaurantsByCategory = async (req, res) => {
 
 
 
+// Upload directories
+const DECLARATION_DIR = path.join(DOCUMENTS_DIR, 'declaration-forms');
+const AGREEMENT_DIR = path.join(DOCUMENTS_DIR, 'vendor-agreements');
+
+// Ensure directories exist
+if (!fs.existsSync(DECLARATION_DIR)) {
+  fs.mkdirSync(DECLARATION_DIR, { recursive: true });
+}
+if (!fs.existsSync(AGREEMENT_DIR)) {
+  fs.mkdirSync(AGREEMENT_DIR, { recursive: true });
+}
+
+// Base URL
+
+
+
+// ✅ Upload Restaurant Documents (NO CLOUDINARY)
 exports.uploadRestaurantDocuments = async (req, res) => {
   try {
-    const { vendorId } = req.params; // ✅ changed from 'id' to 'vendorId'
+    const { vendorId } = req.params;
 
     if (!vendorId || !mongoose.Types.ObjectId.isValid(vendorId)) {
       return res.status(400).json({
@@ -2172,25 +2354,17 @@ exports.uploadRestaurantDocuments = async (req, res) => {
       });
     }
 
-    // Cloudinary upload function
-    const uploadFile = async (file, folder) => {
-      const result = await cloudinary.uploader.upload(file.tempFilePath, { 
-        folder: `restaurants-docs/${folder}`,
-        resource_type: 'auto'
-      });
-      return {
-        public_id: result.public_id,
-        url: result.secure_url
-      };
-    };
-
     const updateData = {};
 
-    // Upload declaration form
+    // Upload declaration form (LOCAL)
     if (req.files.declarationForm) {
       try {
-        updateData.declarationForm = await uploadFile(req.files.declarationForm, "declaration-forms");
-        updateData.declarationForm.uploadedAt = new Date();
+        const fileUrl = await uploadLocalFile(req.files.declarationForm, DECLARATION_DIR);
+        updateData.declarationForm = {
+          url: fileUrl,
+          uploadedAt: new Date()
+        };
+        console.log(`✅ Declaration form saved: ${fileUrl}`);
       } catch (uploadError) {
         console.error("Declaration form upload error:", uploadError);
         return res.status(500).json({
@@ -2200,11 +2374,15 @@ exports.uploadRestaurantDocuments = async (req, res) => {
       }
     }
 
-    // Upload vendor agreement
+    // Upload vendor agreement (LOCAL)
     if (req.files.vendorAgreement) {
       try {
-        updateData.vendorAgreement = await uploadFile(req.files.vendorAgreement, "vendor-agreements");
-        updateData.vendorAgreement.uploadedAt = new Date();
+        const fileUrl = await uploadLocalFile(req.files.vendorAgreement, AGREEMENT_DIR);
+        updateData.vendorAgreement = {
+          url: fileUrl,
+          uploadedAt: new Date()
+        };
+        console.log(`✅ Vendor agreement saved: ${fileUrl}`);
       } catch (uploadError) {
         console.error("Vendor agreement upload error:", uploadError);
         return res.status(500).json({
@@ -2236,7 +2414,6 @@ exports.uploadRestaurantDocuments = async (req, res) => {
     });
   }
 };
-
 
 
 // Get All Commissions

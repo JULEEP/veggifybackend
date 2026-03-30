@@ -22,6 +22,9 @@ const Charge = require('../models/Charge');
 const jwt = require("jsonwebtoken");
 
 const nodemailer = require("nodemailer");
+const path = require('path');
+const fs = require('fs');
+
 
 
 const dotenv = require("dotenv");
@@ -608,7 +611,7 @@ exports.getDashboardData = async (req, res) => {
     
     const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
 
-    // All database queries in parallel - CORRECTED MODEL NAMES
+    // All database queries in parallel
     const [
       totalUsers,
       totalRestaurants,
@@ -618,8 +621,8 @@ exports.getDashboardData = async (req, res) => {
       totalOrders,
       todayOrders,
       totalProducts,
-      totalBannersCount, // Changed variable name to indicate it's a count
-      totalCategoriesCount, // Changed variable name to indicate it's a count
+      totalBannersCount,
+      totalCategoriesCount,
       todayRevenue,
       totalRevenue,
       orderStatusStats,
@@ -634,6 +637,10 @@ exports.getDashboardData = async (req, res) => {
       restaurantModel.countDocuments(),
       restaurantModel.countDocuments({ status: 'active' }),
       
+      // Riders count (agar pehle se defined hai to wahi rahega)
+      riderModel.countDocuments(),
+      riderModel.countDocuments({ status: 'active' }),
+      
       // Orders count
       orderModel.countDocuments(),
       orderModel.countDocuments({ createdAt: { $gte: today } }),
@@ -641,10 +648,10 @@ exports.getDashboardData = async (req, res) => {
       // Products count
       restaurantProductModel.countDocuments(),
       
-      // Banners count (only count)
+      // Banners count
       Banner.countDocuments(),
       
-      // Categories count (only count)
+      // Categories count
       Category.countDocuments(),
       
       // Today's revenue
@@ -747,7 +754,7 @@ exports.getDashboardData = async (req, res) => {
       value: item.count
     }));
 
-    // Format sales data for charts - FIXED: Use actual data
+    // Format sales data
     const salesData = {
       today: [{ name: "Today", sales: todayRevenueAmount }],
       thisWeek: formatChartData(weeklySales, "This Week"),
@@ -767,8 +774,9 @@ exports.getDashboardData = async (req, res) => {
           totalOrders,
           todayOrders,
           totalProducts,
-          totalBannersCount, // Displaying banner count
-          totalCategoriesCount, // Displaying category count
+          totalBannersCount,
+          totalCategoriesCount,
+          totalCategories: totalCategoriesCount, // ✅ ONLY ADDITION
           totalIncome: totalRevenueAmount,
           todayIncome: todayRevenueAmount
         },
@@ -833,6 +841,41 @@ function formatTimeAgo(date) {
 
 
 
+// Upload directories
+const UPLOADS_DIR = path.join(__dirname, '../uploads');
+const STAFF_DIR = path.join(UPLOADS_DIR, 'staff');
+const AADHAR_FRONT_DIR = path.join(STAFF_DIR, 'aadhar', 'front');
+const AADHAR_BACK_DIR = path.join(STAFF_DIR, 'aadhar', 'back');
+const PHOTO_DIR = path.join(STAFF_DIR, 'photo');
+
+// Ensure directories exist
+if (!fs.existsSync(AADHAR_FRONT_DIR)) {
+  fs.mkdirSync(AADHAR_FRONT_DIR, { recursive: true });
+}
+if (!fs.existsSync(AADHAR_BACK_DIR)) {
+  fs.mkdirSync(AADHAR_BACK_DIR, { recursive: true });
+}
+if (!fs.existsSync(PHOTO_DIR)) {
+  fs.mkdirSync(PHOTO_DIR, { recursive: true });
+}
+
+// Base URL
+const BASE_URL = 'https://api.vegiffyy.com';
+
+// Helper function to upload file locally
+const uploadLocalFile = async (file, folderPath) => {
+  const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+  const ext = path.extname(file.name);
+  const filename = `staff-${uniqueSuffix}${ext}`;
+  const uploadPath = path.join(folderPath, filename);
+  await file.mv(uploadPath);
+  
+  // Return relative URL
+  const relativePath = uploadPath.split('uploads')[1];
+  return `${BASE_URL}/uploads${relativePath}`;
+};
+
+// ✅ Register Staff (NO CLOUDINARY)
 exports.registerStaff = async (req, res) => {
   try {
     const { 
@@ -849,10 +892,10 @@ exports.registerStaff = async (req, res) => {
       salary,
       emergencyContact,
       pagesAccess,
-      subAdminId // 👈 added
+      subAdminId
     } = req.body;
 
-    // ✅ express-fileupload
+    // Files from express-fileupload
     const aadharCardFront = req.files?.aadharCardFront;
     const aadharCardBack = req.files?.aadharCardBack;
     const photo = req.files?.photo;
@@ -864,7 +907,7 @@ exports.registerStaff = async (req, res) => {
       });
     }
 
-    // ✅ Check duplicate staff
+    // Check duplicate staff
     const existingStaff = await Staff.findOne({
       $or: [
         { email: email.toLowerCase() },
@@ -872,27 +915,27 @@ exports.registerStaff = async (req, res) => {
       ],
     });
 
-   
-    // ✅ Upload documents
-    const aadharFrontUpload = await cloudinary.uploader.upload(
-      aadharCardFront.tempFilePath,
-      { folder: "staff/aadhar/front", resource_type: "auto" }
-    );
-
-    const photoUpload = await cloudinary.uploader.upload(
-      photo.tempFilePath,
-      { folder: "staff/photo", resource_type: "image" }
-    );
-
-    let aadharBackUpload = null;
-    if (aadharCardBack) {
-      aadharBackUpload = await cloudinary.uploader.upload(
-        aadharCardBack.tempFilePath,
-        { folder: "staff/aadhar/back", resource_type: "auto" }
-      );
+    if (existingStaff) {
+      return res.status(400).json({
+        success: false,
+        message: "Staff with this email or phone already exists",
+      });
     }
 
-    // ✅ Parse pagesAccess
+    // ✅ Upload documents locally
+    const aadharFrontUrl = await uploadLocalFile(aadharCardFront, AADHAR_FRONT_DIR);
+    console.log(`✅ Aadhar Front saved: ${aadharFrontUrl}`);
+
+    const photoUrl = await uploadLocalFile(photo, PHOTO_DIR);
+    console.log(`✅ Photo saved: ${photoUrl}`);
+
+    let aadharBackUrl = null;
+    if (aadharCardBack) {
+      aadharBackUrl = await uploadLocalFile(aadharCardBack, AADHAR_BACK_DIR);
+      console.log(`✅ Aadhar Back saved: ${aadharBackUrl}`);
+    }
+
+    // Parse pagesAccess
     let parsedPagesAccess = [];
     if (pagesAccess) {
       try {
@@ -905,11 +948,11 @@ exports.registerStaff = async (req, res) => {
       }
     }
 
-    // ✅ NOTE & CREATED BY logic
-    let note = "Staff registered by Admin";
+    // NOTE & CREATED BY logic
+    let note = `Staff registered by Admin on ${new Date().toLocaleDateString()}`;
     let createdBy = null;
 
-    if (subAdminId) {
+    if (subAdminId && subAdminId !== 'null' && subAdminId !== 'undefined') {
       const subAdmin = await SubAdmin.findById(subAdminId);
       if (!subAdmin) {
         return res.status(404).json({
@@ -918,11 +961,11 @@ exports.registerStaff = async (req, res) => {
         });
       }
 
-      note = `Staff registered by Sub-admin: ${subAdmin.name}`;
+      note = `Staff registered by Sub-admin: ${subAdmin.name} on ${new Date().toLocaleDateString()}`;
       createdBy = subAdminId;
     }
 
-    // ✅ Create staff
+    // Create staff
     const staffData = {
       fullName,
       email: email.toLowerCase(),
@@ -936,14 +979,14 @@ exports.registerStaff = async (req, res) => {
       address: address || null,
       salary: salary || null,
       emergencyContact: emergencyContact || null,
-      aadharCardFront: aadharFrontUpload.secure_url,
-      aadharCardBack: aadharBackUpload ? aadharBackUpload.secure_url : null,
-      photo: photoUpload.secure_url,
+      aadharCardFront: aadharFrontUrl,
+      aadharCardBack: aadharBackUrl,
+      photo: photoUrl,
       pagesAccess: parsedPagesAccess,
       status: "pending",
       isActive: true,
-      note,        // 👈 added
-      createdBy    // 👈 added
+      note,
+      createdBy
     };
 
     const newStaff = new Staff(staffData);
@@ -961,6 +1004,7 @@ exports.registerStaff = async (req, res) => {
         status: newStaff.status,
       },
     });
+
   } catch (error) {
     console.error("Staff Registration Error:", error);
 
@@ -982,13 +1026,11 @@ exports.registerStaff = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Server Error",
-      error:
-        process.env.NODE_ENV === "development"
-          ? error.message
-          : undefined,
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
+
 
 exports.addSalaryToStaff = async (req, res) => {
   try {
@@ -1085,7 +1127,7 @@ exports.getStaffById = async (req, res) => {
   }
 };
 
-// Update staff
+// ✅ Update Staff (NO CLOUDINARY)
 exports.updateStaff = async (req, res) => {
   try {
     const { id } = req.params;
@@ -1098,22 +1140,29 @@ exports.updateStaff = async (req, res) => {
       age,
       pagesAccess,
       status,
-      subAdminId, // 👈 added
+      department,
+      employeeId,
+      joiningDate,
+      address,
+      salary,
+      emergencyContact,
+      subAdminId,
     } = req.body;
 
-    // ✅ Check if staff exists
+    // Check if staff exists
     const staff = await Staff.findById(id);
     if (!staff) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Staff not found" });
+      return res.status(404).json({ 
+        success: false, 
+        message: "Staff not found" 
+      });
     }
 
-    // ✅ NOTE & UPDATED BY logic
-    let note = "Staff updated by Admin";
+    // NOTE & UPDATED BY logic
+    let note = `Staff updated by Admin on ${new Date().toLocaleDateString()}`;
     let updatedBy = null;
 
-    if (subAdminId) {
+    if (subAdminId && subAdminId !== 'null' && subAdminId !== 'undefined') {
       const subAdmin = await SubAdmin.findById(subAdminId);
       if (!subAdmin) {
         return res.status(404).json({
@@ -1122,24 +1171,30 @@ exports.updateStaff = async (req, res) => {
         });
       }
 
-      note = `Staff updated by Sub-admin: ${subAdmin.name}`;
+      note = `Staff updated by Sub-admin: ${subAdmin.name} on ${new Date().toLocaleDateString()}`;
       updatedBy = subAdminId;
     }
 
-    // ✅ Prepare update data
+    // Prepare update data
     let updateData = {
-      fullName,
-      email,
-      phone: mobileNumber,
-      role,
-      gender,
-      age,
-      status,
-      note,       // 👈 added
-      updatedBy,  // 👈 added
+      fullName: fullName || staff.fullName,
+      email: email ? email.toLowerCase() : staff.email,
+      phone: mobileNumber || staff.phone,
+      role: role || staff.role,
+      gender: gender || staff.gender,
+      age: age || staff.age,
+      status: status || staff.status,
+      department: department || staff.department,
+      employeeId: employeeId || staff.employeeId,
+      joiningDate: joiningDate ? new Date(joiningDate) : staff.joiningDate,
+      address: address || staff.address,
+      salary: salary || staff.salary,
+      emergencyContact: emergencyContact || staff.emergencyContact,
+      note,
+      updatedBy,
     };
 
-    // ✅ Parse pagesAccess
+    // Parse pagesAccess
     if (pagesAccess) {
       try {
         updateData.pagesAccess =
@@ -1151,25 +1206,46 @@ exports.updateStaff = async (req, res) => {
       }
     }
 
-    // ✅ Update Aadhar card
-    if (req.files?.aadharCard) {
-      const aadharUpload = await cloudinary.uploader.upload(
-        req.files.aadharCard.tempFilePath,
-        { folder: "staff/aadhar" }
-      );
-      updateData.aadharCard = aadharUpload.secure_url;
+    // ✅ Update Aadhar Card Front (LOCAL)
+    if (req.files?.aadharCardFront) {
+      // Delete old file
+      if (staff.aadharCardFront) {
+        deleteOldFile(staff.aadharCardFront);
+      }
+      
+      // Upload new file
+      const newUrl = await uploadLocalFile(req.files.aadharCardFront, AADHAR_FRONT_DIR);
+      updateData.aadharCardFront = newUrl;
+      console.log(`✅ New Aadhar Front saved: ${newUrl}`);
     }
 
-    // ✅ Update photo
+    // ✅ Update Aadhar Card Back (LOCAL)
+    if (req.files?.aadharCardBack) {
+      // Delete old file
+      if (staff.aadharCardBack) {
+        deleteOldFile(staff.aadharCardBack);
+      }
+      
+      // Upload new file
+      const newUrl = await uploadLocalFile(req.files.aadharCardBack, AADHAR_BACK_DIR);
+      updateData.aadharCardBack = newUrl;
+      console.log(`✅ New Aadhar Back saved: ${newUrl}`);
+    }
+
+    // ✅ Update Photo (LOCAL)
     if (req.files?.photo) {
-      const photoUpload = await cloudinary.uploader.upload(
-        req.files.photo.tempFilePath,
-        { folder: "staff/photo" }
-      );
-      updateData.photo = photoUpload.secure_url;
+      // Delete old file
+      if (staff.photo) {
+        deleteOldFile(staff.photo);
+      }
+      
+      // Upload new file
+      const newUrl = await uploadLocalFile(req.files.photo, PHOTO_DIR);
+      updateData.photo = newUrl;
+      console.log(`✅ New Photo saved: ${newUrl}`);
     }
 
-    // ✅ Update staff
+    // Update staff
     const updatedStaff = await Staff.findByIdAndUpdate(id, updateData, {
       new: true,
       runValidators: true,
@@ -1180,6 +1256,7 @@ exports.updateStaff = async (req, res) => {
       message: "Staff updated successfully ✅",
       data: updatedStaff,
     });
+
   } catch (error) {
     console.error("Error updating staff:", error);
     res.status(500).json({
@@ -1189,7 +1266,6 @@ exports.updateStaff = async (req, res) => {
     });
   }
 };
-
 
 // Update Staff
 // exports.updateStaff = async (req, res) => {
@@ -1699,7 +1775,6 @@ exports.getAllAmbassadorPaymnet = async (req, res) => {
 
 
 // Controller to fetch all stats
-// Controller to fetch all stats
 exports.getDashboardStats = async (req, res) => {
   try {
     // Total Users
@@ -1714,38 +1789,36 @@ exports.getDashboardStats = async (req, res) => {
     // Total Orders
     const totalOrders = await orderModel.countDocuments();
 
-    // Active Users: Assuming we have an `isVerified` flag or similar
+    // Active Users
     const activeUsers = await userModel.countDocuments({ isVerified: true });
 
-    // Total Revenue: Summing order totalPayable amounts (assuming each order has this field)
+    // 🔥 ADD THIS (Category count)
+    const totalCategories = await Category.countDocuments();
+
+    // Total Revenue
     const totalRevenue = await orderModel.aggregate([
-      { $match: { orderStatus: 'Delivered' } },  // Filter for delivered orders
-      { $group: { _id: null, totalRevenue: { $sum: '$totalPayable' } } }, // Sum totalPayable for revenue
+      { $match: { orderStatus: 'Delivered' } },
+      { $group: { _id: null, totalRevenue: { $sum: '$totalPayable' } } },
     ]);
 
-    // Get Counts and Revenue for each Order Status (Delivered, Pending, Cancelled)
     const orderStatusCountsAndRevenue = await orderModel.aggregate([
       {
         $group: {
-          _id: "$orderStatus",   // Grouping by orderStatus
-          count: { $sum: 1 },     // Count of orders by status
-          totalSales: { $sum: '$totalPayable' } // Sum of totalPayable for each status
+          _id: "$orderStatus",
+          count: { $sum: 1 },
+          totalSales: { $sum: '$totalPayable' }
         }
       }
     ]);
 
-    console.log("Order Status Aggregation Result:", orderStatusCountsAndRevenue); // Debug log
-
-    // Initialize order stats with default values
     const orderStats = {
-      delivered: { count: 0, sales: 0 },  // Changed from 'completed' to 'delivered'
+      delivered: { count: 0, sales: 0 },
       pending: { count: 0, sales: 0 },
       cancelled: { count: 0, sales: 0 }
     };
 
-    // Loop through the aggregation result and assign counts and sales
     orderStatusCountsAndRevenue.forEach(status => {
-      if (status._id === 'Delivered') {  // Changed from 'Completed' to 'Delivered'
+      if (status._id === 'Delivered') {
         orderStats.delivered.count = status.count;
         orderStats.delivered.sales = status.totalSales;
       }
@@ -1759,10 +1832,9 @@ exports.getDashboardStats = async (req, res) => {
       }
     });
 
-    // Sales Overview (simplified)
     const salesOverview = {
-      deliveredOrders: orderStats.delivered.count,  // Changed from 'completedOrders'
-      deliveredSales: orderStats.delivered.sales,   // Changed from 'completedSales'
+      deliveredOrders: orderStats.delivered.count,
+      deliveredSales: orderStats.delivered.sales,
       pendingOrders: orderStats.pending.count,
       pendingSales: orderStats.pending.sales,
       cancelledOrders: orderStats.cancelled.count,
@@ -1773,12 +1845,10 @@ exports.getDashboardStats = async (req, res) => {
     // Total Banners
     const totalBanners = await Banner.countDocuments();
 
-    // Fetch Latest Orders (latest 5 orders)
+    // Latest Orders
     const latestOrders = await orderModel.aggregate([
-      { $sort: { createdAt: -1 } }, // Sort by creation date (newest first)
-      { $limit: 5 }, // Limit to the latest 5 orders
-      
-      // Lookup customer details
+      { $sort: { createdAt: -1 } },
+      { $limit: 5 },
       {
         $lookup: {
           from: 'users',
@@ -1793,17 +1863,13 @@ exports.getDashboardStats = async (req, res) => {
           preserveNullAndEmptyArrays: true
         }
       },
-      
-      // Process products array to get first product's details
       {
         $addFields: {
           firstProduct: {
-            $arrayElemAt: ["$products", 0] // Get first product from array
+            $arrayElemAt: ["$products", 0]
           }
         }
       },
-      
-      // Project the required fields
       {
         $project: {
           orderId: "$_id",
@@ -1814,9 +1880,9 @@ exports.getDashboardStats = async (req, res) => {
               { $ifNull: ["$customer.lastName", ""] }
             ]
           },
-          productName: "$firstProduct.name", // Get product name from products array
-          price: "$firstProduct.price", // Get price from products array
-          quantity: "$firstProduct.quantity", // Get quantity if needed
+          productName: "$firstProduct.name",
+          price: "$firstProduct.price",
+          quantity: "$firstProduct.quantity",
           orderStatus: 1,
           totalPayable: 1,
           createdAt: 1,
@@ -1830,25 +1896,21 @@ exports.getDashboardStats = async (req, res) => {
       }
     ]);
 
-    // Additional Metrics
-    // 1. Orders Today
+    // Orders Today
     const ordersToday = await orderModel.countDocuments({
       createdAt: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) }
     });
 
-    // 2. Revenue Today (Delivered orders only)
+    // Revenue Today
     const revenueToday = await orderModel.aggregate([
       { $match: { orderStatus: 'Delivered', createdAt: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) } } },
       { $group: { _id: null, totalRevenue: { $sum: '$totalPayable' } } }
     ]);
 
-    // 3. Success Rate (Delivered Orders / Total Orders)
-    const successRate = totalOrders > 0 ? (orderStats.delivered.count / totalOrders) * 100 : 0;  // Changed from 'completed' to 'delivered'
-
-    // 4. Pending Actions (Pending Orders + Cancelled Orders)
+    const successRate = totalOrders > 0 ? (orderStats.delivered.count / totalOrders) * 100 : 0;
     const pendingActions = orderStats.pending.count + orderStats.cancelled.count;
 
-    // Constructing the response
+    // ✅ FINAL RESPONSE (ONLY ADD ONE FIELD)
     res.status(200).json({
       success: true,
       data: {
@@ -1857,17 +1919,19 @@ exports.getDashboardStats = async (req, res) => {
         totalProducts,
         totalOrders,
         activeUsers,
-        totalRevenue: totalRevenue[0]?.totalRevenue || 0, // Default to 0 if no revenue found
+        totalRevenue: totalRevenue[0]?.totalRevenue || 0,
         totalBanners,
-        orderStats,  // Separate order stats (delivered, pending, cancelled)
-        salesOverview, // Separate sales overview (order count and sales)
-        latestOrders, // Latest 5 orders with details
-        ordersToday, // Orders Today
-        revenueToday: revenueToday[0]?.totalRevenue || 0, // Revenue Today
-        successRate: parseFloat(successRate.toFixed(2)), // Success Rate (Percentage) formatted to 2 decimal places
-        pendingActions // Pending Actions (Pending + Cancelled)
+        totalCategories, // 🔥 ONLY THIS ADDED
+        orderStats,
+        salesOverview,
+        latestOrders,
+        ordersToday,
+        revenueToday: revenueToday[0]?.totalRevenue || 0,
+        successRate: parseFloat(successRate.toFixed(2)),
+        pendingActions
       },
     });
+
   } catch (err) {
     console.error('❌ Error fetching stats:', err);
     res.status(500).json({

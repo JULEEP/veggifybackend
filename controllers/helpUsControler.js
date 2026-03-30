@@ -3,6 +3,9 @@ const cloudinary = require("cloudinary").v2;
 const dotenv = require("dotenv");
 const SubAdmin = require('../models/SubAdmin');
 
+const path = require('path');
+const fs = require('fs');
+
 dotenv.config();
 
 // Cloudinary configuration
@@ -12,10 +15,35 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// POST: Submit issue
+// Upload directories
+const UPLOADS_DIR = path.join(__dirname, '../uploads');
+const HELP_ISSUES_DIR = path.join(UPLOADS_DIR, 'help_issues');
+
+// Ensure directory exists
+if (!fs.existsSync(HELP_ISSUES_DIR)) {
+  fs.mkdirSync(HELP_ISSUES_DIR, { recursive: true });
+  console.log(`📁 Created help issues directory: ${HELP_ISSUES_DIR}`);
+}
+
+// Base URL
+const BASE_URL = 'https://api.vegiffyy.com';
+
+// Helper function to upload file locally
+const uploadLocalFile = async (file, folderPath) => {
+  const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+  const ext = path.extname(file.name);
+  const filename = `help-issue-${uniqueSuffix}${ext}`;
+  const uploadPath = path.join(folderPath, filename);
+  await file.mv(uploadPath);
+  
+  const relativePath = uploadPath.split('uploads')[1];
+  return `${BASE_URL}/uploads${relativePath}`;
+};
+
+// POST: Submit issue (NO CLOUDINARY)
 const submitHelpUs = async (req, res) => {
   try {
-    const { userId } = req.params; // <-- yahan se userId liya
+    const { userId } = req.params;
     const { name, email, issueType, description } = req.body;
     
     // Check if an image is uploaded
@@ -23,38 +51,39 @@ const submitHelpUs = async (req, res) => {
       return res.status(400).json({ message: "Image is required" });
     }
 
-    const image = req.files.image; // Access the uploaded image file
+    const image = req.files.image;
 
-    // Upload the image to Cloudinary
-    cloudinary.uploader.upload(image.tempFilePath, { 
-      folder: "help_issues",  // Optional folder name
-      resource_type: "auto"   // Automatically detect the file type (image, video, etc.)
-    }, async (error, result) => {
-      if (error) {
-        return res.status(500).json({ message: "Error uploading image to Cloudinary", error: error.message });
-      }
-
-      // Once the image is uploaded, get the URL
-      const imageUrl = result.secure_url;
-
-      // Create the issue entry with the image URL and default status as "pending"
-      const issue = await HelpUs.create({
-        userId,
-        name,
-        email,
-        issueType,
-        description,
-        status: "pending", // Default status is "pending"
-        imageUrl // Save the Cloudinary image URL
+    // Upload the image locally (NO CLOUDINARY)
+    let imageUrl;
+    try {
+      imageUrl = await uploadLocalFile(image, HELP_ISSUES_DIR);
+      console.log(`✅ Issue image saved: ${imageUrl}`);
+    } catch (uploadError) {
+      console.error("Error uploading image:", uploadError);
+      return res.status(500).json({ 
+        message: "Error uploading image", 
+        error: uploadError.message 
       });
+    }
 
-      res.status(201).json({
-        message: "Issue submitted successfully",
-        data: issue
-      });
+    // Create the issue entry with the image URL and default status as "pending"
+    const issue = await HelpUs.create({
+      userId,
+      name,
+      email,
+      issueType,
+      description,
+      status: "pending",
+      imageUrl
+    });
+
+    res.status(201).json({
+      message: "Issue submitted successfully",
+      data: issue
     });
 
   } catch (error) {
+    console.error("Submit Help Us Error:", error);
     res.status(500).json({
       message: "Server Error",
       error: error.message

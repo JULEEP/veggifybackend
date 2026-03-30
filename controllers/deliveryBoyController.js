@@ -13,6 +13,9 @@ const crypto = require('crypto');
 const dotenv = require("dotenv");
 const SubAdmin = require('../models/SubAdmin');
 
+const path = require('path');
+const fs = require('fs');
+
 
 
 
@@ -33,13 +36,46 @@ const calculateDistanceKm = (lat1, lon1, lat2, lon2) => {
 // Temporary OTP
 const OTP = "1234";
 
-// Step 1: Register Delivery Boy (store in token)
+// Upload directories
+const UPLOADS_DIR = path.join(__dirname, '../uploads');
+const DELIVERY_BOY_DIR = path.join(UPLOADS_DIR, 'delivery-boy');
+const AADHAR_DIR = path.join(DELIVERY_BOY_DIR, 'aadhar');
+const LICENSE_DIR = path.join(DELIVERY_BOY_DIR, 'license');
+const PROFILE_DIR = path.join(DELIVERY_BOY_DIR, 'profile');
+
+// Ensure directories exist
+if (!fs.existsSync(AADHAR_DIR)) {
+  fs.mkdirSync(AADHAR_DIR, { recursive: true });
+}
+if (!fs.existsSync(LICENSE_DIR)) {
+  fs.mkdirSync(LICENSE_DIR, { recursive: true });
+}
+if (!fs.existsSync(PROFILE_DIR)) {
+  fs.mkdirSync(PROFILE_DIR, { recursive: true });
+}
+
+// Base URL
+const BASE_URL = 'https://api.vegiffyy.com';
+
+// Helper function to upload file locally
+const uploadLocalFile = async (file, folderPath) => {
+  const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+  const ext = path.extname(file.name);
+  const filename = `deliveryboy-${uniqueSuffix}${ext}`;
+  const uploadPath = path.join(folderPath, filename);
+  await file.mv(uploadPath);
+  
+  const relativePath = uploadPath.split('uploads')[1];
+  return `${BASE_URL}/uploads${relativePath}`;
+};
+
+// Step 1: Register Delivery Boy (store in token) - NO CLOUDINARY
 exports.registerDeliveryBoy = async (req, res) => {
   try {
     const { fullName, mobileNumber, vehicleType, email } = req.body;
-    const aadharCard = req.files.aadharCard;
-    const drivingLicense = req.files.drivingLicense;
-    const profileImage = req.files.profileImage;  // Get the profile image from request files
+    const aadharCard = req.files?.aadharCard;
+    const drivingLicense = req.files?.drivingLicense;
+    const profileImage = req.files?.profileImage;
 
     // Check if all required fields are provided
     if (!fullName || !mobileNumber || !vehicleType || !aadharCard || !drivingLicense || !profileImage) {
@@ -52,24 +88,28 @@ exports.registerDeliveryBoy = async (req, res) => {
       return res.status(400).json({ message: "Mobile Number already registered." });
     }
 
-    // Upload the documents and profile image to Cloudinary
-    const aadharUpload = await cloudinary.uploader.upload(aadharCard.tempFilePath);
-    const licenseUpload = await cloudinary.uploader.upload(drivingLicense.tempFilePath);
-    const profileImageUpload = await cloudinary.uploader.upload(profileImage.tempFilePath); // Upload profile image
+    // Upload the documents and profile image locally (NO CLOUDINARY)
+    const aadharUrl = await uploadLocalFile(aadharCard, AADHAR_DIR);
+    const licenseUrl = await uploadLocalFile(drivingLicense, LICENSE_DIR);
+    const profileImageUrl = await uploadLocalFile(profileImage, PROFILE_DIR);
+
+    console.log(`✅ Aadhar saved: ${aadharUrl}`);
+    console.log(`✅ License saved: ${licenseUrl}`);
+    console.log(`✅ Profile image saved: ${profileImageUrl}`);
 
     // Prepare the token data with document status, delivery boy status, and profile image URL
     const tokenData = {
       fullName,
       mobileNumber,
       vehicleType,
-      aadharCard: aadharUpload.secure_url,  // Cloudinary URL for Aadhar Card
-      drivingLicense: licenseUpload.secure_url,  // Cloudinary URL for Driving License
-      profileImage: profileImageUpload.secure_url, // Cloudinary URL for Profile Image
+      aadharCard: aadharUrl,
+      drivingLicense: licenseUrl,
+      profileImage: profileImageUrl,
       documentStatus: {
-        aadharCard: "pending",  // Default status for Aadhar Card
-        drivingLicense: "pending"  // Default status for Driving License
+        aadharCard: "pending",
+        drivingLicense: "pending"
       },
-      deliveryBoyStatus: "pending", // Default delivery boy status
+      deliveryBoyStatus: "pending",
     };
 
     // Add email to token data if provided
@@ -82,29 +122,29 @@ exports.registerDeliveryBoy = async (req, res) => {
     // Create a notification for the delivery boy registration
     const notificationMessage = `${fullName} has been successfully registered as a delivery boy.`;
     const notificationData = {
-      deliveryBoyId: newDeliveryBoy._id,  // Now referring to deliveryBoyId instead of userId
+      deliveryBoyId: newDeliveryBoy._id,
       message: notificationMessage,
       notificationType: 'DeliveryBoyRegistration'
     };
 
     const newNotification = new notificationModel(notificationData);
-    await newNotification.save();  // Save the notification to the database
+    await newNotification.save();
 
     // Create a token for the registered delivery boy (used for verification)
-    const token = jwt.sign(tokenData, "temporarySecret", { expiresIn: "5m" }); // 5-minute validity
+    const token = jwt.sign(tokenData, "temporarySecret", { expiresIn: "5m" });
 
     // Respond with the full data and the token
     res.status(201).json({
       message: "Delivery Boy registered successfully!",
-      data: newDeliveryBoy, // Return the saved data
-      token: token // Provide the JWT token for further verification
+      data: newDeliveryBoy,
+      token: token
     });
+
   } catch (error) {
     console.error("Register Error:", error);
     res.status(500).json({ message: "Server Error", error: error.message });
   }
 };
-
 
 
 // Update Delivery Boy (Full Name and Email)
@@ -336,22 +376,57 @@ exports.verifyLoginOTP = async (req, res) => {
 };
 
 
-// Update email and/or image
+// Upload directories
+
+// Ensure directory exists
+if (!fs.existsSync(PROFILE_DIR)) {
+  fs.mkdirSync(PROFILE_DIR, { recursive: true });
+}
+
+
+
+
+// Helper function to delete old file
+const deleteOldFile = (fileUrl) => {
+  if (fileUrl) {
+    const filePath = path.join(__dirname, '../uploads', fileUrl.split('/uploads')[1]);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      console.log(`🗑️ Deleted old file: ${filePath}`);
+    }
+  }
+};
+
+// Update email and/or image (NO CLOUDINARY)
 exports.updateProfile = async (req, res) => {
   try {
     const { userId } = req.params;
     const { email, longitude, latitude } = req.body;
-    let imageUrl;
+    let imageUrl = null;
 
     // Validate userId
     if (!mongoose.Types.ObjectId.isValid(userId)) {
       return res.status(400).json({ message: "Valid userId is required." });
     }
 
-    // If image is sent, upload to Cloudinary
+    // Find existing delivery boy
+    const existingDeliveryBoy = await DeliveryBoy.findById(userId);
+    if (!existingDeliveryBoy) {
+      return res.status(404).json({ message: "Delivery boy not found." });
+    }
+
+    // If image is sent, upload locally
     if (req.files && req.files.image) {
-      const uploadRes = await cloudinary.uploader.upload(req.files.image[0].path);
-      imageUrl = uploadRes.secure_url;
+      const imageFile = req.files.image;
+      
+      // Delete old image if exists
+      if (existingDeliveryBoy.image) {
+        deleteOldFile(existingDeliveryBoy.image);
+      }
+      
+      // Upload new image locally
+      imageUrl = await uploadLocalFile(imageFile, PROFILE_DIR);
+      console.log(`✅ New profile image saved: ${imageUrl}`);
     }
 
     // Prepare update fields dynamically
@@ -388,6 +463,7 @@ exports.updateProfile = async (req, res) => {
       success: true,
       data: updatedDeliveryBoy
     });
+
   } catch (error) {
     console.error("Profile Update Error:", error);
     res.status(500).json({ message: "Server Error" });
@@ -1384,6 +1460,18 @@ exports.getDeliveryBoyProfile = async (req, res) => {
 
 
 
+// Upload directories
+
+// Ensure directory exists
+if (!fs.existsSync(PROFILE_DIR)) {
+  fs.mkdirSync(PROFILE_DIR, { recursive: true });
+}
+
+
+
+
+
+// ✅ Update Profile Image (NO CLOUDINARY)
 exports.updateProfileImage = async (req, res) => {
   try {
     const { deliveryBoyId } = req.params;
@@ -1396,12 +1484,7 @@ exports.updateProfileImage = async (req, res) => {
       });
     }
 
-    const profileImage = req.files.profileImage;  // Access file uploaded via `req.files`
-
-    // Upload the profile image to Cloudinary
-    const uploadedImage = await cloudinary.uploader.upload(profileImage.tempFilePath, {
-      folder: 'deliveryBoy/profileImages',
-    });
+    const profileImage = req.files.profileImage;
 
     // Find the delivery boy by ID
     const deliveryBoy = await DeliveryBoy.findById(deliveryBoyId);
@@ -1412,17 +1495,27 @@ exports.updateProfileImage = async (req, res) => {
       });
     }
 
+    // Delete old profile image if exists
+    if (deliveryBoy.profileImage) {
+      deleteOldFile(deliveryBoy.profileImage);
+    }
+
+    // Upload the profile image locally (NO CLOUDINARY)
+    const uploadedImageUrl = await uploadLocalFile(profileImage, PROFILE_DIR);
+    console.log(`✅ New profile image saved: ${uploadedImageUrl}`);
+
     // Update the profile image URL in the database
-    deliveryBoy.profileImage = uploadedImage.secure_url;
+    deliveryBoy.profileImage = uploadedImageUrl;
     await deliveryBoy.save();
 
     return res.status(200).json({
       success: true,
       message: "Profile image updated successfully.",
       data: {
-        profileImage: uploadedImage.secure_url,  // Return the updated profile image URL
+        profileImage: uploadedImageUrl,
       },
     });
+
   } catch (error) {
     console.error("Error updating profile image:", error);
     return res.status(500).json({
@@ -1703,40 +1796,6 @@ exports.updateDeliveryBoy = async (req, res) => {
     });
   }
 };
-
-
-
-exports.deleteDeliveryBoy = async (req, res) => {
-  try {
-    const { deliveryBoyId } = req.params;
-    console.log("Received ID:", deliveryBoyId); // debug
-
-    if (!mongoose.Types.ObjectId.isValid(deliveryBoyId)) {
-      console.log("Invalid ID format");
-      return res.status(400).json({ message: "Invalid deliveryBoyId." });
-    }
-
-    const deliveryBoy = await DeliveryBoy.findById(deliveryBoyId);
-    console.log("Found delivery boy:", deliveryBoy);
-
-    if (!deliveryBoy) {
-      return res.status(404).json({ message: "Delivery boy not found." });
-    }
-
-    const deletedDeliveryBoy = await DeliveryBoy.findByIdAndDelete(deliveryBoyId);
-    return res.status(200).json({
-      message: "Delivery Boy deleted successfully.",
-      data: deletedDeliveryBoy,
-    });
-  } catch (error) {
-    console.error("Error deleting Delivery Boy:", error);
-    return res.status(500).json({
-      message: "Server error.",
-      error: error.message,
-    });
-  }
-};
-
 
 
 // Setup Nodemailer transport

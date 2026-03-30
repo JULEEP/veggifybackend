@@ -22,6 +22,11 @@ const SubAdmin = require('../models/SubAdmin');
 const Coupon = require('../models/Coupon');
 const Cart = require('../models/cartModel');
 
+const path = require('path');
+// Upload directories
+const UPLOADS_DIR = path.join(__dirname, '../uploads');
+const BANNERS_DIR = path.join(UPLOADS_DIR, 'banners');
+
 
 dotenv.config();
 
@@ -565,6 +570,30 @@ const getProfile = async (req, res) => {
   }
 };
 
+// Upload directories
+const PROFILE_IMAGES_DIR = path.join(UPLOADS_DIR, 'profile_images');
+
+// Ensure directory exists
+if (!fs.existsSync(PROFILE_IMAGES_DIR)) {
+  fs.mkdirSync(PROFILE_IMAGES_DIR, { recursive: true });
+  console.log(`📁 Created profile images directory: ${PROFILE_IMAGES_DIR}`);
+}
+
+// Base URL
+
+// Helper function to upload file locally
+const uploadLocalFile = async (file, folderPath) => {
+  const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+  const ext = path.extname(file.name);
+  const filename = `profile-${uniqueSuffix}${ext}`;
+  const uploadPath = path.join(folderPath, filename);
+  await file.mv(uploadPath);
+  
+  const relativePath = uploadPath.split('uploads')[1];
+  return `${BASE_URL}/uploads${relativePath}`;
+};
+
+// Upload Profile Image (NO CLOUDINARY)
 const uploadProfileImage = async (req, res) => {
   try {
     const { userId } = req.params;
@@ -576,15 +605,9 @@ const uploadProfileImage = async (req, res) => {
 
     const file = req.files.image; // key must be "image" in Postman
 
-    // Upload to Cloudinary
-    const result = await cloudinary.uploader.upload(file.tempFilePath, {
-      folder: 'profile_images',
-      width: 400,
-      height: 400,
-      crop: 'fill'
-    });
-
-    const profileImgUrl = result.secure_url;
+    // Upload locally (NO CLOUDINARY)
+    const profileImgUrl = await uploadLocalFile(file, PROFILE_IMAGES_DIR);
+    console.log(`✅ Profile image saved: ${profileImgUrl}`);
 
     // Update user
     const user = await User.findByIdAndUpdate(
@@ -600,37 +623,71 @@ const uploadProfileImage = async (req, res) => {
       profileImg: profileImgUrl,
       user
     });
+
   } catch (error) {
     console.error("Upload profile image error:", error);
     res.status(500).json({ message: 'Upload failed', error: error.message });
   }
 };
 
+// Upload directories
 
+// Helper function to delete local file
+const deleteLocalFile = (fileUrl) => {
+  if (fileUrl) {
+    const filePath = path.join(__dirname, '../uploads', fileUrl.split('/uploads')[1]);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      console.log(`🗑️ Deleted file: ${filePath}`);
+      return true;
+    }
+  }
+  return false;
+};
+
+// Delete Profile Image (NO CLOUDINARY)
 const deleteProfileImage = async (req, res) => {
   try {
     const { userId } = req.params;
 
     const user = await User.findById(userId);
-    if (!user) return res.status(404).json({ message: 'User not found' });
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
 
-    if (!user.image) {
+    if (!user.profileImg && !user.image) {
       return res.status(400).json({ message: 'No profile image to delete' });
     }
 
-    // Optionally delete image from Cloudinary
-    await cloudinary.uploader.destroy(user.image);
+    // Get the image URL (handle both field names)
+    const imageUrl = user.profileImg || user.image;
+
+    // Delete local image file
+    const deleted = deleteLocalFile(imageUrl);
+    
+    if (deleted) {
+      console.log(`✅ Profile image deleted from storage`);
+    } else {
+      console.log(`⚠️ Image file not found at path, continuing...`);
+    }
 
     // Remove image field from user document
+    user.profileImg = undefined;
     user.image = undefined;
     await user.save();
 
-    res.status(200).json({ message: 'Profile image deleted successfully ✅' });
+    res.status(200).json({ 
+      message: 'Profile image deleted successfully ✅' 
+    });
+
   } catch (error) {
-    res.status(500).json({ message: 'Failed to delete profile image ❌', error: error.message });
+    console.error("Delete profile image error:", error);
+    res.status(500).json({ 
+      message: 'Failed to delete profile image ❌', 
+      error: error.message 
+    });
   }
 };
-
 
  const addAddress = async (req, res) => {
   try {
@@ -932,49 +989,105 @@ const getReferralByUserId = async (req, res) => {
 };
 
 
-// Controller
+// Ensure banners directory exists
+if (!fs.existsSync(BANNERS_DIR)) {
+  fs.mkdirSync(BANNERS_DIR, { recursive: true });
+  console.log(`📁 Created banners directory: ${BANNERS_DIR}`);
+}
+
+// Base URL
+const BASE_URL = 'https://api.vegiffyy.com';
+
+// Create Banner - FINAL WORKING VERSION
 const createBanner = async (req, res) => {
   try {
-    const { subAdminId } = req.body || {}; // ✅ FIX
+    console.log('📁 Received banner file:', req.files);
+    console.log('📝 Received body:', req.body);
 
-    if (!req.files || !req.files.image) {
-      return res.status(400).json({ message: 'Image is required' });
+    let imageUrl = null;
+
+    // ✅ Handle single banner image (image, not images)
+    if (req.files && req.files.image) {
+      const image = req.files.image;
+      
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+      const ext = path.extname(image.name);
+      const filename = `banner-${uniqueSuffix}${ext}`;
+      
+      const uploadPath = path.join(BANNERS_DIR, filename);
+      await image.mv(uploadPath);
+      
+      imageUrl = `${BASE_URL}/uploads/banners/${filename}`;
+      console.log(`✅ Banner image saved: ${imageUrl}`);
+    } else {
+      return res.status(400).json({ message: 'Banner image is required' });
     }
 
-    const imageFile = req.files.image;
+    // ✅ Safely get subAdminId
+    let subAdminId = null;
+    
+    if (req.body) {
+      if (typeof req.body === 'string') {
+        try {
+          const parsed = JSON.parse(req.body);
+          subAdminId = parsed.subAdminId;
+        } catch(e) {
+          console.log('Could not parse body string');
+        }
+      } 
+      else if (typeof req.body === 'object') {
+        subAdminId = req.body.subAdminId;
+      }
+    }
+    
+    if (!subAdminId && req.fields && req.fields.subAdminId) {
+      subAdminId = req.fields.subAdminId;
+    }
+    
+    console.log('✅ Final subAdminId:', subAdminId);
 
-    const result = await cloudinary.uploader.upload(imageFile.tempFilePath, {
-      folder: "banners"
-    });
-
-    let note = "Created by Admin";
+    let note = 'Created by Admin';
     let createdBy = null;
 
-    if (subAdminId) {
-      const subAdmin = await SubAdmin.findById(subAdminId);
-      if (!subAdmin) {
-        return res.status(404).json({ message: "Sub-admin not found" });
+    if (subAdminId && subAdminId !== 'null' && subAdminId !== 'undefined' && subAdminId !== '') {
+      try {
+        const subAdmin = await SubAdmin.findById(subAdminId);
+        if (subAdmin) {
+          note = `Created by Sub-admin: ${subAdmin.name}`;
+          createdBy = subAdminId;
+          console.log(`✅ Banner created by: ${subAdmin.name}`);
+        } else {
+          console.log('⚠️ SubAdmin not found with ID:', subAdminId);
+        }
+      } catch (err) {
+        console.log('⚠️ Error finding subAdmin:', err.message);
       }
-      note = `Created by Sub-admin: ${subAdmin.name}`;
-      createdBy = subAdminId;
     }
 
-    const newBanner = await Banner.create({
-      image: result.secure_url,
+    // ✅ Save to DB - single image, not array
+    const banner = new Banner({ 
+      image: imageUrl,  // Single image field
       status: 'pending',
-      createdBy,
-      note
+      createdBy: createdBy,
+      note: note
+    });
+    await banner.save();
+
+    return res.status(201).json({
+      success: true,
+      message: 'Banner created successfully!',
+      data: banner,
     });
 
-    return res.status(201).json({ message: 'Banner created ✅', data: newBanner });
-
-  } catch (err) {
-    console.error("Create Banner Error:", err);
-    return res.status(500).json({ message: 'Create failed ❌', error: err.message });
+  } catch (error) {
+    console.error('❌ Error in createBanner:', error);
+    return res.status(500).json({ 
+      success: false,
+      message: 'Server error', 
+      error: error.message 
+    });
   }
 };
-
-
 // ✅ READ ALL
 const getAllBanners = async (req, res) => {
   try {
@@ -1020,12 +1133,13 @@ const getBannerById = async (req, res) => {
   }
 };
 
-// ✅ UPDATE
+// ✅ UPDATE BANNER (Single Image - Simple File Upload)
 const updateBanner = async (req, res) => {
   try {
+    const { id } = req.params;
     const { subAdminId, status } = req.body;
 
-    const banner = await Banner.findById(req.params.id);
+    const banner = await Banner.findById(id);
     if (!banner) {
       return res.status(404).json({
         success: false,
@@ -1039,11 +1153,26 @@ const updateBanner = async (req, res) => {
     // IMAGE UPDATE (OPTIONAL)
     // =========================
     if (req.files && req.files.image) {
-      const result = await cloudinary.uploader.upload(
-        req.files.image.tempFilePath,
-        { folder: "banners" }
-      );
-      imageUrl = result.secure_url;
+      const image = req.files.image;
+      
+      // Delete old image
+      if (banner.image) {
+        const oldImagePath = path.join(BANNERS_DIR, path.basename(banner.image));
+        if (fs.existsSync(oldImagePath)) {
+          fs.unlinkSync(oldImagePath);
+          console.log(`🗑️ Deleted old image: ${oldImagePath}`);
+        }
+      }
+      
+      // Save new image
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+      const ext = path.extname(image.name);
+      const filename = `banner-${uniqueSuffix}${ext}`;
+      const uploadPath = path.join(BANNERS_DIR, filename);
+      await image.mv(uploadPath);
+      
+      imageUrl = `${BASE_URL}/uploads/banners/${filename}`;
+      console.log(`✅ New image saved: ${imageUrl}`);
     }
 
     banner.image = imageUrl;
@@ -1058,7 +1187,7 @@ const updateBanner = async (req, res) => {
     // =========================
     // NOTE: WHO UPDATED 🔥
     // =========================
-    if (subAdminId) {
+    if (subAdminId && subAdminId !== 'null' && subAdminId !== 'undefined' && subAdminId !== '') {
       const subAdmin = await SubAdmin.findById(subAdminId);
       if (!subAdmin) {
         return res.status(404).json({
@@ -1068,10 +1197,10 @@ const updateBanner = async (req, res) => {
       }
 
       banner.createdBy = subAdmin._id;
-      banner.note = `Updated by Sub-admin: ${subAdmin.name}`;
+      banner.note = `Updated by Sub-admin: ${subAdmin.name} on ${new Date().toLocaleDateString()}`;
     } else {
       banner.createdBy = null;
-      banner.note = "Updated by Admin";
+      banner.note = `Updated by Admin on ${new Date().toLocaleDateString()}`;
     }
 
     // 🔥 LOGGING
@@ -1097,7 +1226,6 @@ const updateBanner = async (req, res) => {
     });
   }
 };
-
 
 // ✅ DELETE
 const deleteBanner = async (req, res) => {

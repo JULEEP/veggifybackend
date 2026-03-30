@@ -14,6 +14,9 @@ const nodemailer = require("nodemailer");
 const SubAdmin = require("../models/SubAdmin");
 dotenv.config();
 
+const path = require('path');
+const fs = require('fs');
+
 // Cloudinary Configuration
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -21,6 +24,45 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
+// Upload directories
+const UPLOADS_DIR = path.join(__dirname, '../uploads');
+const AMBASSADOR_DIR = path.join(UPLOADS_DIR, 'ambassadors');
+const PROFILE_DIR = path.join(AMBASSADOR_DIR, 'profile');
+const DOCUMENTS_DIR = path.join(AMBASSADOR_DIR, 'documents');
+const AADHAR_FRONT_DIR = path.join(DOCUMENTS_DIR, 'aadhar', 'front');
+const AADHAR_BACK_DIR = path.join(DOCUMENTS_DIR, 'aadhar', 'back');
+const PAN_DIR = path.join(DOCUMENTS_DIR, 'pan');
+
+// Ensure directories exist
+if (!fs.existsSync(PROFILE_DIR)) {
+  fs.mkdirSync(PROFILE_DIR, { recursive: true });
+}
+if (!fs.existsSync(AADHAR_FRONT_DIR)) {
+  fs.mkdirSync(AADHAR_FRONT_DIR, { recursive: true });
+}
+if (!fs.existsSync(AADHAR_BACK_DIR)) {
+  fs.mkdirSync(AADHAR_BACK_DIR, { recursive: true });
+}
+if (!fs.existsSync(PAN_DIR)) {
+  fs.mkdirSync(PAN_DIR, { recursive: true });
+}
+
+// Base URL
+const BASE_URL = 'https://api.vegiffyy.com';
+
+// Helper function to upload file locally
+const uploadLocalFile = async (file, folderPath, type = 'image') => {
+  const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+  const ext = path.extname(file.name);
+  const filename = `ambassador-${uniqueSuffix}${ext}`;
+  const uploadPath = path.join(folderPath, filename);
+  await file.mv(uploadPath);
+  
+  const relativePath = uploadPath.split('uploads')[1];
+  return `${BASE_URL}/uploads${relativePath}`;
+};
+
+// ✅ Create Ambassador (NO CLOUDINARY)
 exports.createAmbassador = async (req, res) => {
   try {
     const formData = req.body;
@@ -29,7 +71,7 @@ exports.createAmbassador = async (req, res) => {
     console.log("Uploaded files:", req.files);
 
     // ========================
-    // 🔥 NEW: File Size Validation (Pehle hi check karo)
+    // File Size Validation
     // ========================
     const MAX_FILE_SIZES = {
       profileImage: 2 * 1024 * 1024,      // 2MB
@@ -39,7 +81,6 @@ exports.createAmbassador = async (req, res) => {
     };
 
     if (req.files) {
-      // Profile Image check
       if (req.files.profileImage && req.files.profileImage.size > MAX_FILE_SIZES.profileImage) {
         return res.status(413).json({
           success: false,
@@ -47,7 +88,6 @@ exports.createAmbassador = async (req, res) => {
         });
       }
 
-      // Aadhar Front check
       if (req.files.aadharCardFront && req.files.aadharCardFront.size > MAX_FILE_SIZES.aadharCardFront) {
         return res.status(413).json({
           success: false,
@@ -55,7 +95,6 @@ exports.createAmbassador = async (req, res) => {
         });
       }
 
-      // Aadhar Back check
       if (req.files.aadharCardBack && req.files.aadharCardBack.size > MAX_FILE_SIZES.aadharCardBack) {
         return res.status(413).json({
           success: false,
@@ -63,7 +102,6 @@ exports.createAmbassador = async (req, res) => {
         });
       }
 
-      // PAN Card check
       if (req.files.panCard && req.files.panCard.size > MAX_FILE_SIZES.panCard) {
         return res.status(413).json({
           success: false,
@@ -71,7 +109,6 @@ exports.createAmbassador = async (req, res) => {
         });
       }
 
-      // Total size check (optional - all files combined)
       const totalSize = Object.values(req.files).reduce((sum, file) => sum + (file.size || 0), 0);
       const MAX_TOTAL = 20 * 1024 * 1024; // 20MB
       
@@ -84,7 +121,7 @@ exports.createAmbassador = async (req, res) => {
     }
 
     // ========================
-    // Step 1: Validate required fields including password
+    // Validate required fields
     // ========================
     if (!formData.password) {
       return res.status(400).json({
@@ -100,9 +137,6 @@ exports.createAmbassador = async (req, res) => {
       });
     }
 
-    // ========================
-    // Step 2: Validate other required fields
-    // ========================
     if (!formData.fullName || !formData.email || !formData.mobileNumber || 
         !formData.city || !formData.area || !formData.whyVeggyfy) {
       return res.status(400).json({
@@ -129,7 +163,6 @@ exports.createAmbassador = async (req, res) => {
       });
     }
 
-    // Validate alternate mobile number format (if provided)
     if (formData.alternateMobileNumber && formData.alternateMobileNumber.trim() !== "") {
       if (!mobileRegex.test(formData.alternateMobileNumber)) {
         return res.status(400).json({
@@ -138,7 +171,6 @@ exports.createAmbassador = async (req, res) => {
         });
       }
       
-      // Check if alternate mobile is same as primary mobile
       if (formData.alternateMobileNumber === formData.mobileNumber) {
         return res.status(400).json({
           success: false,
@@ -148,12 +180,7 @@ exports.createAmbassador = async (req, res) => {
     }
 
     // ========================
-    // Step 3: Validate required documents - REMOVED (No files are mandatory now)
-    // ========================
-    // Files validation removed - all files are optional
-
-    // ========================
-    // Step 4: Check if ambassador already exists
+    // Check if ambassador already exists
     // ========================
     const existingAmbassador = await Ambassador.findOne({
       $or: [
@@ -184,20 +211,19 @@ exports.createAmbassador = async (req, res) => {
     }
 
     // ========================
-    // Step 5: Generate referral code
+    // Generate referral code
     // ========================
     const ambassadorCount = await Ambassador.countDocuments();
     const referralCode = `VEGAMB${(ambassadorCount + 1).toString().padStart(2, '0')}`;
 
     // ========================
-    // Step 6: Hash the password
+    // Hash the password
     // ========================
-    const bcrypt = require('bcrypt');
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(formData.password, saltRounds);
 
     // ========================
-    // Step 7: Handle file uploads (All files are optional now)
+    // Handle file uploads (LOCAL - NO CLOUDINARY)
     // ========================
     let uploadedImageUrl = "";
     let uploadedAadharFrontUrl = "";
@@ -207,12 +233,9 @@ exports.createAmbassador = async (req, res) => {
     // Handle Profile Image (Optional)
     if (req.files && req.files.profileImage) {
       const profileImage = req.files.profileImage;
-
       if (profileImage.mimetype.startsWith('image')) {
-        const result = await cloudinary.uploader.upload(profileImage.tempFilePath, {
-          folder: "veggyfy/ambassadors/profile",
-        });
-        uploadedImageUrl = result.secure_url;
+        uploadedImageUrl = await uploadLocalFile(profileImage, PROFILE_DIR);
+        console.log(`✅ Profile image saved: ${uploadedImageUrl}`);
       } else {
         return res.status(400).json({
           success: false,
@@ -221,15 +244,12 @@ exports.createAmbassador = async (req, res) => {
       }
     }
 
-    // Handle Aadhar Card Front - OPTIONAL NOW
+    // Handle Aadhar Card Front - OPTIONAL
     if (req.files && req.files.aadharCardFront) {
       const aadharCardFront = req.files.aadharCardFront;
       if (aadharCardFront.mimetype.startsWith('image') || aadharCardFront.mimetype === 'application/pdf') {
-        const result = await cloudinary.uploader.upload(aadharCardFront.tempFilePath, {
-          folder: "veggyfy/ambassadors/documents/aadhar/front",
-          resource_type: aadharCardFront.mimetype === 'application/pdf' ? 'raw' : 'image'
-        });
-        uploadedAadharFrontUrl = result.secure_url;
+        uploadedAadharFrontUrl = await uploadLocalFile(aadharCardFront, AADHAR_FRONT_DIR);
+        console.log(`✅ Aadhar Front saved: ${uploadedAadharFrontUrl}`);
       } else {
         return res.status(400).json({
           success: false,
@@ -242,11 +262,8 @@ exports.createAmbassador = async (req, res) => {
     if (req.files && req.files.aadharCardBack) {
       const aadharCardBack = req.files.aadharCardBack;
       if (aadharCardBack.mimetype.startsWith('image') || aadharCardBack.mimetype === 'application/pdf') {
-        const result = await cloudinary.uploader.upload(aadharCardBack.tempFilePath, {
-          folder: "veggyfy/ambassadors/documents/aadhar/back",
-          resource_type: aadharCardBack.mimetype === 'application/pdf' ? 'raw' : 'image'
-        });
-        uploadedAadharBackUrl = result.secure_url;
+        uploadedAadharBackUrl = await uploadLocalFile(aadharCardBack, AADHAR_BACK_DIR);
+        console.log(`✅ Aadhar Back saved: ${uploadedAadharBackUrl}`);
       } else {
         return res.status(400).json({
           success: false,
@@ -255,15 +272,12 @@ exports.createAmbassador = async (req, res) => {
       }
     }
 
-    // Handle PAN Card - OPTIONAL NOW
+    // Handle PAN Card - OPTIONAL
     if (req.files && req.files.panCard) {
       const panCard = req.files.panCard;
       if (panCard.mimetype.startsWith('image') || panCard.mimetype === 'application/pdf') {
-        const result = await cloudinary.uploader.upload(panCard.tempFilePath, {
-          folder: "veggyfy/ambassadors/documents/pan",
-          resource_type: panCard.mimetype === 'application/pdf' ? 'raw' : 'image'
-        });
-        uploadedPanUrl = result.secure_url;
+        uploadedPanUrl = await uploadLocalFile(panCard, PAN_DIR);
+        console.log(`✅ PAN Card saved: ${uploadedPanUrl}`);
       } else {
         return res.status(400).json({
           success: false,
@@ -273,7 +287,7 @@ exports.createAmbassador = async (req, res) => {
     }
 
     // ========================
-    // Step 8: Validate Commission Percentage
+    // Validate Commission Percentage
     // ========================
     if (formData.commissionPercentage) {
       const commission = parseFloat(formData.commissionPercentage);
@@ -286,56 +300,37 @@ exports.createAmbassador = async (req, res) => {
     }
 
     // ========================
-    // Step 9: Create Ambassador document with password
+    // Create Ambassador document
     // ========================
     const newAmbassador = new Ambassador({
-      // Personal Information
       fullName: formData.fullName.trim(),
       email: formData.email.toLowerCase().trim(),
       mobileNumber: formData.mobileNumber.trim(),
       alternateMobileNumber: formData.alternateMobileNumber ? formData.alternateMobileNumber.trim() : null,
       dateOfBirth: formData.dateOfBirth || null,
       gender: formData.gender || null,
-      
-      // Account Credentials
       password: hashedPassword,
-      
-      // Location Information
       city: formData.city.trim(),
       area: formData.area.trim(),
       pincode: formData.pincode || "",
-      
-      // Social Media
       instagram: formData.instagram || "",
       facebook: formData.facebook || "",
       twitter: formData.twitter || "",
-      
-      // Ambassador Specific
       whyVeggyfy: formData.whyVeggyfy.trim(),
       marketingIdeas: formData.marketingIdeas || "",
       targetAudience: formData.targetAudience || "",
       expectedCommission: formData.expectedCommission || "",
       commissionPercentage: formData.commissionPercentage ? parseFloat(formData.commissionPercentage) : null,
-      
-      // Referral & Status
       referralCode: referralCode,
       referredBy: formData.referredBy ? formData.referredBy.trim() : null,
       status: "pending",
-      
-      // Files - All optional now
       profileImage: uploadedImageUrl || "",
       aadharCardFront: uploadedAadharFrontUrl || "",
       aadharCardBack: uploadedAadharBackUrl || "",
       panCard: uploadedPanUrl || "",
-      
-      // Wallet
       wallet: 0,
-      
-      // KYC Status - If no documents uploaded, set as pending_upload
       kycStatus: (uploadedAadharFrontUrl || uploadedPanUrl) ? "pending" : "pending_upload",
       kycSubmittedAt: (uploadedAadharFrontUrl || uploadedPanUrl) ? new Date() : null,
-      
-      // Account Status
       isActive: true,
       lastLogin: null
     });
@@ -343,13 +338,12 @@ exports.createAmbassador = async (req, res) => {
     await newAmbassador.save();
 
     // ========================
-    // Step 10: Referral Logic
+    // Referral Logic
     // ========================
     if (formData.referredBy && formData.referredBy.trim() !== "") {
       const code = formData.referredBy.trim();
 
       if (code.startsWith("VEGAMB")) {
-        // Ambassador referred by another ambassador
         const refAmbassador = await Ambassador.findOne({ referralCode: code });
         if (refAmbassador) {
           const amountData = await Amount.findOne({ type: "Ambsaddor to Ambsaddor" });
@@ -357,7 +351,6 @@ exports.createAmbassador = async (req, res) => {
             refAmbassador.wallet = (refAmbassador.wallet || 0) + amountData.amount;
             await refAmbassador.save();
 
-            // Create referral bonus record
             const referralBonus = new ReferralBonus({
               referrerId: refAmbassador._id,
               referredId: newAmbassador._id,
@@ -372,7 +365,6 @@ exports.createAmbassador = async (req, res) => {
       }
 
       if (code.startsWith("VEGGYFYVENDOR")) {
-        // Ambassador referred by vendor
         const refVendor = await Restaurant.findOne({ referralCode: code });
         if (refVendor) {
           const amountData = await Amount.findOne({ type: "Vendor to Ambassador" });
@@ -380,7 +372,6 @@ exports.createAmbassador = async (req, res) => {
             refVendor.walletBalance = (refVendor.walletBalance || 0) + amountData.amount;
             await refVendor.save();
 
-            // Create referral bonus record
             const referralBonus = new ReferralBonus({
               referrerId: refVendor._id,
               referredId: newAmbassador._id,
@@ -396,7 +387,7 @@ exports.createAmbassador = async (req, res) => {
     }
 
     // ========================
-    // Step 11: Response
+    // Response
     // ========================
     res.status(201).json({
       success: true,
@@ -419,7 +410,6 @@ exports.createAmbassador = async (req, res) => {
   } catch (err) {
     console.error("❌ Error creating ambassador:", err);
     
-    // Handle duplicate key errors
     if (err.code === 11000) {
       const field = Object.keys(err.keyPattern)[0];
       let message = 'Duplicate field error';
@@ -440,7 +430,6 @@ exports.createAmbassador = async (req, res) => {
       });
     }
     
-    // Handle validation errors
     if (err.name === 'ValidationError') {
       const messages = Object.values(err.errors).map(error => error.message);
       return res.status(400).json({
@@ -673,6 +662,7 @@ exports.getAllAmbassadors = async (req, res) => {
 
 
 
+// ✅ Update Ambassador (NO CLOUDINARY)
 exports.updateAmbassador = async (req, res) => {
   try {
     console.log("🟢 Incoming request to update ambassador");
@@ -680,7 +670,7 @@ exports.updateAmbassador = async (req, res) => {
     console.log("📂 req.files:", req.files);
 
     const { ambassadorId } = req.params;
-    const { subAdminId, ...formData } = req.body; // 👈 subAdminId added
+    const { subAdminId, ...formData } = req.body;
 
     // ✅ Step 1: Find Ambassador
     const ambassador = await Ambassador.findById(ambassadorId);
@@ -692,10 +682,10 @@ exports.updateAmbassador = async (req, res) => {
     }
 
     // ✅ NOTE & UPDATED BY logic
-    let note = "Ambassador updated by Admin";
+    let note = `Ambassador updated by Admin on ${new Date().toLocaleDateString()}`;
     let updatedBy = null;
 
-    if (subAdminId) {
+    if (subAdminId && subAdminId !== 'null' && subAdminId !== 'undefined') {
       const subAdmin = await SubAdmin.findById(subAdminId);
       if (!subAdmin) {
         return res.status(404).json({
@@ -704,24 +694,15 @@ exports.updateAmbassador = async (req, res) => {
         });
       }
 
-      note = `Ambassador updated by Sub-admin: ${subAdmin.name}`;
+      note = `Ambassador updated by Sub-admin: ${subAdmin.name} on ${new Date().toLocaleDateString()}`;
       updatedBy = subAdminId;
     }
 
- 
-
-    // ✅ Step 3: Profile image upload
+    // ✅ Step 2: Profile image upload (LOCAL)
     let uploadedImageUrl = ambassador.profileImage;
 
     if (req.files?.profileImage) {
       const profileImage = req.files.profileImage;
-
-      if (!profileImage.tempFilePath) {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid file upload — tempFilePath missing.",
-        });
-      }
 
       if (!profileImage.mimetype.startsWith("image")) {
         return res.status(400).json({
@@ -730,15 +711,17 @@ exports.updateAmbassador = async (req, res) => {
         });
       }
 
-      const result = await cloudinary.uploader.upload(
-        profileImage.tempFilePath,
-        { folder: "veggyfy/ambassadors" }
-      );
+      // Delete old image
+      if (ambassador.profileImage) {
+        deleteOldFile(ambassador.profileImage);
+      }
 
-      uploadedImageUrl = result.secure_url;
+      // Upload new image
+      uploadedImageUrl = await uploadLocalFile(profileImage, PROFILE_DIR);
+      console.log(`✅ New profile image saved: ${uploadedImageUrl}`);
     }
 
-    // ✅ Step 4: Aadhar Card upload
+    // ✅ Step 3: Aadhar Card upload (LOCAL)
     if (req.files?.aadharCard) {
       const aadharCard = req.files.aadharCard;
 
@@ -746,17 +729,16 @@ exports.updateAmbassador = async (req, res) => {
         aadharCard.mimetype.startsWith("image") ||
         aadharCard.mimetype === "application/pdf"
       ) {
-        const result = await cloudinary.uploader.upload(
-          aadharCard.tempFilePath,
-          {
-            folder: "veggyfy/ambassadors/documents/aadhar",
-            resource_type:
-              aadharCard.mimetype === "application/pdf" ? "raw" : "image",
-          }
-        );
+        // Delete old file
+        if (ambassador.aadharCard) {
+          deleteOldFile(ambassador.aadharCard);
+        }
 
-        ambassador.aadharCard = result.secure_url;
+        // Upload new file
+        const newUrl = await uploadLocalFile(aadharCard, AADHAR_DIR);
+        ambassador.aadharCard = newUrl;
         ambassador.kycStatus = "under_review";
+        console.log(`✅ New Aadhar Card saved: ${newUrl}`);
       } else {
         return res.status(400).json({
           success: false,
@@ -765,7 +747,7 @@ exports.updateAmbassador = async (req, res) => {
       }
     }
 
-    // ✅ Step 5: PAN Card upload
+    // ✅ Step 4: PAN Card upload (LOCAL)
     if (req.files?.panCard) {
       const panCard = req.files.panCard;
 
@@ -773,17 +755,16 @@ exports.updateAmbassador = async (req, res) => {
         panCard.mimetype.startsWith("image") ||
         panCard.mimetype === "application/pdf"
       ) {
-        const result = await cloudinary.uploader.upload(
-          panCard.tempFilePath,
-          {
-            folder: "veggyfy/ambassadors/documents/pan",
-            resource_type:
-              panCard.mimetype === "application/pdf" ? "raw" : "image",
-          }
-        );
+        // Delete old file
+        if (ambassador.panCard) {
+          deleteOldFile(ambassador.panCard);
+        }
 
-        ambassador.panCard = result.secure_url;
+        // Upload new file
+        const newUrl = await uploadLocalFile(panCard, PAN_DIR);
+        ambassador.panCard = newUrl;
         ambassador.kycStatus = "under_review";
+        console.log(`✅ New PAN Card saved: ${newUrl}`);
       } else {
         return res.status(400).json({
           success: false,
@@ -792,11 +773,12 @@ exports.updateAmbassador = async (req, res) => {
       }
     }
 
-    // ✅ Step 6: Update fields
+    // ✅ Step 5: Update fields
     const updatableFields = [
       "fullName",
       "email",
       "mobileNumber",
+      "alternateMobileNumber",
       "dateOfBirth",
       "gender",
       "city",
@@ -817,7 +799,7 @@ exports.updateAmbassador = async (req, res) => {
     ];
 
     updatableFields.forEach((field) => {
-      if (formData[field] !== undefined) {
+      if (formData[field] !== undefined && formData[field] !== "") {
         ambassador[field] = formData[field];
       }
     });
@@ -834,8 +816,8 @@ exports.updateAmbassador = async (req, res) => {
 
     // ✅ Final updates
     ambassador.profileImage = uploadedImageUrl;
-    ambassador.note = note;           // 👈 added
-    ambassador.updatedBy = updatedBy; // 👈 added
+    ambassador.note = note;
+    ambassador.updatedBy = updatedBy;
 
     await ambassador.save();
 
@@ -855,6 +837,7 @@ exports.updateAmbassador = async (req, res) => {
         updatedAt: ambassador.updatedAt,
       },
     });
+
   } catch (err) {
     console.error("❌ Error updating ambassador:", err);
     res.status(500).json({
@@ -1655,7 +1638,18 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// Ambassador Payment Capture Function
+// Upload directories
+const PAYMENT_SCREENSHOTS_DIR = path.join(UPLOADS_DIR, 'ambassador', 'payment_screenshots');
+
+// Ensure directory exists
+if (!fs.existsSync(PAYMENT_SCREENSHOTS_DIR)) {
+  fs.mkdirSync(PAYMENT_SCREENSHOTS_DIR, { recursive: true });
+  console.log(`📁 Created payment screenshots directory: ${PAYMENT_SCREENSHOTS_DIR}`);
+}
+
+// Base URL
+
+// ✅ Ambassador Payment Capture (NO CLOUDINARY)
 exports.capturePayment = async (req, res) => {
   try {
     console.log("🔔 [Ambassador Payment Capture]");
@@ -1766,19 +1760,7 @@ exports.capturePayment = async (req, res) => {
         });
       }
 
-      // Check if payment screenshot is uploaded
-      if (!req.files || !req.files.paymentScreenshot) {
-        console.log("⚠️ No payment screenshot uploaded, but proceeding...");
-        // REMOVED: return error for screenshot requirement
-        // return res.status(400).json({
-        //   success: false,
-        //   message: "Payment receipt screenshot is required for bank transfer",
-        // });
-      }
-
-      const bankTransactionId = `BANK_${Date.now()}_${ambassador.fullName ? ambassador.fullName.replace(/\s+/g, "_") : "ambassador"}`;
-
-      // Upload payment screenshot to Cloudinary (if provided)
+      // Upload payment screenshot locally (if provided)
       let uploadedScreenshotUrl = "";
       if (req.files && req.files.paymentScreenshot) {
         const paymentScreenshot = req.files.paymentScreenshot;
@@ -1792,25 +1774,16 @@ exports.capturePayment = async (req, res) => {
           });
         }
 
-        // Upload to Cloudinary
         try {
-          console.log("📤 Uploading to Cloudinary...");
-          const result = await cloudinary.uploader.upload(paymentScreenshot.tempFilePath, {
-            folder: "veggyfy/ambassadors/payment_screenshots",
-            resource_type: "auto", // Changed to auto to handle PDF as well
-            transformation: [
-              { quality: "auto" },
-              { fetch_format: "auto" }
-            ]
-          });
-          uploadedScreenshotUrl = result.secure_url;
-          console.log("✅ Cloudinary upload successful:", uploadedScreenshotUrl);
+          uploadedScreenshotUrl = await uploadLocalFile(paymentScreenshot, PAYMENT_SCREENSHOTS_DIR);
+          console.log(`✅ Payment screenshot saved: ${uploadedScreenshotUrl}`);
         } catch (uploadError) {
-          console.error("❌ Cloudinary upload error:", uploadError);
-          // Don't return error, just continue without screenshot
+          console.error("❌ File upload error:", uploadError);
           console.log("⚠️ Continuing without screenshot upload");
         }
       }
+
+      const bankTransactionId = `BANK_${Date.now()}_${ambassador.fullName ? ambassador.fullName.replace(/\s+/g, "_") : "ambassador"}`;
 
       const payment = new AmbassadorPayment({
         ambassadorId,
@@ -1830,7 +1803,7 @@ exports.capturePayment = async (req, res) => {
         paymentStatus: "pending_verification",
         status: "pending",
         bankDetails: bankDetailsData,
-        paymentScreenshot: uploadedScreenshotUrl, // Could be empty string
+        paymentScreenshot: uploadedScreenshotUrl,
         screenshotUploadedAt: uploadedScreenshotUrl ? purchaseDate : null,
         submittedAt: purchaseDate,
         verifiedAt: null,
@@ -1882,7 +1855,7 @@ exports.capturePayment = async (req, res) => {
     }
 
     /* ===========================
-       💳 RAZORPAY FLOW
+       💳 RAZORPAY FLOW (No change needed)
     ============================ */
     if (!transactionId) {
       return res.status(400).json({
@@ -1970,7 +1943,6 @@ exports.capturePayment = async (req, res) => {
       success: false,
       message: "Server error",
       error: err.message,
-      stack: err.stack // Added for debugging
     });
   }
 };

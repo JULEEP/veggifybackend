@@ -20,6 +20,7 @@ const Reel = require("../models/Reel");
 const path = require('path');
 const multer = require('multer');
 const fs = require('fs');
+const adminModel = require("../models/adminModel");
 
 
 
@@ -642,7 +643,526 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// Capture Vendor Payment — FIXED WITH SCREENSHOT UPLOAD
+// Upload directories (SAME PATTERN AS deleteProfileImage)
+const UPLOADS_DIR = path.join(__dirname, '../uploads');
+const PROFILE_IMAGES_DIR = path.join(UPLOADS_DIR, 'profile_images');
+const VENDORS_DIR = path.join(UPLOADS_DIR, 'vendors');
+const PAYMENT_SCREENSHOTS_DIR = path.join(VENDORS_DIR, 'payment_screenshots');
+
+// Ensure directories exist (SAME PATTERN)
+if (!fs.existsSync(UPLOADS_DIR)) {
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
+if (!fs.existsSync(PROFILE_IMAGES_DIR)) {
+  fs.mkdirSync(PROFILE_IMAGES_DIR, { recursive: true });
+}
+if (!fs.existsSync(VENDORS_DIR)) {
+  fs.mkdirSync(VENDORS_DIR, { recursive: true });
+}
+if (!fs.existsSync(PAYMENT_SCREENSHOTS_DIR)) {
+  fs.mkdirSync(PAYMENT_SCREENSHOTS_DIR, { recursive: true });
+}
+
+// Helper function to delete local file (SAME AS deleteProfileImage)
+const deleteLocalFile = (fileUrl) => {
+  if (fileUrl) {
+    const filePath = path.join(__dirname, '../uploads', fileUrl.split('/uploads')[1]);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      console.log(`🗑️ Deleted file: ${filePath}`);
+      return true;
+    }
+  }
+  return false;
+};
+
+// Delete Profile Image (NO CLOUDINARY)
+const deleteProfileImage = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    if (!user.profileImg && !user.image) {
+      return res.status(400).json({ message: 'No profile image to delete' });
+    }
+
+    // Get the image URL (handle both field names)
+    const imageUrl = user.profileImg || user.image;
+
+    // Delete local image file
+    const deleted = deleteLocalFile(imageUrl);
+    
+    if (deleted) {
+      console.log(`✅ Profile image deleted from storage`);
+    } else {
+      console.log(`⚠️ Image file not found at path, continuing...`);
+    }
+
+    // Remove image field from user document
+    user.profileImg = undefined;
+    user.image = undefined;
+    await user.save();
+
+    res.status(200).json({ 
+      message: 'Profile image deleted successfully ✅' 
+    });
+
+  } catch (error) {
+    console.error("Delete profile image error:", error);
+    res.status(500).json({ 
+      message: 'Failed to delete profile image ❌', 
+      error: error.message 
+    });
+  }
+};
+
+// // Capture Vendor Payment — FIXED WITH LOCAL FILE UPLOAD (NO CLOUDINARY)
+// exports.captureVendorPayment = async (req, res) => {
+//   try {
+//     console.log('🔔 [Vendor Payment Capture] Function called');
+//     console.log('📦 Request params:', req.params);
+//     console.log('📦 Request body:', req.body);
+//     console.log('📁 Files:', req.files);
+
+//     const { vendorId } = req.params;
+//     const { planId, transactionId, paymentMethod = 'razorpay', bankDetails } = req.body;
+
+//     // 1️⃣ Basic validation
+//     if (!vendorId) {
+//       console.log('❌ Validation failed: Vendor ID missing');
+//       return res.status(400).json({
+//         success: false,
+//         message: "Vendor ID is required",
+//       });
+//     }
+
+//     if (!planId) {
+//       console.log('❌ Validation failed: planId missing');
+//       return res.status(400).json({
+//         success: false,
+//         message: "planId is required",
+//       });
+//     }
+//     console.log('✅ Basic validation passed');
+
+//     // 2️⃣ Find vendor
+//     console.log('🔍 Looking for vendor...', vendorId);
+//     const vendor = await Restaurant.findById(vendorId);
+//     if (!vendor) {
+//       console.log('❌ Vendor not found');
+//       return res.status(404).json({
+//         success: false,
+//         message: "Vendor not found",
+//       });
+//     }
+//     console.log('✅ Vendor found:', vendor.restaurantName);
+
+//     // 3️⃣ Find plan
+//     console.log('🔍 Looking for plan...', planId);
+//     const plan = await VendorPlan.findById(planId);
+//     if (!plan) {
+//       console.log('❌ Plan not found');
+//       return res.status(404).json({
+//         success: false,
+//         message: "Vendor plan not found",
+//       });
+//     }
+//     console.log('✅ Plan found:', plan.name, 'Price:', plan.price);
+
+//     // 4️⃣ Check payment method
+//     if (paymentMethod === 'bank_transfer' || paymentMethod === 'bank') {
+//       // Handle bank transfer - screenshot upload ke saath (LOCAL STORAGE)
+//       console.log('🏦 Processing bank transfer payment');
+      
+//       // Parse bank details
+//       let bankDetailsData = {};
+//       if (bankDetails) {
+//         try {
+//           if (typeof bankDetails === 'string') {
+//             bankDetailsData = JSON.parse(bankDetails);
+//           } else if (typeof bankDetails === 'object') {
+//             bankDetailsData = bankDetails;
+//           }
+//         } catch (error) {
+//           console.warn('⚠️ Bank details parse error:', error.message);
+//         }
+//       }
+      
+//       // Default bank details agar nahi hai
+//       if (!bankDetailsData.accountName) {
+//         bankDetailsData = {
+//           accountName: "VEGIFFY PRIVATE LIMITED",
+//           accountNumber: "50200067111965",
+//           bankName: "HDFC Bank",
+//           ifscCode: "HDFC0001252",
+//           branch: "Sector 62, Noida",
+//           upiId: "vegiffy@hdfcbank"
+//         };
+//       }
+      
+//       console.log('📦 Bank details:', bankDetailsData);
+
+//       // Check for payment screenshot - LOCAL FILE STORAGE
+//       let uploadedScreenshotUrl = "";
+      
+//       if (req.files && req.files.paymentScreenshot) {
+//         const paymentScreenshot = req.files.paymentScreenshot;
+
+//         // Validate file type
+//         const validImageTypes = ['image/jpeg', 'image/jpg', 'image/png', 'application/pdf', 'image/webp'];
+//         if (!validImageTypes.includes(paymentScreenshot.mimetype)) {
+//           return res.status(400).json({
+//             success: false,
+//             message: "Invalid file type for payment screenshot. Only JPG, PNG, PDF, WebP allowed.",
+//           });
+//         }
+
+//         // Validate file size (max 5MB)
+//         const maxSize = 5 * 1024 * 1024; // 5MB
+//         if (paymentScreenshot.size > maxSize) {
+//           return res.status(400).json({
+//             success: false,
+//             message: "File size too large. Maximum size is 5MB.",
+//           });
+//         }
+
+//         // Save locally (NO CLOUDINARY)
+//         try {
+//           console.log('📤 Saving payment screenshot locally...');
+          
+//           // Create directory if it doesn't exist (already created above but double check)
+//           if (!fs.existsSync(PAYMENT_SCREENSHOTS_DIR)) {
+//             fs.mkdirSync(PAYMENT_SCREENSHOTS_DIR, { recursive: true });
+//           }
+          
+//           // Generate unique filename
+//           const timestamp = Date.now();
+//           const fileExtension = path.extname(paymentScreenshot.name) || '.jpg';
+//           const filename = `vendor_payment_${vendorId}_${timestamp}${fileExtension}`;
+//           const filePath = path.join(PAYMENT_SCREENSHOTS_DIR, filename);
+          
+//           // Save file
+//           if (paymentScreenshot.tempFilePath) {
+//             // If file is from temp path (express-fileupload)
+//             fs.copyFileSync(paymentScreenshot.tempFilePath, filePath);
+//             // Clean up temp file
+//             fs.unlinkSync(paymentScreenshot.tempFilePath);
+//           } else if (paymentScreenshot.data) {
+//             // If file is from buffer (multer)
+//             fs.writeFileSync(filePath, paymentScreenshot.data);
+//           } else if (paymentScreenshot.path) {
+//             // If file has direct path
+//             fs.copyFileSync(paymentScreenshot.path, filePath);
+//           }
+          
+//           // Create URL for the saved file
+//           uploadedScreenshotUrl = `/uploads/vendors/payment_screenshots/${filename}`;
+//           console.log('✅ File saved locally:', uploadedScreenshotUrl);
+//           console.log('📁 File path:', filePath);
+//         } catch (uploadError) {
+//           console.error('❌ Local file save error:', uploadError);
+//           // Continue without screenshot, don't block payment
+//           console.log('⚠️ Continuing without screenshot upload');
+//         }
+//       } else {
+//         console.log('⚠️ No payment screenshot provided');
+//       }
+      
+//       // Calculate GST
+//       const baseAmount = plan.price;
+//       const gstRate = 18;
+//       const gstAmount = (baseAmount * gstRate) / 100;
+//       const totalAmount = baseAmount + gstAmount;
+      
+//       // Generate a transaction ID for bank payment
+//       const bankTransactionId = `BANK_${Date.now()}_${vendor.restaurantName.replace(/\s+/g, '_')}`;
+      
+//       // Prepare dates
+//       const purchaseDate = new Date();
+//       const expiryDate = new Date(
+//         purchaseDate.getTime() + plan.validity * 24 * 60 * 60 * 1000
+//       );
+      
+//       // Save payment - Ambassador ke jaise fields add kiye
+//       const payment = new VendorPayment({
+//         vendorId,
+//         planId,
+//         transactionId: bankTransactionId,
+//         paymentMethod: 'bank_transfer',
+//         isPurchased: true,
+//         planPurchaseDate: purchaseDate,
+//         expiryDate: expiryDate,
+//         amount: baseAmount,
+//         gstAmount: gstAmount,
+//         totalAmount: totalAmount,
+//         status: "pending_verification",
+//         verificationNotes: uploadedScreenshotUrl ? 
+//           "Payment screenshot uploaded, awaiting admin verification" : 
+//           "Bank payment submitted, awaiting admin verification",
+//         submittedAt: purchaseDate,
+//         verifiedAt: null,
+//         verifiedBy: null,
+//         bankDetails: bankDetailsData,
+//         paymentScreenshot: uploadedScreenshotUrl, // ✅ Local file URL
+//         screenshotUploadedAt: uploadedScreenshotUrl ? purchaseDate : null,
+//         isActive: false
+//       });
+
+//       await payment.save();
+//       console.log('✅ Bank payment saved with screenshot option');
+
+//       // Update restaurant with plan but status pending
+//       await Restaurant.findByIdAndUpdate(
+//         vendorId,
+//         {
+//           currentPlan: planId,
+//           planExpiry: expiryDate,
+//           planStatus: "pending_verification",
+//           planPurchaseDate: purchaseDate,
+//           isPlanActive: false,
+//           $push: {
+//             myPlans: {
+//               planId: planId,
+//               purchaseDate: purchaseDate,
+//               expiryDate: expiryDate,
+//               isPurchased: true,
+//               status: "pending_verification",
+//               transactionId: bankTransactionId,
+//               paymentMethod: 'bank_transfer',
+//               bankDetails: bankDetailsData,
+//               paymentScreenshot: uploadedScreenshotUrl, // ✅ Local file URL
+//               screenshotUploadedAt: uploadedScreenshotUrl ? purchaseDate : null
+//             },
+//           },
+//         },
+//         { new: true }
+//       );
+//       console.log('✅ Restaurant updated with plan (pending verification)');
+
+//       // Response for bank payment
+//       return res.status(200).json({
+//         success: true,
+//         message: uploadedScreenshotUrl ? 
+//           "Bank payment submitted with screenshot. Plan will activate after verification." : 
+//           "Bank payment submitted. Plan will activate after verification.",
+//         data: {
+//           payment: {
+//             id: payment._id,
+//             transactionId: payment.transactionId,
+//             status: payment.status,
+//             isPurchased: payment.isPurchased,
+//             planPurchaseDate: payment.planPurchaseDate,
+//             expiryDate: payment.expiryDate,
+//             submittedAt: payment.submittedAt,
+//             verificationStatus: "pending",
+//             bankDetails: payment.bankDetails,
+//             paymentScreenshot: payment.paymentScreenshot // ✅ Local file URL
+//           },
+//           vendor: {
+//             id: vendor._id,
+//             restaurantName: vendor.restaurantName,
+//           },
+//           plan: {
+//             id: plan._id,
+//             name: plan.name,
+//             price: plan.price,
+//             validity: plan.validity,
+//           },
+//           verification: {
+//             estimatedTime: "1-2 hours",
+//             contactEmail: "vendor@vegiffy.in",
+//             screenshotUploaded: !!uploadedScreenshotUrl
+//           }
+//         },
+//       });
+
+//     } else {
+//       // Handle Razorpay/UPI payment - auto complete
+//       console.log('💳 Processing Razorpay/UPI payment...', transactionId);
+      
+//       if (!transactionId) {
+//         return res.status(400).json({
+//           success: false,
+//           message: "transactionId is required for Razorpay/UPI payments",
+//         });
+//       }
+      
+//       try {
+//         const paymentDetails = await razorpay.payments.fetch(transactionId);
+//         console.log('✅ Razorpay payment details:', {
+//           id: paymentDetails.id,
+//           amount: paymentDetails.amount,
+//           currency: paymentDetails.currency,
+//           status: paymentDetails.status,
+//           captured: paymentDetails.captured
+//         });
+
+//         if (paymentDetails.captured) {
+//           console.log('⚠️ Payment already captured');
+//           return res.status(400).json({
+//             success: false,
+//             message: "Payment already captured",
+//             data: { paymentId: paymentDetails.id }
+//           });
+//         }
+
+//         // Capture payment
+//         const authorizedAmount = paymentDetails.amount;
+//         const capturedPayment = await razorpay.payments.capture(
+//           transactionId,
+//           authorizedAmount,
+//           "INR"
+//         );
+
+//         console.log('✅ Payment captured successfully:', {
+//           id: capturedPayment.id,
+//           amount: capturedPayment.amount,
+//           status: capturedPayment.status,
+//         });
+
+//         // Calculate GST
+//         const baseAmount = plan.price;
+//         const gstRate = 18;
+//         const gstAmount = (baseAmount * gstRate) / 100;
+//         const totalAmountInINR = authorizedAmount / 100;
+
+//         // Prepare dates
+//         const purchaseDate = new Date();
+//         const expiryDate = new Date(
+//           purchaseDate.getTime() + plan.validity * 24 * 60 * 60 * 1000
+//         );
+
+//         // Save payment
+//         let payment = await VendorPayment.findOne({ vendorId, planId });
+        
+//         const paymentData = {
+//           vendorId,
+//           planId,
+//           transactionId,
+//           razorpayPaymentId: capturedPayment.id,
+//           paymentMethod: paymentMethod,
+//           isPurchased: true,
+//           planPurchaseDate: purchaseDate,
+//           expiryDate,
+//           amount: baseAmount,
+//           gstAmount: gstAmount,
+//           totalAmount: totalAmountInINR,
+//           razorpayAmount: authorizedAmount,
+//           status: "completed",
+//           verifiedAt: purchaseDate,
+//           verifiedBy: "system",
+//           isActive: true
+//         };
+
+//         if (!payment) {
+//           payment = new VendorPayment(paymentData);
+//         } else {
+//           Object.assign(payment, paymentData);
+//         }
+
+//         await payment.save();
+//         console.log('✅ Payment record saved');
+
+//         // Update restaurant - Active status
+//         await Restaurant.findByIdAndUpdate(
+//           vendorId,
+//           {
+//             currentPlan: planId,
+//             planExpiry: expiryDate,
+//             planStatus: "active",
+//             planPurchaseDate: purchaseDate,
+//             isPlanActive: true,
+//             $push: {
+//               myPlans: {
+//                 planId: planId,
+//                 purchaseDate: purchaseDate,
+//                 expiryDate: expiryDate,
+//                 isPurchased: true,
+//                 status: "active",
+//                 transactionId: transactionId,
+//                 paymentMethod: paymentMethod,
+//                 isActive: true
+//               },
+//             },
+//           },
+//           { new: true }
+//         );
+//         console.log('✅ Restaurant updated with active plan');
+
+//         // Final response for Razorpay
+//         return res.status(200).json({
+//           success: true,
+//           message: "Payment captured successfully, vendor plan activated",
+//           data: {
+//             payment: {
+//               id: payment._id,
+//               transactionId: payment.transactionId,
+//               baseAmount: payment.amount,
+//               gstAmount: payment.gstAmount,
+//               totalAmount: payment.totalAmount,
+//               status: payment.status,
+//               isPurchased: payment.isPurchased,
+//               purchaseDate: payment.planPurchaseDate,
+//               expiryDate: payment.expiryDate,
+//               isActive: payment.isActive
+//             },
+//             vendor: {
+//               id: vendor._id,
+//               restaurantName: vendor.restaurantName,
+//             },
+//             plan: {
+//               id: plan._id,
+//               name: plan.name,
+//               price: plan.price,
+//               validity: plan.validity,
+//             },
+//           },
+//         });
+
+//       } catch (razorpayError) {
+//         console.error('❌ Razorpay API Error:', razorpayError);
+        
+//         if (razorpayError.error && razorpayError.error.description) {
+//           return res.status(400).json({
+//             success: false,
+//             message: `Payment capture failed: ${razorpayError.error.description}`,
+//           });
+//         }
+        
+//         throw razorpayError;
+//       }
+//     }
+
+//   } catch (err) {
+//     console.error("❌ Error capturing vendor payment:", err);
+    
+//     let statusCode = 500;
+//     let errorMessage = "Server error while capturing payment";
+    
+//     if (err.name === 'ValidationError') {
+//       statusCode = 400;
+//       errorMessage = "Validation error: " + err.message;
+//     }
+    
+//     if (err.statusCode) {
+//       statusCode = err.statusCode;
+//     }
+
+//     return res.status(statusCode).json({
+//       success: false,
+//       message: errorMessage,
+//       error: err.message || err.toString(),
+//     });
+//   }
+// };
+
+
+
+// Capture Vendor Payment — FIXED WITH LOCAL FILE UPLOAD (NO CLOUDINARY)
 exports.captureVendorPayment = async (req, res) => {
   try {
     console.log('🔔 [Vendor Payment Capture] Function called');
@@ -695,9 +1215,33 @@ exports.captureVendorPayment = async (req, res) => {
     }
     console.log('✅ Plan found:', plan.name, 'Price:', plan.price);
 
+    // ------------------------------------------------------------------
+    // ✅ NEW: Check if vendor already has an active subscription for this plan
+    // ------------------------------------------------------------------
+    const existingActivePayment = await VendorPayment.findOne({
+      vendorId: vendorId,
+      planId: planId,
+      status: { $in: ['completed', 'active'] },   // active/completed plan
+      expiryDate: { $gt: new Date() }             // still valid
+    });
+
+    if (existingActivePayment) {
+      const expiryDateFormatted = existingActivePayment.expiryDate.toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+      });
+      console.log(`⚠️ Vendor already has an active plan (ID: ${planId}) expiring on ${expiryDateFormatted}`);
+      return res.status(400).json({
+        success: false,
+        message: `You already have an active subscription to the "${plan.name}" plan. It expires on ${expiryDateFormatted}. You cannot purchase the same plan again until it expires.`
+      });
+    }
+    // ------------------------------------------------------------------
+
     // 4️⃣ Check payment method
     if (paymentMethod === 'bank_transfer' || paymentMethod === 'bank') {
-      // Handle bank transfer - screenshot upload ke saath
+      // Handle bank transfer - screenshot upload ke saath (LOCAL STORAGE)
       console.log('🏦 Processing bank transfer payment');
       
       // Parse bank details
@@ -728,7 +1272,7 @@ exports.captureVendorPayment = async (req, res) => {
       
       console.log('📦 Bank details:', bankDetailsData);
 
-      // Check for payment screenshot - OPTIONAL (ambassador ke jaise)
+      // Check for payment screenshot - LOCAL FILE STORAGE
       let uploadedScreenshotUrl = "";
       
       if (req.files && req.files.paymentScreenshot) {
@@ -752,39 +1296,41 @@ exports.captureVendorPayment = async (req, res) => {
           });
         }
 
-        // Upload to Cloudinary
+        // Save locally (NO CLOUDINARY)
         try {
-          console.log('📤 Uploading payment screenshot to Cloudinary...');
+          console.log('📤 Saving payment screenshot locally...');
           
-          let result;
-          if (paymentScreenshot.tempFilePath) {
-            result = await cloudinary.uploader.upload(paymentScreenshot.tempFilePath, {
-              folder: "veggyfy/vendors/payment_screenshots",
-              resource_type: "auto",
-              public_id: `vendor_payment_${vendorId}_${Date.now()}`,
-              overwrite: false,
-              transformation: [
-                { quality: "auto:good" },
-                { fetch_format: "auto" }
-              ]
-            });
-          } else if (paymentScreenshot.data) {
-            // For buffer/base64
-            result = await cloudinary.uploader.upload(
-              `data:${paymentScreenshot.mimetype};base64,${paymentScreenshot.data.toString('base64')}`,
-              {
-                folder: "veggyfy/vendors/payment_screenshots",
-                resource_type: "auto",
-                public_id: `vendor_payment_${vendorId}_${Date.now()}`,
-                overwrite: false
-              }
-            );
+          // Create directory if it doesn't exist (already created above but double check)
+          if (!fs.existsSync(PAYMENT_SCREENSHOTS_DIR)) {
+            fs.mkdirSync(PAYMENT_SCREENSHOTS_DIR, { recursive: true });
           }
           
-          uploadedScreenshotUrl = result.secure_url;
-          console.log('✅ Cloudinary upload successful:', uploadedScreenshotUrl);
+          // Generate unique filename
+          const timestamp = Date.now();
+          const fileExtension = path.extname(paymentScreenshot.name) || '.jpg';
+          const filename = `vendor_payment_${vendorId}_${timestamp}${fileExtension}`;
+          const filePath = path.join(PAYMENT_SCREENSHOTS_DIR, filename);
+          
+          // Save file
+          if (paymentScreenshot.tempFilePath) {
+            // If file is from temp path (express-fileupload)
+            fs.copyFileSync(paymentScreenshot.tempFilePath, filePath);
+            // Clean up temp file
+            fs.unlinkSync(paymentScreenshot.tempFilePath);
+          } else if (paymentScreenshot.data) {
+            // If file is from buffer (multer)
+            fs.writeFileSync(filePath, paymentScreenshot.data);
+          } else if (paymentScreenshot.path) {
+            // If file has direct path
+            fs.copyFileSync(paymentScreenshot.path, filePath);
+          }
+          
+          // Create URL for the saved file
+          uploadedScreenshotUrl = `/uploads/vendors/payment_screenshots/${filename}`;
+          console.log('✅ File saved locally:', uploadedScreenshotUrl);
+          console.log('📁 File path:', filePath);
         } catch (uploadError) {
-          console.error('❌ Cloudinary upload error:', uploadError);
+          console.error('❌ Local file save error:', uploadError);
           // Continue without screenshot, don't block payment
           console.log('⚠️ Continuing without screenshot upload');
         }
@@ -826,11 +1372,10 @@ exports.captureVendorPayment = async (req, res) => {
         submittedAt: purchaseDate,
         verifiedAt: null,
         verifiedBy: null,
-        // Ambassador ke jaise bank details aur screenshot
         bankDetails: bankDetailsData,
-        paymentScreenshot: uploadedScreenshotUrl, // ✅ Ambassador ke jaise
+        paymentScreenshot: uploadedScreenshotUrl, // ✅ Local file URL
         screenshotUploadedAt: uploadedScreenshotUrl ? purchaseDate : null,
-        isActive: false // ✅ Ambassador ke jaise
+        isActive: false
       });
 
       await payment.save();
@@ -855,7 +1400,7 @@ exports.captureVendorPayment = async (req, res) => {
               transactionId: bankTransactionId,
               paymentMethod: 'bank_transfer',
               bankDetails: bankDetailsData,
-              paymentScreenshot: uploadedScreenshotUrl, // ✅ Ambassador ke jaise
+              paymentScreenshot: uploadedScreenshotUrl, // ✅ Local file URL
               screenshotUploadedAt: uploadedScreenshotUrl ? purchaseDate : null
             },
           },
@@ -864,7 +1409,7 @@ exports.captureVendorPayment = async (req, res) => {
       );
       console.log('✅ Restaurant updated with plan (pending verification)');
 
-      // Response for bank payment - Ambassador ke jaise
+      // Response for bank payment
       return res.status(200).json({
         success: true,
         message: uploadedScreenshotUrl ? 
@@ -881,7 +1426,7 @@ exports.captureVendorPayment = async (req, res) => {
             submittedAt: payment.submittedAt,
             verificationStatus: "pending",
             bankDetails: payment.bankDetails,
-            paymentScreenshot: payment.paymentScreenshot // ✅ Ambassador ke jaise
+            paymentScreenshot: payment.paymentScreenshot // ✅ Local file URL
           },
           vendor: {
             id: vendor._id,
@@ -902,7 +1447,7 @@ exports.captureVendorPayment = async (req, res) => {
       });
 
     } else {
-      // Handle Razorpay/UPI payment - auto complete (same as before)
+      // Handle Razorpay/UPI payment - auto complete
       console.log('💳 Processing Razorpay/UPI payment...', transactionId);
       
       if (!transactionId) {
@@ -976,7 +1521,7 @@ exports.captureVendorPayment = async (req, res) => {
           status: "completed",
           verifiedAt: purchaseDate,
           verifiedBy: "system",
-          isActive: true // ✅ Ambassador ke jaise
+          isActive: true
         };
 
         if (!payment) {
@@ -1006,7 +1551,7 @@ exports.captureVendorPayment = async (req, res) => {
                 status: "active",
                 transactionId: transactionId,
                 paymentMethod: paymentMethod,
-                isActive: true // ✅ Ambassador ke jaise
+                isActive: true
               },
             },
           },
@@ -1029,7 +1574,7 @@ exports.captureVendorPayment = async (req, res) => {
               isPurchased: payment.isPurchased,
               purchaseDate: payment.planPurchaseDate,
               expiryDate: payment.expiryDate,
-              isActive: payment.isActive // ✅ Ambassador ke jaise
+              isActive: payment.isActive
             },
             vendor: {
               id: vendor._id,
@@ -1080,7 +1625,6 @@ exports.captureVendorPayment = async (req, res) => {
     });
   }
 };
-
 
 exports.updateVendorPaymentStatus = async (req, res) => {
   try {
@@ -2343,7 +2887,7 @@ exports.createReel = async (req, res) => {
       title: title || '',
       description: description || '',
       deepLink: deepLink || '',
-      status: status || 'active',
+  status: status || 'pending', // ✅ default pending
       isHot: isHot === 'true' || isHot === true
     };
 
@@ -2367,6 +2911,149 @@ exports.createReel = async (req, res) => {
     return res.status(201).json({
       success: true,
       message: "Reel create ho gayi",
+      data: reel
+    });
+
+  } catch (err) {
+    console.error("❌ Error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Kuch gadbad ho gayi",
+      error: err.message
+    });
+  }
+};
+
+
+// Create Reel for Admin
+exports.createAdminReel = async (req, res) => {
+  try {
+    console.log('🎥 [Admin Reel Upload] Function called');
+    console.log('📦 Params:', req.params);
+    console.log('📁 Files:', req.files);
+    console.log('📝 Body:', req.body);
+
+    const { adminId } = req.params;
+    const { title, description, deepLink, isHot, status } = req.body;
+
+    // 1️⃣ Admin ID check
+    if (!adminId) {
+      return res.status(400).json({
+        success: false,
+        message: "Admin ID chahiye"
+      });
+    }
+
+    // 2️⃣ File check - video zaroori hai
+    if (!req.files || !req.files.video) {
+      return res.status(400).json({
+        success: false,
+        message: "Video file bhejna zaroori hai"
+      });
+    }
+
+    const videoFile = req.files.video;
+
+    // 3️⃣ Validate video file type
+    const validTypes = ['video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/webm', 'video/3gpp'];
+    if (!validTypes.includes(videoFile.mimetype)) {
+      return res.status(400).json({
+        success: false,
+        message: "Sirf video files allowed hain (MP4, MOV, AVI, WEBM, 3GP)"
+      });
+    }
+
+    // 4️⃣ Validate video file size (100MB)
+    if (videoFile.size > 100 * 1024 * 1024) {
+      return res.status(400).json({
+        success: false,
+        message: "Video size 100MB se kam hona chahiye"
+      });
+    }
+
+    // 5️⃣ Admin exist karta hai?
+    const admin = await adminModel.findById(adminId);
+    if (!admin) {
+      return res.status(404).json({
+        success: false,
+        message: "Admin nahi mila"
+      });
+    }
+
+    // 6️⃣ uploads/reels folder check
+    const reelsDir = path.join(__dirname, '../uploads/reels');
+    if (!fs.existsSync(reelsDir)) {
+      fs.mkdirSync(reelsDir, { recursive: true });
+    }
+
+    // 7️⃣ Unique filename
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const videoExt = path.extname(videoFile.name);
+    const videoFilename = `admin_reel_video_${adminId}_${uniqueSuffix}${videoExt}`;
+    const videoPath = path.join(reelsDir, videoFilename);
+
+    // 8️⃣ Save video
+    await videoFile.mv(videoPath);
+    console.log('✅ Video saved:', videoPath);
+
+    // 9️⃣ Thumbnail handle
+    let thumbFilename = '';
+    let thumbUrl = '';
+
+    if (req.files && req.files.thumbnail) {
+      const thumbFile = req.files.thumbnail;
+
+      const validImageTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+      if (validImageTypes.includes(thumbFile.mimetype)) {
+
+        if (thumbFile.size <= 5 * 1024 * 1024) {
+          const thumbExt = path.extname(thumbFile.name);
+          thumbFilename = `admin_reel_thumb_${adminId}_${uniqueSuffix}${thumbExt}`;
+          const thumbPath = path.join(reelsDir, thumbFilename);
+
+          await thumbFile.mv(thumbPath);
+          console.log('✅ Thumbnail saved:', thumbPath);
+        }
+      }
+    }
+
+    // 🔟 Generate URLs
+    const baseUrl = 'https://api.vegiffyy.com';
+    const videoUrl = `${baseUrl}/uploads/reels/${videoFilename}`;
+    thumbUrl = thumbFilename ? `${baseUrl}/uploads/reels/${thumbFilename}` : '';
+
+    // 1️⃣1️⃣ Create Reel
+    const reelData = {
+      adminId,
+      videoUrl,
+      thumbUrl,
+      title: title || '',
+      description: description || '',
+      deepLink: deepLink || '',
+      status: status || 'active',
+      isHot: isHot === 'true' || isHot === true
+    };
+
+    const reel = new Reel(reelData);
+    await reel.save();
+
+    // 1️⃣2️⃣ Save reference in admin (optional)
+    if (!admin.reels) {
+      admin.reels = [];
+    }
+
+    admin.reels.push({
+      reelId: reel._id,
+      videoUrl,
+      uploadedAt: new Date()
+    });
+
+    await admin.save();
+
+    // 1️⃣3️⃣ Response
+    return res.status(201).json({
+      success: true,
+      message: "Admin reel create ho gayi",
       data: reel
     });
 
