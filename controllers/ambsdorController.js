@@ -16,6 +16,7 @@ dotenv.config();
 
 const path = require('path');
 const fs = require('fs');
+const notificationModel = require("../models/notificationModel");
 
 // Cloudinary Configuration
 cloudinary.config({
@@ -337,6 +338,15 @@ exports.createAmbassador = async (req, res) => {
 
     await newAmbassador.save();
 
+    // 🔔 CREATE NOTIFICATION
+await notificationModel.create({
+  message: `New ambassador "${newAmbassador.fullName}" has registered successfully.`,
+  type: "ambassador",
+  notificationType: "ambassador_registration",
+  status: "unread",
+  createdAt: new Date(),
+});
+
     // ========================
     // Referral Logic
     // ========================
@@ -586,8 +596,16 @@ exports.verifyAmbassadorOtp = async (req, res) => {
       });
     }
 
+    // 🔔 NOTIFICATION ADD (LOGIN SUCCESS)
+    ambassador.notifications.push({
+      title: "Login Successful 🔐",
+      message: "You have successfully logged into your account.",
+      type: "general",
+    });
+
     // ✅ Clear OTP after verification
     ambassador.otp = null;
+
     await ambassador.save();
 
     res.status(200).json({
@@ -611,7 +629,6 @@ exports.verifyAmbassadorOtp = async (req, res) => {
     });
   }
 };
-
 
 
 exports.getAllAmbassadors = async (req, res) => {
@@ -1376,19 +1393,16 @@ exports.requestAmbassadorWithdrawal = async (req, res) => {
     
     await withdrawalRequest.save();
 
-    // Step 5: Create wallet transaction record
-    const transaction = new AmbassadorTransaction({
-      ambassadorId,
-      type: 'debit',
-      amount: amountValue,
-      description: `Withdrawal request #${withdrawalRequest._id.toString().slice(-8)}`,
-      transactionType: 'withdrawal',
-      balanceAfter: ambassador.wallet,
-      status: 'pending',
-      referenceId: withdrawalRequest._id
-    });
 
-    await transaction.save();
+
+await notificationModel.create({
+  message: `Your withdrawal request of ₹${amountValue} has been submitted and is pending approval.`,
+  type: "withdrawal",
+  notificationType: "withdrawal_request",
+  status: "unread",
+  ambassadorId: ambassador._id,
+  createdAt: new Date(),
+});
 
     // Step 6: Return the created withdrawal request
     return res.status(200).json({
@@ -1422,13 +1436,11 @@ exports.requestAmbassadorWithdrawal = async (req, res) => {
 };
 
 
-// Process Withdrawal (Accept or Reject)
 exports.processAmbassadorWithdrawal = async (req, res) => {
   try {
     const { withdrawalId } = req.params;
-    const { status, rejectionReason, subAdminId } = req.body; // added subAdminId to body
+    const { status, rejectionReason, subAdminId } = req.body;
     
-    // Step 1: Find the withdrawal request
     const withdrawalRequest = await AmbassadorWithdrawal.findById(withdrawalId);
     if (!withdrawalRequest) {
       return res.status(404).json({
@@ -1437,7 +1449,6 @@ exports.processAmbassadorWithdrawal = async (req, res) => {
       });
     }
 
-    // Step 2: Validate the status - it should be either 'accepted' or 'rejected'
     if (!['accepted', 'rejected'].includes(status)) {
       return res.status(400).json({
         success: false,
@@ -1445,7 +1456,6 @@ exports.processAmbassadorWithdrawal = async (req, res) => {
       });
     }
 
-    // Step 3: Determine who processed the request (Admin or Sub-admin)
     let note = "Withdrawal processed by Admin";
     let updatedBy = null;
 
@@ -1462,9 +1472,11 @@ exports.processAmbassadorWithdrawal = async (req, res) => {
       updatedBy = subAdminId;
     }
 
-    // Step 4: Handle the 'accepted' status
+    // =========================
+    // ✅ ACCEPTED CASE
+    // =========================
     if (status === 'accepted') {
-      // Ensure the withdrawal request is still pending
+
       if (withdrawalRequest.status !== 'pending') {
         return res.status(400).json({
           success: false,
@@ -1472,7 +1484,6 @@ exports.processAmbassadorWithdrawal = async (req, res) => {
         });
       }
 
-      // Find the ambassador who requested the withdrawal
       const ambassador = await Ambassador.findById(withdrawalRequest.ambassadorId);
       if (!ambassador) {
         return res.status(404).json({
@@ -1481,7 +1492,6 @@ exports.processAmbassadorWithdrawal = async (req, res) => {
         });
       }
 
-      // Ensure the ambassador has enough balance
       if (ambassador.wallet < withdrawalRequest.amount) {
         return res.status(400).json({
           success: false,
@@ -1489,18 +1499,25 @@ exports.processAmbassadorWithdrawal = async (req, res) => {
         });
       }
 
-      // Deduct the amount from the ambassador's wallet
+      // 💸 Deduct wallet
       ambassador.wallet -= withdrawalRequest.amount;
-      await ambassador.save(); // Save the updated wallet balance
 
-      // Update the withdrawal request status to 'accepted' and track who processed it
+      // 🔔 NOTIFICATION ADD (ACCEPTED)
+      ambassador.notifications.push({
+        title: "Withdrawal Approved 💸",
+        message: `Your withdrawal request of ₹${withdrawalRequest.amount} has been approved.`,
+        type: "payment",
+      });
+
+      await ambassador.save();
+
       withdrawalRequest.status = 'accepted';
       withdrawalRequest.approvedAt = new Date();
-      withdrawalRequest.note = note;           // added note
-      withdrawalRequest.updatedBy = updatedBy; // added updatedBy
+      withdrawalRequest.note = note;
+      withdrawalRequest.updatedBy = updatedBy;
+
       await withdrawalRequest.save();
 
-      // Return success response
       return res.status(200).json({
         success: true,
         message: 'Withdrawal request accepted and processed.',
@@ -1508,9 +1525,11 @@ exports.processAmbassadorWithdrawal = async (req, res) => {
       });
     }
 
-    // Step 5: Handle the 'rejected' status
+    // =========================
+    // ❌ REJECTED CASE
+    // =========================
     if (status === 'rejected') {
-      // Ensure the withdrawal request is still pending
+
       if (withdrawalRequest.status !== 'pending') {
         return res.status(400).json({
           success: false,
@@ -1518,15 +1537,27 @@ exports.processAmbassadorWithdrawal = async (req, res) => {
         });
       }
 
-      // Update the withdrawal request status to 'rejected' and save the rejection reason
+      const ambassador = await Ambassador.findById(withdrawalRequest.ambassadorId);
+
+      // 🔔 NOTIFICATION ADD (REJECTED)
+      if (ambassador) {
+        ambassador.notifications.push({
+          title: "Withdrawal Rejected ❌",
+          message: `Your withdrawal request was rejected. Reason: ${rejectionReason || "No reason provided"}`,
+          type: "payment",
+        });
+
+        await ambassador.save();
+      }
+
       withdrawalRequest.status = 'rejected';
       withdrawalRequest.rejectionReason = rejectionReason || 'No reason provided';
       withdrawalRequest.rejectedAt = new Date();
-      withdrawalRequest.note = note;           // added note
-      withdrawalRequest.updatedBy = updatedBy; // added updatedBy
+      withdrawalRequest.note = note;
+      withdrawalRequest.updatedBy = updatedBy;
+
       await withdrawalRequest.save();
 
-      // Return success response
       return res.status(200).json({
         success: true,
         message: 'Withdrawal request rejected.',
@@ -1543,7 +1574,6 @@ exports.processAmbassadorWithdrawal = async (req, res) => {
     });
   }
 };
-
 
 
 // Get all withdrawal requests by Ambassador ID
@@ -1925,6 +1955,15 @@ exports.capturePayment = async (req, res) => {
       planBenefits: plan.benefits,
     });
 
+
+    // 🔔 Notification add karo
+ambassador.notifications.push({
+  title: "Plan Activated 🎉",
+  message: `Your plan "${plan.name}" has been activated successfully.`,
+  type: "plan",
+});
+
+
     ambassador.isPlanActive = true;
     ambassador.currentPlanId = planId;
     ambassador.currentPlanExpiry = expiryDate;
@@ -1973,8 +2012,8 @@ exports.updateAmbassadorPaymentStatus = async (req, res) => {
     payment.status = status;
     
     // ✅ Create note
-    let note = `Payment status updated by Admin`; // Default note
-    let verifiedBy = "admin"; // Default string value
+    let note = `Payment status updated by Admin`;
+    let verifiedBy = "admin";
     
     if (subAdminId) {
       const subAdmin = await SubAdmin.findById(subAdminId);
@@ -1986,7 +2025,6 @@ exports.updateAmbassadorPaymentStatus = async (req, res) => {
       }
     }
 
-    // Add adminNotes if provided
     if (adminNotes) {
       note = note + ` | Notes: ${adminNotes}`;
     }
@@ -1995,12 +2033,12 @@ exports.updateAmbassadorPaymentStatus = async (req, res) => {
 
     // ✅ Admin verification logic
     let emailToSend = false;
+
     if (status === "completed" || status === "verified") {
       payment.verifiedAt = new Date();
       payment.isActive = true;
       payment.paymentStatus = "completed";
       
-      // ✅ FIX: Check schema type before setting verifiedBy
       const schemaPaths = AmbassadorPayment.schema.paths;
       
       if (schemaPaths.verifiedBy) {
@@ -2008,21 +2046,54 @@ exports.updateAmbassadorPaymentStatus = async (req, res) => {
         console.log("🔧 verifiedBy field type:", pathType);
         
         if (pathType === "ObjectId") {
-          // Agar ObjectId type hai toh subAdminId ya admin ke liye null
           payment.verifiedBy = subAdminId || null;
           console.log("✅ Set verifiedBy as ObjectId:", payment.verifiedBy);
         } else {
-          // Agar String type hai toh string value set karo
           payment.verifiedBy = verifiedBy;
           console.log("✅ Set verifiedBy as String:", payment.verifiedBy);
         }
       } else {
-        // Agar field hi nahi hai schema mein toh ignore karo
         console.log("⚠️ verifiedBy field not found in schema, skipping...");
       }
-      
+
+      // 🔔 NOTIFICATION ADD (SUCCESS CASE)
+      if (payment.ambassadorId) {
+        const ambassador = await Ambassador.findById(payment.ambassadorId);
+
+        if (ambassador) {
+          ambassador.notifications.push({
+            title: "Payment Verified ✅",
+            message: `Your payment has been verified and your plan is now active.`,
+            type: "payment",
+          });
+
+          ambassador.isPlanActive = true;
+
+          await ambassador.save();
+          console.log("🔔 Notification pushed (verified)");
+        }
+      }
+
       emailToSend = true;
       console.log("✅ Payment verified");
+    }
+
+    // 🔔 OPTIONAL: FAILED / REJECTED CASE
+    if (status === "failed" || status === "rejected") {
+      if (payment.ambassadorId) {
+        const ambassador = await Ambassador.findById(payment.ambassadorId);
+
+        if (ambassador) {
+          ambassador.notifications.push({
+            title: "Payment Failed ❌",
+            message: `Your payment was ${status}. Please try again or contact support.`,
+            type: "payment",
+          });
+
+          await ambassador.save();
+          console.log("🔔 Notification pushed (failed/rejected)");
+        }
+      }
     }
 
     await payment.save();
@@ -2059,7 +2130,6 @@ exports.updateAmbassadorPaymentStatus = async (req, res) => {
         }
       } catch (emailError) {
         console.error("❌ Email sending failed:", emailError);
-        // Don't fail the whole request if email fails
       }
     }
 
@@ -2079,6 +2149,7 @@ exports.updateAmbassadorPaymentStatus = async (req, res) => {
     });
   }
 };
+
 
 exports.deleteAmbassadorPayment = async (req, res) => {
   try {
@@ -2585,6 +2656,169 @@ exports.resetPassword = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Server error'
+    });
+  }
+};
+
+
+
+exports.updateAmbassadorProfileImage = async (req, res) => {
+  try {
+    const { ambassadorId } = req.params;
+
+    // Check ambassador exists
+    const ambassador = await Ambassador.findById(ambassadorId);
+    if (!ambassador) {
+      return res.status(404).json({
+        success: false,
+        message: "Ambassador not found"
+      });
+    }
+
+    // Check file
+    if (!req.files || !req.files.profileImage) {
+      return res.status(400).json({
+        success: false,
+        message: "Profile image is required"
+      });
+    }
+
+    const profileImage = req.files.profileImage;
+
+    // Validate type
+    if (!profileImage.mimetype.startsWith("image")) {
+      return res.status(400).json({
+        success: false,
+        message: "Only image files are allowed"
+      });
+    }
+
+    // Validate size (2MB)
+    const MAX_SIZE = 2 * 1024 * 1024;
+    if (profileImage.size > MAX_SIZE) {
+      return res.status(413).json({
+        success: false,
+        message: "Image too large. Max 2MB allowed"
+      });
+    }
+
+    // Upload new image
+    const uploadedImageUrl = await uploadLocalFile(profileImage, PROFILE_DIR);
+
+    // (Optional) OLD IMAGE DELETE NAHI kar rahe — as per tera pattern
+    // agar future me chahiye ho to bol dena
+
+    // Update DB
+    ambassador.profileImage = uploadedImageUrl;
+    await ambassador.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Profile image updated successfully ✅",
+      data: {
+        _id: ambassador._id,
+        profileImage: ambassador.profileImage
+      }
+    });
+
+  } catch (err) {
+    console.error("Update Profile Image Error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err.message
+    });
+  }
+};
+
+
+
+exports.getAmbassadorNotifications = async (req, res) => {
+  try {
+    const { ambassadorId } = req.params;
+
+    const ambassador = await Ambassador.findById(ambassadorId).select("notifications");
+
+    if (!ambassador) {
+      return res.status(404).json({
+        success: false,
+        message: "Ambassador not found",
+      });
+    }
+
+    const notifications = ambassador.notifications || [];
+
+    // ❌ No notifications case
+    if (notifications.length === 0) {
+      return res.status(200).json({
+        success: true,
+        message: "No notifications found",
+        data: [],
+      });
+    }
+
+    // ✅ With notifications
+    return res.status(200).json({
+      success: true,
+      data: notifications.reverse(), // latest first
+    });
+
+  } catch (err) {
+    console.error("❌ Notification error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  }
+};
+
+
+exports.deleteAmbassadorNotification = async (req, res) => {
+  try {
+    const { ambassadorId, notificationId } = req.params;
+
+    if (!ambassadorId || !notificationId) {
+      return res.status(400).json({
+        success: false,
+        message: "ambassadorId and notificationId are required",
+      });
+    }
+
+    const ambassador = await Ambassador.findById(ambassadorId);
+
+    if (!ambassador) {
+      return res.status(404).json({
+        success: false,
+        message: "Ambassador not found",
+      });
+    }
+
+    // 🔍 Check if notification exists
+    const notificationExists = ambassador.notifications.id(notificationId);
+
+    if (!notificationExists) {
+      return res.status(404).json({
+        success: false,
+        message: "Notification not found",
+      });
+    }
+
+    // 🗑️ Remove notification
+    ambassador.notifications.pull(notificationId);
+
+    await ambassador.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Notification deleted successfully",
+      data: ambassador.notifications, // updated list
+    });
+
+  } catch (err) {
+    console.error("❌ Delete notification error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
     });
   }
 };

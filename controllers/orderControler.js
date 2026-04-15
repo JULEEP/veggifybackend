@@ -1952,10 +1952,119 @@ const haversineDistance = (coords1, coords2) => {
 };
 
 
+// exports.vendorAcceptOrder = async (req, res) => {
+//   try {
+//     const { orderId, vendorId } = req.params;  // Extract orderId and vendorId from the URL parameters
+//     const { orderStatus } = req.body;  // ❌ preparationTime removed
+
+//     // Step 1: Find the order by orderId
+//     const order = await Order.findById(orderId);
+//     if (!order) {
+//       return res.status(404).json({ success: false, message: "Order not found" });
+//     }
+
+//     // Step 2: Verify vendor ownership
+//     if (order.restaurantId.toString() !== vendorId) {
+//       return res.status(403).json({
+//         success: false,
+//         message: "Unauthorized action: Vendor ID does not match the order's restaurant"
+//       });
+//     }
+
+//     // Step 3: ❌ preparationTime validation removed
+
+//     // Step 4: Get the restaurant location from the order
+//     const restaurantCoords = order.restaurantLocation?.coordinates || [0, 0];
+//     if (restaurantCoords.length === 0) {
+//       return res.status(400).json({ success: false, message: "Restaurant location not available" });
+//     }
+
+//     // Step 5: Find active delivery boys within 10 km
+//     const nearbyDeliveryBoys = await DeliveryBoy.find({
+//       location: {
+//         $nearSphere: {
+//           $geometry: {
+//             type: "Point",
+//             coordinates: restaurantCoords,
+//           },
+//           $maxDistance: 10000 // 10 km in meters
+//         }
+//       },
+//       isActive: true,
+//       currentOrder: false
+//     });
+
+//     if (!nearbyDeliveryBoys.length) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "No delivery boys found within 10 km or all are busy"
+//       });
+//     }
+
+//     // Step 6: Collect delivery boy info
+//     let deliveryBoysInfo = [];
+
+//     for (let i = 0; i < nearbyDeliveryBoys.length; i++) {
+//       const deliveryBoy = nearbyDeliveryBoys[i];
+//       deliveryBoysInfo.push({
+//         deliveryBoyId: deliveryBoy._id,
+//         fullName: deliveryBoy.fullName,
+//         mobileNumber: deliveryBoy.mobileNumber,
+//         vehicleType: deliveryBoy.vehicleType,
+//         walletBalance: deliveryBoy.walletBalance,
+//         status: deliveryBoy.deliveryBoyStatus,
+//       });
+//     }
+
+//     // Step 7: Update order status
+//     order.orderStatus = orderStatus || "Pending";
+//     order.deliveryStatus = "Pending";
+//     order.acceptedAt = new Date();
+//     order.distanceKm = 0;
+
+//     // ❌ Step for preparationTime removed
+
+//     // Step 8: Save available delivery boys in order
+// // Step 8: Save available delivery boys in order
+// order.availableDeliveryBoys = deliveryBoysInfo;
+
+// // ✅ First available rider ki id store kar do
+// if (deliveryBoysInfo.length > 0) {
+//   order.riderId = deliveryBoysInfo[0].deliveryBoyId;
+// }
+//     // Step 9: Delivery charge
+//     const deliveryCharge = order.deliveryCharge || 0;
+
+//     // Save order
+//     await order.save();
+
+//     // Step 10: Response
+//     res.status(200).json({
+//       success: true,
+//       message: "Order accepted, delivery boys available for this order",
+//       order,
+//       availableDeliveryBoys: deliveryBoysInfo,
+//       deliveryCharge,
+//       count: deliveryBoysInfo.length,
+//     });
+
+//   } catch (err) {
+//     console.error("Error accepting order:", err);
+//     res.status(500).json({
+//       success: false,
+//       message: "Error accepting order",
+//       error: err.message
+//     });
+//   }
+// };
+
+
+// Assign delivery partner
+
 exports.vendorAcceptOrder = async (req, res) => {
   try {
-    const { orderId, vendorId } = req.params;  // Extract orderId and vendorId from the URL parameters
-    const { orderStatus } = req.body;  // ❌ preparationTime removed
+    const { orderId, vendorId } = req.params;
+    const { orderStatus } = req.body;
 
     // Step 1: Find the order by orderId
     const order = await Order.findById(orderId);
@@ -1971,81 +2080,130 @@ exports.vendorAcceptOrder = async (req, res) => {
       });
     }
 
-    // Step 3: ❌ preparationTime validation removed
-
-    // Step 4: Get the restaurant location from the order
+    // Step 3: Get the restaurant location from the order
     const restaurantCoords = order.restaurantLocation?.coordinates || [0, 0];
     if (restaurantCoords.length === 0) {
       return res.status(400).json({ success: false, message: "Restaurant location not available" });
     }
 
-    // Step 5: Find active delivery boys within 10 km
-    const nearbyDeliveryBoys = await DeliveryBoy.find({
-      location: {
-        $nearSphere: {
-          $geometry: {
-            type: "Point",
-            coordinates: restaurantCoords,
-          },
-          $maxDistance: 10000 // 10 km in meters
-        }
-      },
-      isActive: true,
-      currentOrder: false
-    });
-
-    if (!nearbyDeliveryBoys.length) {
-      return res.status(404).json({
-        success: false,
-        message: "No delivery boys found within 10 km or all are busy"
+    // Step 4: Handle different order statuses
+    if (orderStatus === "Preparing") {
+      // ✅ Just update status, don't look for riders
+      order.orderStatus = "Preparing";
+      order.deliveryStatus = "Preparing";
+      order.acceptedAt = new Date();
+      await order.save();
+      
+      return res.status(200).json({
+        success: true,
+        message: "Order status updated to Preparing",
+        order,
+        availableDeliveryBoys: [],
+        count: 0
+      });
+    }
+    
+    if (orderStatus === "Out for Delivery") {
+      // ✅ Just update status, riders already assigned
+      order.orderStatus = "Out for Delivery";
+      order.deliveryStatus = "Out for Delivery";
+      await order.save();
+      
+      return res.status(200).json({
+        success: true,
+        message: "Order status updated to Out for Delivery",
+        order,
+        availableDeliveryBoys: [],
+        count: 0
+      });
+    }
+    
+    if (orderStatus === "Ready for Pickup") {
+      // ✅ Update status
+      order.orderStatus = "Ready for Pickup";
+      order.deliveryStatus = "Ready for Pickup";
+      await order.save();
+      
+      return res.status(200).json({
+        success: true,
+        message: "Order is ready for pickup",
+        order,
+        availableDeliveryBoys: [],
+        count: 0
       });
     }
 
-    // Step 6: Collect delivery boy info
-    let deliveryBoysInfo = [];
+    // Step 5: Only for "Accepted" status - find delivery boys
+    if (orderStatus === "Accepted" || !orderStatus) {
+      // Find active delivery boys within 10 km
+      const nearbyDeliveryBoys = await DeliveryBoy.find({
+        location: {
+          $nearSphere: {
+            $geometry: {
+              type: "Point",
+              coordinates: restaurantCoords,
+            },
+            $maxDistance: 10000 // 10 km in meters
+          }
+        },
+        isActive: true,
+        currentOrder: false
+      });
 
-    for (let i = 0; i < nearbyDeliveryBoys.length; i++) {
-      const deliveryBoy = nearbyDeliveryBoys[i];
-      deliveryBoysInfo.push({
-        deliveryBoyId: deliveryBoy._id,
-        fullName: deliveryBoy.fullName,
-        mobileNumber: deliveryBoy.mobileNumber,
-        vehicleType: deliveryBoy.vehicleType,
-        walletBalance: deliveryBoy.walletBalance,
-        status: deliveryBoy.deliveryBoyStatus,
+      if (!nearbyDeliveryBoys.length) {
+        return res.status(404).json({
+          success: false,
+          message: "No delivery boys found within 10 km or all are busy"
+        });
+      }
+
+      // Collect delivery boy info
+      let deliveryBoysInfo = [];
+
+      for (let i = 0; i < nearbyDeliveryBoys.length; i++) {
+        const deliveryBoy = nearbyDeliveryBoys[i];
+        deliveryBoysInfo.push({
+          deliveryBoyId: deliveryBoy._id,
+          fullName: deliveryBoy.fullName,
+          mobileNumber: deliveryBoy.mobileNumber,
+          vehicleType: deliveryBoy.vehicleType,
+          walletBalance: deliveryBoy.walletBalance,
+          status: deliveryBoy.deliveryBoyStatus,
+        });
+      }
+
+      // Update order status
+      order.orderStatus = "Accepted";
+      order.deliveryStatus = "Pending";
+      order.acceptedAt = new Date();
+      order.distanceKm = 0;
+      order.availableDeliveryBoys = deliveryBoysInfo;
+
+      // Store first available rider id
+      if (deliveryBoysInfo.length > 0) {
+        order.riderId = deliveryBoysInfo[0].deliveryBoyId;
+      }
+
+      await order.save();
+
+      return res.status(200).json({
+        success: true,
+        message: "Order accepted, delivery boys available for this order",
+        order,
+        availableDeliveryBoys: deliveryBoysInfo,
+        deliveryCharge: order.deliveryCharge || 0,
+        count: deliveryBoysInfo.length,
       });
     }
 
-    // Step 7: Update order status
-    order.orderStatus = orderStatus || "Pending";
-    order.deliveryStatus = "Pending";
-    order.acceptedAt = new Date();
-    order.distanceKm = 0;
-
-    // ❌ Step for preparationTime removed
-
-    // Step 8: Save available delivery boys in order
-// Step 8: Save available delivery boys in order
-order.availableDeliveryBoys = deliveryBoysInfo;
-
-// ✅ First available rider ki id store kar do
-if (deliveryBoysInfo.length > 0) {
-  order.riderId = deliveryBoysInfo[0].deliveryBoyId;
-}
-    // Step 9: Delivery charge
-    const deliveryCharge = order.deliveryCharge || 0;
-
-    // Save order
+    // Default: just update status
+    order.orderStatus = orderStatus;
     await order.save();
 
-    // Step 10: Response
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: "Order accepted, delivery boys available for this order",
-      order,
-      availableDeliveryBoys: deliveryBoysInfo,
-      deliveryCharge,
-      count: deliveryBoysInfo.length,
+      message: `Order status updated to ${orderStatus}`,
+      order
     });
 
   } catch (err) {
@@ -2058,8 +2216,6 @@ if (deliveryBoysInfo.length > 0) {
   }
 };
 
-
-// Assign delivery partner
 exports.assignDeliveryAndTrack = async (req, res) => {
   try {
     const { deliveryUserId, eta } = req.body;
@@ -2245,9 +2401,64 @@ exports.acceptOrderByRestaurant = async (req, res) => {
 
 
 
+// exports.getAcceptedOrdersForRider = async (req, res) => {
+//   try {
+//     const { deliveryBoyId } = req.params;  // Extract deliveryBoyId from params
+
+//     // Step 1: Check if the delivery boy has a current order assigned
+//     const deliveryBoy = await DeliveryBoy.findById(deliveryBoyId);
+//     if (!deliveryBoy) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "Delivery boy not found."
+//       });
+//     }
+
+//     // If the delivery boy has a current order (currentOrder = true), don't fetch new orders
+//     if (deliveryBoy.currentOrder === true) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "This delivery boy already has an active order assigned."
+//       });
+//     }
+
+//     // Step 2: Find the orders where deliveryBoyId is in availableDeliveryBoys and deliveryStatus is 'Pending'
+//     const orders = await Order.find({
+//       "availableDeliveryBoys.deliveryBoyId": deliveryBoyId,  // Check if deliveryBoyId is in availableDeliveryBoys array
+//       deliveryStatus: "Pending"  // Only consider orders with deliveryStatus 'Pending'
+//     })
+//       .populate("restaurantId")  // Optionally, populate restaurantId to get full restaurant data
+//       .select('-availableDeliveryBoys');  // Exclude availableDeliveryBoys from the response
+
+//     // Step 3: If no orders are found
+//     if (orders.length === 0) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "No orders found for this delivery boy with 'Pending' status."
+//       });
+//     }
+
+//     // Step 4: Return the full order data where the deliveryBoyId is present and deliveryStatus is 'Pending'
+//     return res.status(200).json({
+//       success: true,
+//       message: "Orders found for the delivery boy.",
+//       orders: orders,  // Returning the full order data
+//     });
+
+//   } catch (err) {
+//     console.error("Error fetching orders:", err);
+//     return res.status(500).json({
+//       success: false,
+//       message: "Server error",
+//       error: err.message
+//     });
+//   }
+// };
+
+
 exports.getAcceptedOrdersForRider = async (req, res) => {
   try {
-    const { deliveryBoyId } = req.params;  // Extract deliveryBoyId from params
+    const { deliveryBoyId } = req.params;
 
     // Step 1: Check if the delivery boy has a current order assigned
     const deliveryBoy = await DeliveryBoy.findById(deliveryBoyId);
@@ -2258,7 +2469,7 @@ exports.getAcceptedOrdersForRider = async (req, res) => {
       });
     }
 
-    // If the delivery boy has a current order (currentOrder = true), don't fetch new orders
+    // If the delivery boy has a current order, don't fetch new orders
     if (deliveryBoy.currentOrder === true) {
       return res.status(400).json({
         success: false,
@@ -2266,27 +2477,32 @@ exports.getAcceptedOrdersForRider = async (req, res) => {
       });
     }
 
-    // Step 2: Find the orders where deliveryBoyId is in availableDeliveryBoys and deliveryStatus is 'Pending'
+    // ✅ FIXED: Only show orders that are in "Accepted" status
+    // NOT "Preparing", "Out for Delivery", "Rider Accepted", etc.
     const orders = await Order.find({
-      "availableDeliveryBoys.deliveryBoyId": deliveryBoyId,  // Check if deliveryBoyId is in availableDeliveryBoys array
-      deliveryStatus: "Pending"  // Only consider orders with deliveryStatus 'Pending'
+      "availableDeliveryBoys.deliveryBoyId": deliveryBoyId,
+      orderStatus: "Accepted",        // ✅ Only Accepted status
+      deliveryStatus: "Pending",       // ✅ Only Pending delivery status
+      $or: [
+        { deliveryBoyId: { $exists: false } },
+        { deliveryBoyId: null }
+      ]
     })
-      .populate("restaurantId")  // Optionally, populate restaurantId to get full restaurant data
-      .select('-availableDeliveryBoys');  // Exclude availableDeliveryBoys from the response
+      .populate("restaurantId", "restaurantName locationName location image")
+      .populate("userId", "firstName lastName email phoneNumber location")
+      .sort({ createdAt: 1 });  // Oldest first
 
-    // Step 3: If no orders are found
     if (orders.length === 0) {
       return res.status(404).json({
         success: false,
-        message: "No orders found for this delivery boy with 'Pending' status."
+        message: "No available orders found for this delivery boy."
       });
     }
 
-    // Step 4: Return the full order data where the deliveryBoyId is present and deliveryStatus is 'Pending'
     return res.status(200).json({
       success: true,
-      message: "Orders found for the delivery boy.",
-      orders: orders,  // Returning the full order data
+      message: "Available orders found for the delivery boy.",
+      orders: orders,
     });
 
   } catch (err) {
@@ -2299,6 +2515,120 @@ exports.getAcceptedOrdersForRider = async (req, res) => {
   }
 };
 
+
+
+
+
+
+
+
+// exports.acceptOrderForRider = async (req, res) => {
+//   try {
+//     const { orderStatus } = req.body;
+//     const { orderId, deliveryBoyId } = req.params;
+
+//     // Step 1: Validate the delivery boy
+//     const deliveryBoy = await DeliveryBoy.findById(deliveryBoyId);
+//     if (!deliveryBoy) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "Delivery boy not found.",
+//       });
+//     }
+
+//     // Step 2: Check if the rider already has a current order
+//     if (deliveryBoy.currentOrder) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "This rider already has an active order. Complete it before accepting a new one.",
+//       });
+//     }
+
+//     // Step 3: Validate the order
+//     const order = await Order.findById(orderId);
+//     if (!order) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "Order not found.",
+//       });
+//     }
+
+//     // Step 4: Check if the order has already been accepted by another rider
+//     if (order.deliveryStatus === "Rider Accepted") {
+//       return res.status(400).json({
+//         success: false,
+//         message: "This order has already been accepted by another rider.",
+//       });
+//     }
+
+//     // Step 5: Handle Rider Acceptance
+//     if (orderStatus === "Rider Accepted" && order.orderStatus === "Accepted") {
+//       // Update order status and delivery status
+//       order.orderStatus = "Rider Accepted";
+//       order.deliveryStatus = "Rider Accepted";
+
+//       // Assign the current delivery boy to this order
+//       order.deliveryBoyId = deliveryBoy._id;
+
+//       // Mark delivery boy as having a current order
+//       deliveryBoy.currentOrder = true;
+      
+//       // **Update the currentOrderStatus with the order's status**
+//       deliveryBoy.currentOrderStatus = orderStatus;  // Add the orderStatus to currentOrderStatus
+
+//       // Save both order and delivery boy
+//       await order.save();
+//       await deliveryBoy.save();
+
+//       console.log(`Order ${orderId} accepted by delivery boy ${deliveryBoyId}`);
+
+//       return res.status(200).json({
+//         success: true,
+//         message: "Order accepted by rider.",
+//         data: [order],  // Wrapping the order in an array
+//       });
+//     }
+
+//     // Step 6: Handle Rider Rejection
+//     if (orderStatus === "Rider Rejected") {
+//       order.deliveryStatus = "Rider Rejected";
+//       await order.save();
+
+//       console.log(`Order ${orderId} rejected by delivery boy ${deliveryBoyId}`);
+
+//       // Assign to another delivery boy after 30 seconds
+//       setTimeout(async () => {
+//         const newDeliveryBoy = await DeliveryBoy.findOne({ status: "Available" });
+
+//         if (newDeliveryBoy) {
+//           order.deliveryStatus = "Assigned";
+//           await order.save();
+//           console.log("New delivery boy assigned:", newDeliveryBoy._id);
+//         } else {
+//           console.log("No available delivery boy found.");
+//         }
+//       }, 30000);
+
+//       return res.status(200).json({
+//         success: true,
+//         message: "Order status updated to 'Rider Rejected'. New delivery boy will be assigned shortly.",
+//         data: [order],  // Wrapping the order in an array
+//       });
+//     }
+
+//     return res.status(400).json({
+//       success: false,
+//       message: "Invalid order status or request.",
+//     });
+//   } catch (error) {
+//     console.error("Error accepting/rejecting order for rider:", error);
+//     return res.status(500).json({
+//       success: false,
+//       message: "Server error.",
+//       error: error.message,
+//     });
+//   }
+// };
 
 
 
@@ -2333,73 +2663,137 @@ exports.acceptOrderForRider = async (req, res) => {
       });
     }
 
-    // Step 4: Check if the order has already been accepted by another rider
-    if (order.deliveryStatus === "Rider Accepted") {
+    // ✅ CRITICAL FIX: Check if order is already accepted by another rider
+    if (order.orderStatus === "Rider Accepted" || order.deliveryStatus === "Rider Accepted") {
+      // Check if it's the same rider
+      if (order.deliveryBoyId && order.deliveryBoyId.toString() === deliveryBoyId) {
+        return res.status(400).json({
+          success: false,
+          message: "You have already accepted this order.",
+        });
+      }
+      
       return res.status(400).json({
         success: false,
         message: "This order has already been accepted by another rider.",
       });
     }
 
-    // Step 5: Handle Rider Acceptance
-    if (orderStatus === "Rider Accepted" && order.orderStatus === "Accepted") {
-      // Update order status and delivery status
-      order.orderStatus = "Rider Accepted";
-      order.deliveryStatus = "Rider Accepted";
-
-      // Assign the current delivery boy to this order
-      order.deliveryBoyId = deliveryBoy._id;
-
-      // Mark delivery boy as having a current order
-      deliveryBoy.currentOrder = true;
+    // ✅ Check if order is in valid state for rider acceptance
+    // Order should be in "Accepted" status, NOT "Preparing", "Out for Delivery", etc.
+    if (order.orderStatus !== "Accepted") {
+      let errorMessage = `Order is in "${order.orderStatus}" status. `;
       
-      // **Update the currentOrderStatus with the order's status**
-      deliveryBoy.currentOrderStatus = orderStatus;  // Add the orderStatus to currentOrderStatus
+      if (order.orderStatus === "Preparing") {
+        errorMessage += "Restaurant is preparing your order. Please wait for 'Ready for Pickup' status.";
+      } else if (order.orderStatus === "Out for Delivery") {
+        errorMessage += "Order is already out for delivery with another rider.";
+      } else if (order.orderStatus === "Delivered") {
+        errorMessage += "Order has already been delivered.";
+      } else if (order.orderStatus === "Cancelled") {
+        errorMessage += "Order has been cancelled.";
+      } else {
+        errorMessage += "Rider can only accept orders in 'Accepted' status.";
+      }
+      
+      return res.status(400).json({
+        success: false,
+        message: errorMessage,
+        currentOrderStatus: order.orderStatus
+      });
+    }
 
-      // Save both order and delivery boy
-      await order.save();
+    // Step 4: Handle Rider Acceptance
+    if (orderStatus === "Rider Accepted") {
+      // ✅ Use findOneAndUpdate with atomic operation to prevent race conditions
+      const updatedOrder = await Order.findOneAndUpdate(
+        { 
+          _id: orderId, 
+          orderStatus: "Accepted",  // Ensure it's still in Accepted status
+          deliveryStatus: "Pending"  // Ensure it's still pending
+        },
+        {
+          $set: {
+            orderStatus: "Rider Accepted",
+            deliveryStatus: "Rider Accepted",
+            deliveryBoyId: deliveryBoy._id,
+            riderAcceptedAt: new Date()
+          }
+        },
+        { new: true }
+      );
+
+      if (!updatedOrder) {
+        // Another rider might have already accepted
+        return res.status(400).json({
+          success: false,
+          message: "Order was already accepted by another rider or status changed.",
+        });
+      }
+
+      // Update delivery boy status
+      deliveryBoy.currentOrder = true;
+      deliveryBoy.currentOrderStatus = "Rider Accepted";
+      deliveryBoy.currentOrderId = orderId;
       await deliveryBoy.save();
 
-      console.log(`Order ${orderId} accepted by delivery boy ${deliveryBoyId}`);
+      // ✅ CRITICAL: Remove order from all other riders' available lists
+      // This ensures no other rider can see this order anymore
+      await DeliveryBoy.updateMany(
+        { 
+          _id: { $ne: deliveryBoy._id },
+          availableOrders: orderId 
+        },
+        { 
+          $pull: { availableOrders: orderId } 
+        }
+      );
+
+      console.log(`✅ Order ${orderId} accepted by delivery boy ${deliveryBoyId}`);
+      console.log(`📢 Order removed from other riders' available lists`);
 
       return res.status(200).json({
         success: true,
         message: "Order accepted by rider.",
-        data: [order],  // Wrapping the order in an array
+        data: updatedOrder,
       });
     }
 
-    // Step 6: Handle Rider Rejection
+    // Step 5: Handle Rider Rejection
     if (orderStatus === "Rider Rejected") {
-      order.deliveryStatus = "Rider Rejected";
-      await order.save();
+      // Remove this rider from availableDeliveryBoys array
+      await Order.findByIdAndUpdate(
+        orderId,
+        {
+          $pull: { availableDeliveryBoys: { deliveryBoyId: deliveryBoy._id } }
+        }
+      );
 
       console.log(`Order ${orderId} rejected by delivery boy ${deliveryBoyId}`);
 
-      // Assign to another delivery boy after 30 seconds
-      setTimeout(async () => {
-        const newDeliveryBoy = await DeliveryBoy.findOne({ status: "Available" });
-
-        if (newDeliveryBoy) {
-          order.deliveryStatus = "Assigned";
-          await order.save();
-          console.log("New delivery boy assigned:", newDeliveryBoy._id);
-        } else {
-          console.log("No available delivery boy found.");
-        }
-      }, 30000);
+      // Check if there are any other available delivery boys
+      const updatedOrder = await Order.findById(orderId);
+      
+      if (!updatedOrder.availableDeliveryBoys || updatedOrder.availableDeliveryBoys.length === 0) {
+        // No riders left, notify admin/vendor
+        console.log(`⚠️ No riders available for order ${orderId}`);
+        
+        // Optional: Send notification to admin
+        // await sendNotificationToAdmin('No riders available', orderId);
+      }
 
       return res.status(200).json({
         success: true,
-        message: "Order status updated to 'Rider Rejected'. New delivery boy will be assigned shortly.",
-        data: [order],  // Wrapping the order in an array
+        message: "Order rejected. Other riders will be notified.",
+        data: updatedOrder,
       });
     }
 
     return res.status(400).json({
       success: false,
-      message: "Invalid order status or request.",
+      message: "Invalid order status. Use 'Rider Accepted' or 'Rider Rejected'.",
     });
+
   } catch (error) {
     console.error("Error accepting/rejecting order for rider:", error);
     return res.status(500).json({
@@ -2409,8 +2803,6 @@ exports.acceptOrderForRider = async (req, res) => {
     });
   }
 };
-
-
 
 exports.getOrdersForRider = async (req, res) => {
   try {
@@ -2494,10 +2886,67 @@ exports.getDeliveredOrdersForRider = async (req, res) => {
 
 
 
+// exports.acceptPickupForRider = async (req, res) => {
+//   try {
+//     const { orderStatus } = req.body; // Get orderStatus from the body
+//     const { orderId, deliveryBoyId } = req.params; // Get orderId and deliveryBoyId from params
+
+//     // Validate the delivery boy
+//     const deliveryBoy = await DeliveryBoy.findById(deliveryBoyId);
+//     if (!deliveryBoy) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "Delivery boy not found.",
+//       });
+//     }
+
+//     // Validate the order
+//     const order = await Order.findById(orderId);
+//     if (!order) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "Order not found.",
+//       });
+//     }
+
+//     // Ensure the order is in "Rider Accepted" status before proceeding to "Picked"
+//     if (orderStatus !== "Picked" || order.orderStatus !== "Rider Accepted" || order.deliveryStatus !== "Rider Accepted") {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Order is not in 'Rider Accepted' status or invalid order status.",
+//       });
+//     }
+
+//     // Change order status and delivery status to "Picked"
+//     order.orderStatus = "Picked";  // Change order status to "Picked"
+//     order.deliveryStatus = "Picked";  // Update delivery status to "Picked"
+
+//     // **Update the currentOrderStatus in DeliveryBoy schema**
+//     deliveryBoy.currentOrderStatus = "Picked";  // Set the delivery boy's current order status
+
+//     // Save both order and delivery boy
+//     await order.save();
+//     await deliveryBoy.save();
+
+//     return res.status(200).json({
+//       success: true,
+//       message: "Order status updated to 'Picked'.",
+//       data: order,
+//     });
+//   } catch (error) {
+//     console.error("Error accepting pickup for rider:", error);
+//     return res.status(500).json({
+//       success: false,
+//       message: "Server error.",
+//       error: error.message,
+//     });
+//   }
+// };
+
 exports.acceptPickupForRider = async (req, res) => {
   try {
-    const { orderStatus } = req.body; // Get orderStatus from the body
-    const { orderId, deliveryBoyId } = req.params; // Get orderId and deliveryBoyId from params
+    const { orderStatus } = req.body;
+    const { orderId, deliveryBoyId } = req.params;
 
     // Validate the delivery boy
     const deliveryBoy = await DeliveryBoy.findById(deliveryBoyId);
@@ -2517,30 +2966,47 @@ exports.acceptPickupForRider = async (req, res) => {
       });
     }
 
-    // Ensure the order is in "Rider Accepted" status before proceeding to "Picked"
-    if (orderStatus !== "Picked" || order.orderStatus !== "Rider Accepted" || order.deliveryStatus !== "Rider Accepted") {
-      return res.status(400).json({
+    // ✅ Check if this rider is assigned to this order
+    if (order.deliveryBoyId && order.deliveryBoyId.toString() !== deliveryBoyId) {
+      return res.status(403).json({
         success: false,
-        message: "Order is not in 'Rider Accepted' status or invalid order status.",
+        message: "This order is assigned to a different delivery boy.",
       });
     }
 
-    // Change order status and delivery status to "Picked"
-    order.orderStatus = "Picked";  // Change order status to "Picked"
-    order.deliveryStatus = "Picked";  // Update delivery status to "Picked"
+    // ✅ Check order is in correct state for pickup
+    if (orderStatus === "Picked") {
+      // Order should be in "Ready for Pickup" or "Rider Accepted" status
+      if (order.orderStatus !== "Ready for Pickup" && order.orderStatus !== "Rider Accepted") {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot pick up order. Current status: ${order.orderStatus}. Order must be 'Ready for Pickup' or 'Rider Accepted'.`,
+        });
+      }
 
-    // **Update the currentOrderStatus in DeliveryBoy schema**
-    deliveryBoy.currentOrderStatus = "Picked";  // Set the delivery boy's current order status
+      // Update order status to "Picked"
+      order.orderStatus = "Picked";
+      order.deliveryStatus = "Picked";
+      order.pickedAt = new Date();
 
-    // Save both order and delivery boy
-    await order.save();
-    await deliveryBoy.save();
+      // Update delivery boy's current order status
+      deliveryBoy.currentOrderStatus = "Picked";
 
-    return res.status(200).json({
-      success: true,
-      message: "Order status updated to 'Picked'.",
-      data: order,
+      await order.save();
+      await deliveryBoy.save();
+
+      return res.status(200).json({
+        success: true,
+        message: "Order picked up successfully.",
+        data: order,
+      });
+    }
+
+    return res.status(400).json({
+      success: false,
+      message: "Invalid order status. Use 'Picked'.",
     });
+
   } catch (error) {
     console.error("Error accepting pickup for rider:", error);
     return res.status(500).json({
@@ -2550,8 +3016,6 @@ exports.acceptPickupForRider = async (req, res) => {
     });
   }
 };
-
-
 
 
 exports.getRiderPickedOrders = async (req, res) => {

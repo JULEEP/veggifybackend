@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { createAmbassador, getAllAmbassadors, loginAmbassador, updateAmbassador, deleteAmbassador, getAmbassadorById, getAllUsersByAmbassador, getAllOrdersByAmbassador, getTransactionHistoryAndWalletByAmbassador, getTop10Ambassadors, requestAmbassadorWithdrawal, getAmbassadorWithdrawalRequests, getAllWithdrawalRequests, processAmbassadorWithdrawal, getAllVendorsByAmbassador, getReferredAmbassadorsByAmbassador, capturePayment, getMyPlans, getAmbassadorDashboard, createAccount, getAllAccounts, updateAccount, deleteAccount, verifyAmbassadorOtp, forgotPassword, resetPassword, updateAmbassadorPaymentStatus, deleteAmbassadorPayment  } = require('../controllers/ambsdorController');  // Adjust path if needed
+const { createAmbassador, getAllAmbassadors, loginAmbassador, updateAmbassador, deleteAmbassador, getAmbassadorById, getAllUsersByAmbassador, getAllOrdersByAmbassador, getTransactionHistoryAndWalletByAmbassador, getTop10Ambassadors, requestAmbassadorWithdrawal, getAmbassadorWithdrawalRequests, getAllWithdrawalRequests, processAmbassadorWithdrawal, getAllVendorsByAmbassador, getReferredAmbassadorsByAmbassador, capturePayment, getMyPlans, getAmbassadorDashboard, createAccount, getAllAccounts, updateAccount, deleteAccount, verifyAmbassadorOtp, forgotPassword, resetPassword, updateAmbassadorPaymentStatus, deleteAmbassadorPayment, updateAmbassadorProfileImage, getAmbassadorNotifications, deleteAmbassadorNotification  } = require('../controllers/ambsdorController');  // Adjust path if needed
 
 
 // POST request to create a new ambassador
@@ -37,6 +37,11 @@ router.post('/reset-password', resetPassword);
 
 router.put('/ambsaddorpayments/:id', updateAmbassadorPaymentStatus);
 router.delete('/deleteambsaddorpayment/:id', deleteAmbassadorPayment);
+
+router.put("/updateprofile-image/:ambassadorId", updateAmbassadorProfileImage);
+
+router.get('/getallnotifications/:ambassadorId', getAmbassadorNotifications);
+router.delete("/deletenotifications/:ambassadorId/:notificationId", deleteAmbassadorNotification);
 
 
 

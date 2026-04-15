@@ -194,58 +194,124 @@ exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
 
+    // ✅ Validation
     if (!email || !password) {
-      return res.status(400).json({ success: false, message: "Email and password are required" });
+      return res.status(400).json({
+        success: false,
+        message: "Email and password are required"
+      });
     }
 
-    const admin = await Admin.findOne({ email: email.toLowerCase() });
-    if (!admin) {
-      return res.status(404).json({ success: false, message: "Admin not registered" });
+    console.log("📩 Incoming Email:", email);
+
+    // ✅ ONLY FINDONE (NO LOWERCASE)
+    const adminUser = await Admin.findOne({ email });
+
+    console.log("🧾 Admin Found:", adminUser);
+
+    // ❌ Not found
+    if (!adminUser) {
+      return res.status(404).json({
+        success: false,
+        message: "Admin not registered"
+      });
     }
 
-    if (admin.password !== password) {
-      return res.status(401).json({ success: false, message: "Invalid password" });
+    // ❌ Password check
+    if (adminUser.password !== password) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid password"
+      });
     }
 
-    // Generate 4-digit OTP
+    // ✅ OTP generate
     const otp = Math.floor(1000 + Math.random() * 9000).toString();
-    const otpExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes expiry
+    const otpExpiry = new Date(Date.now() + 10 * 60 * 1000);
 
-    admin.otp = otp;
-    admin.otpExpiry = otpExpiry;
-    await admin.save();
+    adminUser.otp = otp;
+    adminUser.otpExpiry = otpExpiry;
+    await adminUser.save();
 
+    // ✅ EMAIL HTML
     const subject = "🔒 Your Login OTP — MyApp";
-    const html = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; color: #333;">
-        <h2 style="color: #1e88e5;">Your One-Time Password (OTP)</h2>
-        <p>Hello,</p>
-        <p>You requested to login. Use the OTP given below to complete your login:</p>
-        <p style="font-size: 28px; font-weight: bold; margin: 20px 0; letter-spacing: 4px;">${otp}</p>
-        <p>This OTP is valid for <strong>10 minutes</strong>.</p>
-        <hr style="margin: 30px 0;" />
-        <p>If you did not request this, please ignore this email or contact our support.</p>
-        <p style="margin-top: 20px;">Need help? Contact us at <a href="mailto:support@myapp.com">support@myapp.com</a></p>
-      </div>
-    `;
 
-    const emailSent = await sendEmail(admin.email, subject, html);
+   const html = `
+  <div style="font-family: Arial, sans-serif; background:#f4f6f8; padding:40px;">
+
+    <div style="max-width:600px;margin:auto;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 8px 25px rgba(0,0,0,0.1);">
+
+      <!-- HEADER -->
+      <div style="background:#1e88e5;padding:20px;text-align:center;color:#fff;">
+        <h2 style="margin:0;">🔒 MyApp Security</h2>
+      </div>
+
+      <!-- BODY -->
+      <div style="padding:30px;text-align:center;">
+
+        <h2 style="color:#333;margin-bottom:10px;">Login OTP Verification</h2>
+
+        <p style="color:#666;font-size:14px;">
+          Use the OTP below to complete your login securely.
+        </p>
+
+        <!-- OTP BOX -->
+        <div style="
+          font-size:34px;
+          letter-spacing:10px;
+          font-weight:bold;
+          margin:30px auto;
+          color:#1e88e5;
+          background:#eaf3ff;
+          display:inline-block;
+          padding:15px 30px;
+          border-radius:10px;
+          border:1px dashed #1e88e5;
+        ">
+          ${otp}
+        </div>
+
+        <p style="color:#999;font-size:13px;">
+          ⚠️ This OTP is valid for <b>10 minutes</b>. Do not share it with anyone.
+        </p>
+
+      </div>
+
+      <!-- FOOTER -->
+      <div style="background:#f1f1f1;padding:15px;text-align:center;font-size:12px;color:#777;">
+        © ${new Date().getFullYear()} MyApp. All rights reserved.
+      </div>
+
+    </div>
+  </div>
+`;
+
+    const emailSent = await sendEmail(adminUser.email, subject, html);
+
     if (!emailSent) {
-      return res.status(500).json({ success: false, message: "Failed to send OTP email" });
+      return res.status(500).json({
+        success: false,
+        message: "Failed to send OTP"
+      });
     }
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: "OTP sent to your email",
-      adminId: admin._id,     // ✅ Admin ID included
-      email: admin.email,
+      message: "OTP sent successfully",
+      adminId: adminUser._id,
+      email: adminUser.email,
       otpSent: true,
-      otp // (Remove in production)
+      otp // remove in production
     });
 
   } catch (err) {
     console.error("Login Error:", err);
-    res.status(500).json({ success: false, message: "Server error", error: err.message });
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err.message
+    });
   }
 };
 

@@ -95,6 +95,19 @@ const ambassadorSchema = new mongoose.Schema({
 
 
   note: { type: String },
+
+  notifications: [
+  {
+    title: String,
+    message: String,
+    type: { 
+      type: String, 
+      enum: ["plan", "payment", "kyc", "general"], 
+      default: "general" 
+    },
+    createdAt: { type: Date, default: Date.now }
+  }
+],
 updatedBy: {
   type: mongoose.Schema.Types.ObjectId,
   ref: "SubAdmin",

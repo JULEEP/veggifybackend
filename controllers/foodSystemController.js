@@ -29,6 +29,10 @@ cloudinary.config({
 
 const UPLOADS_DIR = path.join(__dirname, '../uploads');
 
+// 📁 Folder path (create this folder if not exists)
+const RESTAURANT_IMAGES_DIR = path.join(__dirname, "../uploads/restaurants/images");
+
+
 
 // Upload directories
 const CATEGORIES_DIR = path.join(UPLOADS_DIR, 'categories');
@@ -1078,28 +1082,43 @@ exports.updateRestaurant = async (req, res) => {
       restaurant.categories = Array.isArray(categoryArray) ? categoryArray : [];
     }
 
-    // ✅ Image update (LOCAL - NO CLOUDINARY)
+    // ✅ Image update (LOCAL - NO CLOUDINARY) - FIXED
     if (req.files && req.files.image) {
       const file = req.files.image;
 
-      // Delete old image if exists
+      // --- Delete old image if exists (handle both string and object) ---
       if (restaurant.image) {
-        const oldImagePath = path.join(RESTAURANT_IMAGES_DIR, path.basename(restaurant.image));
-        if (fs.existsSync(oldImagePath)) {
-          fs.unlinkSync(oldImagePath);
-          console.log(`🗑️ Deleted old restaurant image: ${oldImagePath}`);
+        let oldImageUrl = null;
+        if (typeof restaurant.image === 'string') {
+          oldImageUrl = restaurant.image;
+        } else if (restaurant.image.url) {
+          oldImageUrl = restaurant.image.url;
+        }
+
+        if (oldImageUrl) {
+          const oldImagePath = path.join(RESTAURANT_IMAGES_DIR, path.basename(oldImageUrl));
+          if (fs.existsSync(oldImagePath)) {
+            fs.unlinkSync(oldImagePath);
+            console.log(`🗑️ Deleted old restaurant image: ${oldImagePath}`);
+          }
         }
       }
 
-      // Upload new image locally
+      // --- Upload new image locally ---
       const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
       const ext = path.extname(file.name);
       const filename = `restaurant-${uniqueSuffix}${ext}`;
       const uploadPath = path.join(RESTAURANT_IMAGES_DIR, filename);
       await file.mv(uploadPath);
 
-      restaurant.image = `${BASE_URL}/uploads/restaurants/images/${filename}`;
-      console.log(`✅ New restaurant image saved: ${restaurant.image}`);
+      const newImageUrl = `${BASE_URL}/uploads/restaurants/images/${filename}`;
+      
+      // Save as object to match frontend expectation (image.url)
+      restaurant.image = {
+        url: newImageUrl,
+        publicId: filename   // optional, for local management
+      };
+      console.log(`✅ New restaurant image saved: ${newImageUrl}`);
     }
 
     // ✅ Location update
@@ -1161,8 +1180,6 @@ exports.updateRestaurant = async (req, res) => {
     });
   }
 };
-
-// ✅ Delete Restaurant (NO CLOUDINARY)
 exports.deleteRestaurant = async (req, res) => {
   try {
     const restaurant = await Restaurant.findById(req.params.id);
@@ -1173,15 +1190,7 @@ exports.deleteRestaurant = async (req, res) => {
       });
     }
 
-    // ✅ Delete image if exists
-    if (restaurant.image) {
-      const imagePath = path.join(__dirname, '../uploads/restaurants/images', path.basename(restaurant.image));
-      if (fs.existsSync(imagePath)) {
-        fs.unlinkSync(imagePath);
-      }
-    }
-
-    // ✅ Delete restaurant from database
+    // ✅ Sirf DB se delete karo (image untouched)
     await Restaurant.findByIdAndDelete(req.params.id);
 
     res.status(200).json({
@@ -1198,7 +1207,6 @@ exports.deleteRestaurant = async (req, res) => {
     });
   }
 };
-
 
 
 // ✅ Get Top Rated Restaurants Nearby (from already nearby)
