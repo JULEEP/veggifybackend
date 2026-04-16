@@ -5965,7 +5965,7 @@ exports.markOrderAsDelivered = async (req, res) => {
 
     // 🔥 TAX CONSTANTS ADDED - SIRF YAHI CHANGES HAI
     const GST_RATE = 18; // 18% GST on commission
-    const TDS_RATE = 0.5; // 0.5% TDS on vendor earnings
+    const TDS_RATE = 1; // 1% TDS on vendor earnings
 
     // Validate the delivery boy
     const deliveryBoy = await DeliveryBoy.findById(deliveryBoyId);
