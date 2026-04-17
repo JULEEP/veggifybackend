@@ -26,7 +26,6 @@ const reelSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["active", "pending", "inactive"],
       default: "pending"
     },
     isHot: {

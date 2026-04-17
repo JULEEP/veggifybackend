@@ -7,9 +7,9 @@ const jwt = require('jsonwebtoken');
 const { generateReferralCode } = require('../utils/refeeral');
 const { generateTempToken, verifyTempToken } = require('../utils/jws');
 const cloudinary = require('../config/cloudinary');
-const {DeliveryBoy} = require('../models/deliveryBoyModel');
+const { DeliveryBoy } = require('../models/deliveryBoyModel');
 const Chat = require('../models/Chat');
-const fs = require('fs'); 
+const fs = require('fs');
 const Ambassador = require('../models/ambassadorModel');
 const nodemailer = require('nodemailer');
 const crypto = require('crypto');
@@ -118,7 +118,7 @@ Valid for 5 minutes. Do not share this code.`;
       message: "OTP sent successfully ✅",
       token: tempToken,
       referralCode: generatedReferralCode,
-        otp: otp
+      otp: otp
     });
 
   } catch (err) {
@@ -345,7 +345,7 @@ const setPassword = async (req, res) => {
 };
 
 
- const login = async (req, res) => {
+const login = async (req, res) => {
   const { phoneNumber, password } = req.body;
   if (!phoneNumber || !password)
     return res.status(400).json({ message: "All fields required" });
@@ -386,7 +386,7 @@ const setPassword = async (req, res) => {
   }
 };
 
- const sendForgotOtp = async (req, res) => {
+const sendForgotOtp = async (req, res) => {
   try {
     const { phoneNumber } = req.body;
 
@@ -411,10 +411,11 @@ const setPassword = async (req, res) => {
     // ✅ FORMAT PHONE NUMBER
     const formattedPhone = `+91${phoneNumber}`; // ya agar formatPhoneNumber function hai use kar sakte ho
 
-    // ✅ SET MESSAGE BODY IN SAME FORMAT AS REGISTRATION
-    const messageBody = `Welcome to Vegiffy – Pure Vegetarian Food Delivery App
-Your verification OTP is ${otp}.
-Valid for 5 minutes. Do not share this code.`;
+    const messageBody = `Your Vegiffy password reset OTP is ${otp}.
+Do not share this code with anyone.
+
+Vegiffy – Pure Vegetarian Food Delivery  
+Pure Veg, Hai Boss!`;
 
     // ✅ Send OTP via Twilio
     await client.messages.create({
@@ -588,7 +589,7 @@ const uploadLocalFile = async (file, folderPath) => {
   const filename = `profile-${uniqueSuffix}${ext}`;
   const uploadPath = path.join(folderPath, filename);
   await file.mv(uploadPath);
-  
+
   const relativePath = uploadPath.split('uploads')[1];
   return `${BASE_URL}/uploads${relativePath}`;
 };
@@ -664,7 +665,7 @@ const deleteProfileImage = async (req, res) => {
 
     // Delete local image file
     const deleted = deleteLocalFile(imageUrl);
-    
+
     if (deleted) {
       console.log(`✅ Profile image deleted from storage`);
     } else {
@@ -676,20 +677,20 @@ const deleteProfileImage = async (req, res) => {
     user.image = undefined;
     await user.save();
 
-    res.status(200).json({ 
-      message: 'Profile image deleted successfully ✅' 
+    res.status(200).json({
+      message: 'Profile image deleted successfully ✅'
     });
 
   } catch (error) {
     console.error("Delete profile image error:", error);
-    res.status(500).json({ 
-      message: 'Failed to delete profile image ❌', 
-      error: error.message 
+    res.status(500).json({
+      message: 'Failed to delete profile image ❌',
+      error: error.message
     });
   }
 };
 
- const addAddress = async (req, res) => {
+const addAddress = async (req, res) => {
   try {
     const { userId } = req.params;
     const { street, city, state, postalCode, country, addressType, latitude, longitude } = req.body;
@@ -748,7 +749,7 @@ const getAllAddresses = async (req, res) => {
     const { userId } = req.params;
 
     const user = await User.findById(userId);
-    if (!user) 
+    if (!user)
       return res.status(404).json({ success: false, message: 'User not found ❌' });
 
     const addresses = (user.addresses || []).map(addr => ({
@@ -762,10 +763,10 @@ const getAllAddresses = async (req, res) => {
       addresses
     });
   } catch (err) {
-    res.status(500).json({ 
-      success: false, 
-      message: "Failed to fetch addresses ❌", 
-      error: err.message 
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch addresses ❌",
+      error: err.message
     });
   }
 };
@@ -1009,14 +1010,14 @@ const createBanner = async (req, res) => {
     // ✅ Handle single banner image (image, not images)
     if (req.files && req.files.image) {
       const image = req.files.image;
-      
+
       const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
       const ext = path.extname(image.name);
       const filename = `banner-${uniqueSuffix}${ext}`;
-      
+
       const uploadPath = path.join(BANNERS_DIR, filename);
       await image.mv(uploadPath);
-      
+
       imageUrl = `${BASE_URL}/uploads/banners/${filename}`;
       console.log(`✅ Banner image saved: ${imageUrl}`);
     } else {
@@ -1025,25 +1026,25 @@ const createBanner = async (req, res) => {
 
     // ✅ Safely get subAdminId
     let subAdminId = null;
-    
+
     if (req.body) {
       if (typeof req.body === 'string') {
         try {
           const parsed = JSON.parse(req.body);
           subAdminId = parsed.subAdminId;
-        } catch(e) {
+        } catch (e) {
           console.log('Could not parse body string');
         }
-      } 
+      }
       else if (typeof req.body === 'object') {
         subAdminId = req.body.subAdminId;
       }
     }
-    
+
     if (!subAdminId && req.fields && req.fields.subAdminId) {
       subAdminId = req.fields.subAdminId;
     }
-    
+
     console.log('✅ Final subAdminId:', subAdminId);
 
     let note = 'Created by Admin';
@@ -1065,7 +1066,7 @@ const createBanner = async (req, res) => {
     }
 
     // ✅ Save to DB - single image, not array
-    const banner = new Banner({ 
+    const banner = new Banner({
       image: imageUrl,  // Single image field
       status: 'pending',
       createdBy: createdBy,
@@ -1081,10 +1082,10 @@ const createBanner = async (req, res) => {
 
   } catch (error) {
     console.error('❌ Error in createBanner:', error);
-    return res.status(500).json({ 
+    return res.status(500).json({
       success: false,
-      message: 'Server error', 
-      error: error.message 
+      message: 'Server error',
+      error: error.message
     });
   }
 };
@@ -1154,7 +1155,7 @@ const updateBanner = async (req, res) => {
     // =========================
     if (req.files && req.files.image) {
       const image = req.files.image;
-      
+
       // Delete old image
       if (banner.image) {
         const oldImagePath = path.join(BANNERS_DIR, path.basename(banner.image));
@@ -1163,14 +1164,14 @@ const updateBanner = async (req, res) => {
           console.log(`🗑️ Deleted old image: ${oldImagePath}`);
         }
       }
-      
+
       // Save new image
       const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
       const ext = path.extname(image.name);
       const filename = `banner-${uniqueSuffix}${ext}`;
       const uploadPath = path.join(BANNERS_DIR, filename);
       await image.mv(uploadPath);
-      
+
       imageUrl = `${BASE_URL}/uploads/banners/${filename}`;
       console.log(`✅ New image saved: ${imageUrl}`);
     }
@@ -1241,7 +1242,7 @@ const deleteBanner = async (req, res) => {
 
 
 
- const getNotificationsForUser = async (req, res) => {
+const getNotificationsForUser = async (req, res) => {
   try {
     const { userId } = req.params;
     // Validate userId
@@ -1276,7 +1277,7 @@ const deleteBanner = async (req, res) => {
 
 
 
- // Send message
+// Send message
 // Send message
 const sendMessage = async (req, res) => {
   try {
@@ -1321,34 +1322,34 @@ const sendMessage = async (req, res) => {
     // Emit message via Socket.IO to the relevant room
     const roomId = `${deliveryBoyId}_${userId}`;
     console.log(`🎯 Attempting to emit to room: ${roomId}`);
-    
+
     // Get io from global
     const io = global.io;
-    
+
     if (io) {
       console.log('✅ Socket.io instance found');
       console.log('🔍 Checking rooms...');
-      
+
       // Log all rooms and their sockets
       const rooms = io.sockets.adapter.rooms;
       console.log('🏠 All rooms:', Array.from(rooms.keys()));
-      
+
       const targetRoom = rooms.get(roomId);
       if (targetRoom) {
         console.log(`👥 Room ${roomId} has ${targetRoom.size} members`);
       } else {
         console.log(`❌ Room ${roomId} not found or empty`);
       }
-      
+
       // Emit the message
       io.to(roomId).emit('receiveMessage', savedMessage);
       console.log(`📤 Message emitted to room: ${roomId}`);
-      
+
       // Also emit to a test event to verify
-      io.to(roomId).emit('testEvent', { 
-        message: 'Test from server', 
+      io.to(roomId).emit('testEvent', {
+        message: 'Test from server',
         roomId,
-        timestamp: new Date() 
+        timestamp: new Date()
       });
     } else {
       console.log('❌ Socket.io instance NOT found');
@@ -1415,7 +1416,7 @@ const getChatHistory = async (req, res) => {
     // Emit chat history to the room
     const roomId = `${deliveryBoyId}_${userId}`;
     const io = global.io;
-    
+
     if (io) {
       io.to(roomId).emit('chatHistory', formattedMessages);
       console.log(`📤 Chat history emitted to room: ${roomId}`);
@@ -1853,18 +1854,18 @@ const getActiveCoupons = async (req, res) => {
 
     // ✅ Check user's cart to see which coupons are applied
     const cart = await Cart.findOne({ userId });
-    
+
     // ✅ Add isApplied field to each coupon
     const couponsWithAppliedStatus = coupons.map(coupon => {
       const couponObj = coupon.toObject();
-      
+
       // Check if this coupon is applied in user's cart
       if (cart && cart.appliedCouponId && cart.appliedCouponId.toString() === coupon._id.toString()) {
         couponObj.isApplied = true;
       } else {
         couponObj.isApplied = false;
       }
-      
+
       return couponObj;
     });
 
@@ -1894,40 +1895,40 @@ const applyCoupon = async (req, res) => {
 
     // ✅ Validate inputs
     if (!userId || !couponId) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "userId and couponId are required" 
+      return res.status(400).json({
+        success: false,
+        message: "userId and couponId are required"
       });
     }
 
     if (!mongoose.Types.ObjectId.isValid(userId)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Invalid userId" 
+      return res.status(400).json({
+        success: false,
+        message: "Invalid userId"
       });
     }
 
     if (!mongoose.Types.ObjectId.isValid(couponId)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Invalid couponId" 
+      return res.status(400).json({
+        success: false,
+        message: "Invalid couponId"
       });
     }
 
     // ✅ Find user cart
     const cart = await Cart.findOne({ userId });
-    
+
     if (!cart) {
-      return res.status(404).json({ 
-        success: false, 
-        message: "Cart not found. Please add items to cart first." 
+      return res.status(404).json({
+        success: false,
+        message: "Cart not found. Please add items to cart first."
       });
     }
 
     if (!cart.products || cart.products.length === 0) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Cart is empty. Please add items to cart first." 
+      return res.status(400).json({
+        success: false,
+        message: "Cart is empty. Please add items to cart first."
       });
     }
 
@@ -1954,43 +1955,43 @@ const applyCoupon = async (req, res) => {
 
     // ✅ Find and validate coupon
     const coupon = await Coupon.findById(couponId);
-    
+
     if (!coupon) {
-      return res.status(404).json({ 
-        success: false, 
-        message: "Coupon not found" 
+      return res.status(404).json({
+        success: false,
+        message: "Coupon not found"
       });
     }
 
     // Check if coupon is active
     if (!coupon.isActive) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Coupon is not active" 
+      return res.status(400).json({
+        success: false,
+        message: "Coupon is not active"
       });
     }
 
     // Check coupon validity date
     const currentDate = new Date();
     if (coupon.startDate && currentDate < coupon.startDate) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Coupon is not yet valid" 
+      return res.status(400).json({
+        success: false,
+        message: "Coupon is not yet valid"
       });
     }
 
     if (coupon.endDate && currentDate > coupon.endDate) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Coupon has expired" 
+      return res.status(400).json({
+        success: false,
+        message: "Coupon has expired"
       });
     }
 
     // Check usage limit
     if (coupon.usageLimit && coupon.usedCount >= coupon.usageLimit) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Coupon usage limit reached" 
+      return res.status(400).json({
+        success: false,
+        message: "Coupon usage limit reached"
       });
     }
 
@@ -2017,7 +2018,7 @@ const applyCoupon = async (req, res) => {
 
     if (coupon.discountType === 'percentage') {
       couponDiscount = (cart.subTotal * coupon.discountValue) / 100;
-      
+
       // Apply maximum discount limit if specified
       if (coupon.maxDiscountAmount && couponDiscount > coupon.maxDiscountAmount) {
         couponDiscount = coupon.maxDiscountAmount;
@@ -2035,7 +2036,7 @@ const applyCoupon = async (req, res) => {
     // ✅ Update cart with coupon details
     cart.appliedCouponId = coupon._id;
     cart.couponDiscount = couponDiscount;
-    
+
     // Update chargeCalculations.couponDiscount
     cart.chargeCalculations.couponDiscount = {
       couponId: coupon._id,
@@ -2048,11 +2049,11 @@ const applyCoupon = async (req, res) => {
 
     // ✅ Recalculate final amount with coupon discount
     const finalAmount = Number((
-      cart.subTotal + 
-      (cart.gstCharges || 0) + 
-      (cart.platformCharge || 0) + 
-      (cart.deliveryCharge || 0) + 
-      (cart.gstOnDelivery || 0) - 
+      cart.subTotal +
+      (cart.gstCharges || 0) +
+      (cart.platformCharge || 0) +
+      (cart.deliveryCharge || 0) +
+      (cart.gstOnDelivery || 0) -
       couponDiscount
     ).toFixed(2));
 
@@ -2091,7 +2092,7 @@ const applyCoupon = async (req, res) => {
         couponDiscount: couponDiscount,
         newTotal: finalAmount,
         totalSaved: (cart.amountSavedOnOrder || 0) + couponDiscount,
-        savingsPercentage: ((cart.amountSavedOnOrder || 0) + couponDiscount) > 0 ? 
+        savingsPercentage: ((cart.amountSavedOnOrder || 0) + couponDiscount) > 0 ?
           Number((((cart.amountSavedOnOrder || 0) + couponDiscount) / (cart.subTotal + (cart.amountSavedOnOrder || 0)) * 100).toFixed(1)) : 0
       },
       chargeBreakdown: {
@@ -2125,34 +2126,34 @@ const removeCoupon = async (req, res) => {
     const { userId } = req.body;
 
     if (!userId) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "userId is required" 
+      return res.status(400).json({
+        success: false,
+        message: "userId is required"
       });
     }
 
     if (!mongoose.Types.ObjectId.isValid(userId)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Invalid userId" 
+      return res.status(400).json({
+        success: false,
+        message: "Invalid userId"
       });
     }
 
     // ✅ Find user cart
     const cart = await Cart.findOne({ userId });
-    
+
     if (!cart) {
-      return res.status(404).json({ 
-        success: false, 
-        message: "Cart not found" 
+      return res.status(404).json({
+        success: false,
+        message: "Cart not found"
       });
     }
 
     // ✅ Check if coupon is applied
     if (!cart.appliedCouponId && !cart.couponDiscount) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "No coupon is currently applied to this cart" 
+      return res.status(400).json({
+        success: false,
+        message: "No coupon is currently applied to this cart"
       });
     }
 
@@ -2167,7 +2168,7 @@ const removeCoupon = async (req, res) => {
     // ✅ Remove coupon from cart
     cart.appliedCouponId = null;
     cart.couponDiscount = 0;
-    
+
     // Reset couponDiscount in chargeCalculations
     if (cart.chargeCalculations && cart.chargeCalculations.couponDiscount) {
       cart.chargeCalculations.couponDiscount = {
@@ -2182,10 +2183,10 @@ const removeCoupon = async (req, res) => {
 
     // ✅ Recalculate final amount without coupon discount
     const finalAmount = Number((
-      cart.subTotal + 
-      (cart.gstCharges || 0) + 
-      (cart.platformCharge || 0) + 
-      (cart.deliveryCharge || 0) + 
+      cart.subTotal +
+      (cart.gstCharges || 0) +
+      (cart.platformCharge || 0) +
+      (cart.deliveryCharge || 0) +
       (cart.gstOnDelivery || 0)
     ).toFixed(2));
 
@@ -2236,7 +2237,7 @@ const removeCoupon = async (req, res) => {
 };
 
 
- const deleteUserNotifications = async (req, res) => {
+const deleteUserNotifications = async (req, res) => {
   try {
     const { userId } = req.params;
     const { notificationIds } = req.body;
@@ -2381,7 +2382,7 @@ module.exports = {
   getChatHistory,
   resendOtp,
   updateUserSimply,
-   deleteAccount,
+  deleteAccount,
   confirmDeleteAccount,
   deleteUser,
   submitWebsiteEnquiry,

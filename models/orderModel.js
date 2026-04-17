@@ -50,6 +50,14 @@ const orderSchema = new mongoose.Schema(
     default: "Pending"
   },
 
+  rejectedRiders: [
+  {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "DeliveryBoy",
+    default: []
+  }
+],
+
   riderId: {
   type: mongoose.Schema.Types.ObjectId,
   ref: "DeliveryBoy",
@@ -114,7 +122,7 @@ const orderSchema = new mongoose.Schema(
   // ✅ Track delivery status (Optional)
   deliveryStatus: {
     type: String,
-    enum: ["Pending", "Assigned", "Picked", "Completed", "Rider Accepted", "Rider Rejected", "Delivered", "Failed", "Rider Accepted"],
+    enum: ["Pending", "Assigned", "Picked", "Completed", "Rider Accepted", "Rider Rejected", "Delivered", "Failed", "Rider Accepted", "No Rider Available"],
     default: "Pending"
   },
 

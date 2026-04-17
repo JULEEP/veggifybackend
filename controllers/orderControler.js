@@ -1432,6 +1432,7 @@ exports.getOrdersByUserId = async (req, res) => {
     }
 
     const orders = await Order.find(filter)
+      .sort({ createdAt: -1 }) // ✅ latest order first
       .populate("restaurantId", "restaurantName locationName");
 
     // Har order ke liye invoice banao
@@ -1631,6 +1632,24 @@ exports.getAcceptedOrdersByUserId = async (req, res) => {
       });
     }
 
+
+  // ✅ YAHAN ADD KARO (Rejected check)
+if (latestOrder.orderStatus === "Rejected") {
+  if (latestOrder.paymentMethod === "Online") {
+    return res.status(200).json({
+      success: false,
+      message: "Your latest order is Rejected. Amount will refund within 24 hr.",
+      status: "Rejected"
+    });
+  } else if (latestOrder.paymentMethod === "COD") { // ✅ FIX
+    return res.status(200).json({
+      success: false,
+      message: "Your latest order is Rejected.",
+      status: "Rejected"
+    });
+  }
+}
+
     // ✅ NEW LOGIC: Check if latest order is Delivered or Cancelled
     if (["Delivered", "Cancelled"].includes(latestOrder.orderStatus)) {
       console.log("❌ Latest order is Delivered/Cancelled. Status:", latestOrder.orderStatus);
@@ -1748,6 +1767,22 @@ exports.getOrderByUserIdAndOrderId = async (req, res) => {
         message: "Order not found."
       });
     }
+
+   if (order.orderStatus === "Rejected") {
+  if (order.paymentMethod === "Online") {
+    return res.status(200).json({
+      success: false,
+      message: "Your latest order is Rejected. Amount will refund within 24 hr.",
+      status: "Rejected"
+    });
+  } else if (order.paymentMethod === "COD") { // ✅ yaha fix
+    return res.status(200).json({
+      success: false,
+      message: "Your latest order is Rejected.",
+      status: "Rejected"
+    });
+  }
+}
 
     // If the order status is "Delivered", remove the order data from the response
     if (order.orderStatus === "Delivered") {
@@ -2632,12 +2667,226 @@ exports.getAcceptedOrdersForRider = async (req, res) => {
 
 
 
+// exports.acceptOrderForRider = async (req, res) => {
+//   try {
+//     const { orderStatus } = req.body;
+//     const { orderId, deliveryBoyId } = req.params;
+
+//     // Step 1: Validate the delivery boy
+//     const deliveryBoy = await DeliveryBoy.findById(deliveryBoyId);
+//     if (!deliveryBoy) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "Delivery boy not found.",
+//       });
+//     }
+
+//     // Step 2: Check if the rider already has a current order
+//     if (deliveryBoy.currentOrder) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "This rider already has an active order. Complete it before accepting a new one.",
+//       });
+//     }
+
+//     // Step 3: Validate the order
+//     const order = await Order.findById(orderId);
+//     if (!order) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "Order not found.",
+//       });
+//     }
+
+//     // ✅ CRITICAL FIX: Check if order is already accepted by another rider
+//     if (order.orderStatus === "Rider Accepted" || order.deliveryStatus === "Rider Accepted") {
+//       // Check if it's the same rider
+//       if (order.deliveryBoyId && order.deliveryBoyId.toString() === deliveryBoyId) {
+//         return res.status(400).json({
+//           success: false,
+//           message: "You have already accepted this order.",
+//         });
+//       }
+      
+//       return res.status(400).json({
+//         success: false,
+//         message: "This order has already been accepted by another rider.",
+//       });
+//     }
+
+//     // ✅ Check if order is in valid state for rider acceptance
+//     // Order should be in "Accepted" status, NOT "Preparing", "Out for Delivery", etc.
+//     if (order.orderStatus !== "Accepted") {
+//       let errorMessage = `Order is in "${order.orderStatus}" status. `;
+      
+//       if (order.orderStatus === "Preparing") {
+//         errorMessage += "Restaurant is preparing your order. Please wait for 'Ready for Pickup' status.";
+//       } else if (order.orderStatus === "Out for Delivery") {
+//         errorMessage += "Order is already out for delivery with another rider.";
+//       } else if (order.orderStatus === "Delivered") {
+//         errorMessage += "Order has already been delivered.";
+//       } else if (order.orderStatus === "Cancelled") {
+//         errorMessage += "Order has been cancelled.";
+//       } else {
+//         errorMessage += "Rider can only accept orders in 'Accepted' status.";
+//       }
+      
+//       return res.status(400).json({
+//         success: false,
+//         message: errorMessage,
+//         currentOrderStatus: order.orderStatus
+//       });
+//     }
+
+//     // Step 4: Handle Rider Acceptance
+//     if (orderStatus === "Rider Accepted") {
+//       // ✅ Use findOneAndUpdate with atomic operation to prevent race conditions
+//       const updatedOrder = await Order.findOneAndUpdate(
+//         { 
+//           _id: orderId, 
+//           orderStatus: "Accepted",  // Ensure it's still in Accepted status
+//           deliveryStatus: "Pending"  // Ensure it's still pending
+//         },
+//         {
+//           $set: {
+//             orderStatus: "Rider Accepted",
+//             deliveryStatus: "Rider Accepted",
+//             deliveryBoyId: deliveryBoy._id,
+//             riderAcceptedAt: new Date()
+//           }
+//         },
+//         { new: true }
+//       );
+
+//       if (!updatedOrder) {
+//         // Another rider might have already accepted
+//         return res.status(400).json({
+//           success: false,
+//           message: "Order was already accepted by another rider or status changed.",
+//         });
+//       }
+
+//       // Update delivery boy status
+//       deliveryBoy.currentOrder = true;
+//       deliveryBoy.currentOrderStatus = "Rider Accepted";
+//       deliveryBoy.currentOrderId = orderId;
+//       await deliveryBoy.save();
+
+//       // ✅ CRITICAL: Remove order from all other riders' available lists
+//       // This ensures no other rider can see this order anymore
+//       await DeliveryBoy.updateMany(
+//         { 
+//           _id: { $ne: deliveryBoy._id },
+//           availableOrders: orderId 
+//         },
+//         { 
+//           $pull: { availableOrders: orderId } 
+//         }
+//       );
+
+//       console.log(`✅ Order ${orderId} accepted by delivery boy ${deliveryBoyId}`);
+//       console.log(`📢 Order removed from other riders' available lists`);
+
+//       return res.status(200).json({
+//         success: true,
+//         message: "Order accepted by rider.",
+//         data: updatedOrder,
+//       });
+//     }
+
+//     // Step 5: Handle Rider Rejection
+//     if (orderStatus === "Rider Rejected") {
+//       // Remove this rider from availableDeliveryBoys array
+//       await Order.findByIdAndUpdate(
+//         orderId,
+//         {
+//           $pull: { availableDeliveryBoys: { deliveryBoyId: deliveryBoy._id } }
+//         }
+//       );
+
+//       console.log(`Order ${orderId} rejected by delivery boy ${deliveryBoyId}`);
+
+//       // Check if there are any other available delivery boys
+//       const updatedOrder = await Order.findById(orderId);
+      
+//       if (!updatedOrder.availableDeliveryBoys || updatedOrder.availableDeliveryBoys.length === 0) {
+//         // No riders left, notify admin/vendor
+//         console.log(`⚠️ No riders available for order ${orderId}`);
+        
+//         // Optional: Send notification to admin
+//         // await sendNotificationToAdmin('No riders available', orderId);
+//       }
+
+//       return res.status(200).json({
+//         success: true,
+//         message: "Order rejected. Other riders will be notified.",
+//         data: updatedOrder,
+//       });
+//     }
+
+//     return res.status(400).json({
+//       success: false,
+//       message: "Invalid order status. Use 'Rider Accepted' or 'Rider Rejected'.",
+//     });
+
+//   } catch (error) {
+//     console.error("Error accepting/rejecting order for rider:", error);
+//     return res.status(500).json({
+//       success: false,
+//       message: "Server error.",
+//       error: error.message,
+//     });
+//   }
+// };
+
+
+
+const assignOrderToNextRider = async (orderId, rejectedRiderId) => {
+  try {
+    const order = await Order.findById(orderId);
+
+    if (!order) return;
+
+    // ✅ add rejected rider to list
+    if (!order.rejectedRiders.includes(rejectedRiderId)) {
+      order.rejectedRiders.push(rejectedRiderId);
+    }
+
+    // ❌ find next rider EXCLUDING ALL rejected riders
+    const nextRider = await DeliveryBoy.findOne({
+      _id: { $nin: order.rejectedRiders },
+      isActive: true,
+      currentOrder: false
+    });
+
+    // ❌ NO RIDER FOUND → CANCEL ORDER
+    if (!nextRider) {
+      order.orderStatus = "Cancelled";
+      order.deliveryStatus = "No Rider Available";
+      await order.save();
+
+      console.log("❌ Order cancelled - no riders left:", orderId);
+      return;
+    }
+
+    // ✅ assign new rider
+    order.riderId = nextRider._id;
+
+    await order.save();
+
+    console.log("✅ New rider assigned:", nextRider._id);
+
+  } catch (error) {
+    console.log("assignOrderToNextRider error:", error.message);
+  }
+};
+// Main controller
 exports.acceptOrderForRider = async (req, res) => {
   try {
     const { orderStatus } = req.body;
     const { orderId, deliveryBoyId } = req.params;
 
-    // Step 1: Validate the delivery boy
+    // Step 1: Validate delivery boy
     const deliveryBoy = await DeliveryBoy.findById(deliveryBoyId);
     if (!deliveryBoy) {
       return res.status(404).json({
@@ -2646,7 +2895,7 @@ exports.acceptOrderForRider = async (req, res) => {
       });
     }
 
-    // Step 2: Check if the rider already has a current order
+    // Step 2: Check if rider already has a current order
     if (deliveryBoy.currentOrder) {
       return res.status(400).json({
         success: false,
@@ -2654,7 +2903,7 @@ exports.acceptOrderForRider = async (req, res) => {
       });
     }
 
-    // Step 3: Validate the order
+    // Step 3: Validate order
     const order = await Order.findById(orderId);
     if (!order) {
       return res.status(404).json({
@@ -2663,27 +2912,23 @@ exports.acceptOrderForRider = async (req, res) => {
       });
     }
 
-    // ✅ CRITICAL FIX: Check if order is already accepted by another rider
+    // Check if order already accepted by another rider
     if (order.orderStatus === "Rider Accepted" || order.deliveryStatus === "Rider Accepted") {
-      // Check if it's the same rider
       if (order.deliveryBoyId && order.deliveryBoyId.toString() === deliveryBoyId) {
         return res.status(400).json({
           success: false,
           message: "You have already accepted this order.",
         });
       }
-      
       return res.status(400).json({
         success: false,
         message: "This order has already been accepted by another rider.",
       });
     }
 
-    // ✅ Check if order is in valid state for rider acceptance
-    // Order should be in "Accepted" status, NOT "Preparing", "Out for Delivery", etc.
+    // Order must be in "Accepted" status
     if (order.orderStatus !== "Accepted") {
       let errorMessage = `Order is in "${order.orderStatus}" status. `;
-      
       if (order.orderStatus === "Preparing") {
         errorMessage += "Restaurant is preparing your order. Please wait for 'Ready for Pickup' status.";
       } else if (order.orderStatus === "Out for Delivery") {
@@ -2695,36 +2940,33 @@ exports.acceptOrderForRider = async (req, res) => {
       } else {
         errorMessage += "Rider can only accept orders in 'Accepted' status.";
       }
-      
       return res.status(400).json({
         success: false,
         message: errorMessage,
-        currentOrderStatus: order.orderStatus
+        currentOrderStatus: order.orderStatus,
       });
     }
 
-    // Step 4: Handle Rider Acceptance
+    // ----- RIDER ACCEPTS -----
     if (orderStatus === "Rider Accepted") {
-      // ✅ Use findOneAndUpdate with atomic operation to prevent race conditions
       const updatedOrder = await Order.findOneAndUpdate(
-        { 
-          _id: orderId, 
-          orderStatus: "Accepted",  // Ensure it's still in Accepted status
-          deliveryStatus: "Pending"  // Ensure it's still pending
+        {
+          _id: orderId,
+          orderStatus: "Accepted",
+          deliveryStatus: "Pending",
         },
         {
           $set: {
             orderStatus: "Rider Accepted",
             deliveryStatus: "Rider Accepted",
             deliveryBoyId: deliveryBoy._id,
-            riderAcceptedAt: new Date()
-          }
+            riderAcceptedAt: new Date(),
+          },
         },
         { new: true }
       );
 
       if (!updatedOrder) {
-        // Another rider might have already accepted
         return res.status(400).json({
           success: false,
           message: "Order was already accepted by another rider or status changed.",
@@ -2737,20 +2979,13 @@ exports.acceptOrderForRider = async (req, res) => {
       deliveryBoy.currentOrderId = orderId;
       await deliveryBoy.save();
 
-      // ✅ CRITICAL: Remove order from all other riders' available lists
-      // This ensures no other rider can see this order anymore
+      // Remove order from other riders' available lists
       await DeliveryBoy.updateMany(
-        { 
-          _id: { $ne: deliveryBoy._id },
-          availableOrders: orderId 
-        },
-        { 
-          $pull: { availableOrders: orderId } 
-        }
+        { _id: { $ne: deliveryBoy._id }, availableOrders: orderId },
+        { $pull: { availableOrders: orderId } }
       );
 
-      console.log(`✅ Order ${orderId} accepted by delivery boy ${deliveryBoyId}`);
-      console.log(`📢 Order removed from other riders' available lists`);
+      console.log(`✅ Order ${orderId} accepted by rider ${deliveryBoyId}`);
 
       return res.status(200).json({
         success: true,
@@ -2759,43 +2994,38 @@ exports.acceptOrderForRider = async (req, res) => {
       });
     }
 
-    // Step 5: Handle Rider Rejection
+    // ----- RIDER REJECTS -----
     if (orderStatus === "Rider Rejected") {
-      // Remove this rider from availableDeliveryBoys array
-      await Order.findByIdAndUpdate(
-        orderId,
-        {
-          $pull: { availableDeliveryBoys: { deliveryBoyId: deliveryBoy._id } }
-        }
-      );
+      // 1. Remove this rider from the order's availableDeliveryBoys array
+      await Order.findByIdAndUpdate(orderId, {
+        $pull: { availableDeliveryBoys: { deliveryBoyId: deliveryBoy._id } }
+      });
 
-      console.log(`Order ${orderId} rejected by delivery boy ${deliveryBoyId}`);
-
-      // Check if there are any other available delivery boys
-      const updatedOrder = await Order.findById(orderId);
-      
-      if (!updatedOrder.availableDeliveryBoys || updatedOrder.availableDeliveryBoys.length === 0) {
-        // No riders left, notify admin/vendor
-        console.log(`⚠️ No riders available for order ${orderId}`);
-        
-        // Optional: Send notification to admin
-        // await sendNotificationToAdmin('No riders available', orderId);
+      // 2. If this rider was the temporarily assigned one (riderId), clear it
+      if (order.riderId && order.riderId.toString() === deliveryBoyId) {
+        await Order.findByIdAndUpdate(orderId, { $unset: { riderId: "" } });
       }
+
+      console.log(`❌ Order ${orderId} rejected by rider ${deliveryBoyId}`);
+
+      // 3. Schedule auto‑assignment to another rider after 30 seconds
+      setTimeout(() => {
+        assignOrderToNextRider(orderId, deliveryBoy._id);
+      }, 30000); // 30 seconds delay
 
       return res.status(200).json({
         success: true,
-        message: "Order rejected. Other riders will be notified.",
-        data: updatedOrder,
+        message: "Order rejected. The system will try to assign another rider in 30 seconds.",
       });
     }
 
+    // Invalid status
     return res.status(400).json({
       success: false,
       message: "Invalid order status. Use 'Rider Accepted' or 'Rider Rejected'.",
     });
-
   } catch (error) {
-    console.error("Error accepting/rejecting order for rider:", error);
+    console.error("Error in acceptOrderForRider:", error);
     return res.status(500).json({
       success: false,
       message: "Server error.",

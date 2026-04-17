@@ -224,7 +224,6 @@ exports.verifyOtp = async (req, res) => {
 
 
 
-// Get all orders for a vendor (restaurant) but only show orders created 2 min ago or earlier
 exports.getOrdersByVendorId = async (req, res) => {
   const { vendorId } = req.params;
 
@@ -246,18 +245,18 @@ exports.getOrdersByVendorId = async (req, res) => {
       });
     }
 
-    // Current time minus 2 minutes
-    const twoMinutesAgo = new Date(Date.now() - 1 * 60 * 1000);
+    // ⏱️ Current time minus 30 seconds
+    const thirtySecondsAgo = new Date(Date.now() - 30 * 1000);
 
-    // Fetch orders created at least 2 min ago
+    // Fetch orders created at least 30 sec ago
     const orders = await Order.find({
       restaurantId: vendor._id,
-      createdAt: { $lte: twoMinutesAgo }, // filter orders older than 2 minutes
+      createdAt: { $lte: thirtySecondsAgo },
     })
-      .sort({ createdAt: -1 }) // newest first
+      .sort({ createdAt: -1 })
       .populate("restaurantId", "restaurantName location")
       .populate("userId", "firstName lastName email phoneNumber")
-  .populate("riderId", "fullName mobileNumber vehicleType email isActive") // ✅ rider details
+      .populate("riderId", "fullName mobileNumber vehicleType email isActive")
       .populate({
         path: "cartId",
         populate: {
@@ -271,6 +270,7 @@ exports.getOrdersByVendorId = async (req, res) => {
       message: `Orders for ${vendor.restaurantName} fetched successfully`,
       data: orders,
     });
+
   } catch (error) {
     console.error("getOrdersByVendorId error:", error);
     return res.status(500).json({
@@ -2887,7 +2887,7 @@ exports.createReel = async (req, res) => {
       title: title || '',
       description: description || '',
       deepLink: deepLink || '',
-  status: status || 'pending', // ✅ default pending
+  status: 'pending', // ✅ default pending
       isHot: isHot === 'true' || isHot === true
     };
 
@@ -2919,6 +2919,116 @@ exports.createReel = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Kuch gadbad ho gayi",
+      error: err.message
+    });
+  }
+};
+
+
+
+exports.updateReel = async (req, res) => {
+  try {
+    console.log("🎥 [Reel Update] Function called");
+
+    const { reelId } = req.params;
+    const { title, description, deepLink, isHot, status } = req.body;
+
+    if (!reelId) {
+      return res.status(400).json({
+        success: false,
+        message: "Reel ID required"
+      });
+    }
+
+    // 1️⃣ Find reel
+    const reel = await Reel.findById(reelId);
+
+    if (!reel) {
+      return res.status(404).json({
+        success: false,
+        message: "Reel not found"
+      });
+    }
+
+    const reelsDir = path.join(__dirname, "../uploads/reels");
+
+    // 2️⃣ Update video (optional)
+    if (req.files && req.files.video) {
+      const videoFile = req.files.video;
+
+      const validTypes = [
+        "video/mp4",
+        "video/quicktime",
+        "video/x-msvideo",
+        "video/webm",
+        "video/3gpp"
+      ];
+
+      if (!validTypes.includes(videoFile.mimetype)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid video format"
+        });
+      }
+
+      if (videoFile.size > 100 * 1024 * 1024) {
+        return res.status(400).json({
+          success: false,
+          message: "Video must be under 100MB"
+        });
+      }
+
+      const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+      const videoExt = path.extname(videoFile.name);
+      const videoFilename = `reel_video_${reel.vendorId}_${uniqueSuffix}${videoExt}`;
+      const videoPath = path.join(reelsDir, videoFilename);
+
+      await videoFile.mv(videoPath);
+
+      const baseUrl = "https://api.vegiffyy.com";
+      reel.videoUrl = `${baseUrl}/uploads/reels/${videoFilename}`;
+    }
+
+    // 3️⃣ Update thumbnail (optional)
+    if (req.files && req.files.thumbnail) {
+      const thumbFile = req.files.thumbnail;
+
+      const validImageTypes = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
+
+      if (validImageTypes.includes(thumbFile.mimetype) && thumbFile.size <= 5 * 1024 * 1024) {
+        const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+        const thumbExt = path.extname(thumbFile.name);
+        const thumbFilename = `reel_thumb_${reel.vendorId}_${uniqueSuffix}${thumbExt}`;
+        const thumbPath = path.join(reelsDir, thumbFilename);
+
+        await thumbFile.mv(thumbPath);
+
+        const baseUrl = "https://api.vegiffyy.com";
+        reel.thumbUrl = `${baseUrl}/uploads/reels/${thumbFilename}`;
+      }
+    }
+
+    // 4️⃣ Update text fields
+    if (title !== undefined) reel.title = title;
+    if (description !== undefined) reel.description = description;
+    if (deepLink !== undefined) reel.deepLink = deepLink;
+    if (isHot !== undefined) reel.isHot = isHot === "true" || isHot === true;
+    if (status !== undefined) reel.status = status;
+
+    // 5️⃣ Save updated reel
+    await reel.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Reel updated successfully",
+      data: reel
+    });
+
+  } catch (err) {
+    console.error("❌ Reel Update Error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
       error: err.message
     });
   }
@@ -3030,7 +3140,7 @@ exports.createAdminReel = async (req, res) => {
       title: title || '',
       description: description || '',
       deepLink: deepLink || '',
-      status: status || 'active',
+      status:'pending',
       isHot: isHot === 'true' || isHot === true
     };
 
