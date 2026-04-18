@@ -63,13 +63,11 @@ app.use(cors({
   origin: [
     'https://veegify-web.web.app', 
     'http://localhost:3000', 
-    'https://panel.vegiffyy.com', 
-    'https://vendor.vegiffyy.com', 
     'https://vegiffyvendordelete.vercel.app', 
     'https://vegiffydeliveryboydeleteurl.vercel.app',
     'https://vegiffy-web.vercel.app',
     'https://vendor.vegiffy.in',
-    'https://vegiffypanel.vegiffy.in'
+    'https://panel.vegiffy.in'
   ],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'subAdminId'],
@@ -86,7 +84,8 @@ const io = socketIo(server, {
       'https://panel.vegiffyy.com', 
       'https://vendor.vegiffyy.com',
       'https://vendor.vegiffy.in',
-      'https://vegiffypanel.vegiffy.in'
+      'https://vegiffypanel.vegiffy.in',
+      'https://panel.vegiffy.in'
     ],
     methods: ["GET", "POST"],
     credentials: true
