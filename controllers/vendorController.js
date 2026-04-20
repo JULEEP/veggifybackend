@@ -56,41 +56,32 @@ dotenv.config();
 
 
 
-// Vendor login — generate OTP + send email
 exports.vendorLogin = async (req, res) => {
   try {
     const { email, password } = req.body;
 
     if (!email || !password) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Email and password are required" 
+      return res.status(400).json({
+        success: false,
+        message: "Email and password are required"
       });
     }
 
     const vendor = await Restaurant.findOne({ email: email.toLowerCase() });
+
     if (!vendor) {
-      return res.status(401).json({ 
-        success: false, 
-        message: "Account not found. Please check your email or register as a new vendor." 
+      return res.status(401).json({
+        success: false,
+        message: "Account not found. Please check your email or register as a new vendor."
       });
     }
 
-    // Check if vendor is active
-    if (vendor.status !== "active") {
-      return res.status(403).json({
-        success: false,
-        message: "Your account is not active yet. Please wait for admin approval or contact support.",
-        vendorStatus: vendor.status,
-        contactEmail: "vendor@vegiffy.in",
-        whatsapp: "+91 6309100101"
-      });
-    }
+    // ❌ REMOVED: status active/inactive check
 
     if (vendor.password !== password) {
-      return res.status(401).json({ 
-        success: false, 
-        message: "Incorrect password. Please try again." 
+      return res.status(401).json({
+        success: false,
+        message: "Incorrect password. Please try again."
       });
     }
 
@@ -99,12 +90,13 @@ exports.vendorLogin = async (req, res) => {
 
     vendor.otp = {
       code: otpCode,
-      expiresAt: new Date(Date.now() + 5 * 60 * 1000)  // 5 min
+      expiresAt: new Date(Date.now() + 5 * 60 * 1000)
     };
 
     await vendor.save();
 
     const emailSubject = "VEGIFFY Vendor Login OTP 🔑";
+
     const emailHtml = `
       <div style="font-family: Arial, sans-serif; line-height:1.6; max-width: 600px; margin: auto; padding: 20px; color:#333;">
         <h2 style="color: #1e88e5;">Your Login OTP for VEGIFFY</h2>
@@ -112,20 +104,20 @@ exports.vendorLogin = async (req, res) => {
         <p style="font-size: 32px; font-weight: bold; margin: 20px 0;">${otpCode}</p>
         <p>This OTP is valid for <strong>5 minutes</strong>.</p>
         <hr style="margin: 30px 0;" />
-        <p>If you did not request this, please ignore this email or contact our support.</p>
-        <p>Need help? Contact us at <a href="mailto:vendor@vegiffy.in">vendor@vegiffy.in</a></p>
+        <p>If you did not request this, please ignore this email.</p>
+        <p>Need help? Contact <a href="mailto:vendor@vegiffy.in">vendor@vegiffy.in</a></p>
       </div>
     `;
 
     const emailSent = await sendEmail(vendor.email, emailSubject, emailHtml);
+
     if (!emailSent) {
-      return res.status(500).json({ 
-        success: false, 
-        message: "Failed to send OTP email. Please try again." 
+      return res.status(500).json({
+        success: false,
+        message: "Failed to send OTP email. Please try again."
       });
     }
 
-    // ✅ Send OTP in response as well
     res.status(200).json({
       success: true,
       message: "OTP sent to your email",
@@ -135,10 +127,10 @@ exports.vendorLogin = async (req, res) => {
 
   } catch (error) {
     console.error("Vendor login error:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: "Server error", 
-      error: error.message 
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message
     });
   }
 };

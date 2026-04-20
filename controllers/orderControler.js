@@ -2845,52 +2845,59 @@ const assignOrderToNextRider = async (orderId, rejectedRiderId) => {
   try {
     const rejectedId = rejectedRiderId.toString();
 
-    // 🔥 STEP 1: ATOMIC UPDATE (safe add rejected rider + remove from available list)
-    await Order.findByIdAndUpdate(orderId, {
-      $addToSet: { rejectedRiders: rejectedId },
-      $pull: {
-        availableDeliveryBoys: {
-          deliveryBoyId: rejectedId
-        }
-      }
-    });
-
-    // 🔥 STEP 2: fresh order fetch (VERY IMPORTANT)
     const order = await Order.findById(orderId);
     if (!order) return;
 
-    // ❌ find next rider
+    // ✅ rejected list — no duplicates
+    const rejectedList = [...new Set([
+      ...(order.rejectedRiders || []),
+      rejectedId
+    ])];
+
+    // ✅ next rider dhundo — rejected sab exclude karo
     const nextRider = await DeliveryBoy.findOne({
-      _id: {
-        $nin: [...order.rejectedRiders, order.riderId]
-      },
+      _id: { $nin: rejectedList.filter(Boolean) },
       isActive: true,
       currentOrder: false
     });
 
-    // 🚨 NO RIDER → CANCEL ORDER
+    // ❌ koi rider nahi mila
     if (!nextRider) {
       await Order.findByIdAndUpdate(orderId, {
-        orderStatus: "Cancelled",
-        deliveryStatus: "No Rider Available",
-        riderId: null
+        $set: {
+          orderStatus: "Cancelled",
+          deliveryStatus: "No Rider Available",
+          riderId: null,
+          availableDeliveryBoys: [],
+          rejectedRiders: rejectedList
+        }
       });
-
-      console.log("❌ Order Cancelled - No rider available:", orderId);
+      console.log("❌ No rider available, order cancelled");
       return;
     }
 
-    // 🔥 STEP 3: replace rider + remove from available list
+    // ✅ new rider assign karo — clean replace
     await Order.findByIdAndUpdate(orderId, {
-      riderId: nextRider._id,
-      $pull: {
-        availableDeliveryBoys: {
-          deliveryBoyId: nextRider._id
-        }
+      $set: {
+        riderId: nextRider._id,
+        deliveryBoyId: nextRider._id, // 🔥 ADDED SYNC FIX
+        deliveryStatus: "Pending",
+        orderStatus: "Accepted",
+        rejectedRiders: rejectedList,
+        availableDeliveryBoys: [
+          {
+            deliveryBoyId: nextRider._id,
+            fullName: nextRider.fullName,
+            mobileNumber: nextRider.mobileNumber,
+            vehicleType: nextRider.vehicleType,
+            walletBalance: nextRider.walletBalance,
+            status: nextRider.deliveryBoyStatus || "active"
+          }
+        ]
       }
     });
 
-    console.log("✅ Rider replaced:", nextRider._id);
+    console.log("✅ New rider assigned:", nextRider._id);
 
   } catch (error) {
     console.log("assignOrderToNextRider error:", error.message);
@@ -2898,13 +2905,13 @@ const assignOrderToNextRider = async (orderId, rejectedRiderId) => {
 };
 
 
-// 🚀 MAIN CONTROLLER
+
 exports.acceptOrderForRider = async (req, res) => {
   try {
     const { orderStatus } = req.body;
     const { orderId, deliveryBoyId } = req.params;
 
-    // ✅ find rider
+    // ✅ rider find karo
     const rider = await DeliveryBoy.findById(deliveryBoyId);
     if (!rider) {
       return res.status(404).json({
@@ -2921,7 +2928,7 @@ exports.acceptOrderForRider = async (req, res) => {
       });
     }
 
-    // ✅ find order
+    // ✅ order find karo
     const order = await Order.findById(orderId);
     if (!order) {
       return res.status(404).json({
@@ -2968,6 +2975,7 @@ exports.acceptOrderForRider = async (req, res) => {
             orderStatus: "Rider Accepted",
             deliveryStatus: "Rider Accepted",
             riderId: rider._id,
+            deliveryBoyId: rider._id, // 🔥 ADDED SYNC FIX
             riderAcceptedAt: new Date(),
           },
         },
@@ -2981,7 +2989,7 @@ exports.acceptOrderForRider = async (req, res) => {
         });
       }
 
-      // 🔥 update rider
+      // ✅ rider busy karo
       rider.currentOrder = true;
       rider.currentOrderId = orderId;
       rider.currentOrderStatus = "Rider Accepted";
@@ -2996,40 +3004,47 @@ exports.acceptOrderForRider = async (req, res) => {
       });
     }
 
-
     // =========================
     // ❌ REJECT
     // =========================
     if (orderStatus === "Rider Rejected") {
 
-      // 🔥 rider free karo
+      // ✅ rider free karo
       await DeliveryBoy.findByIdAndUpdate(deliveryBoyId, {
-        currentOrder: false,
-        currentOrderId: null,
-        currentOrderStatus: null
+        $set: {
+          currentOrder: false,
+          currentOrderId: null,
+          currentOrderStatus: null
+        }
       });
 
-      // rider remove from order
-      if (order.riderId && order.riderId.toString() === deliveryBoyId) {
-        await Order.findByIdAndUpdate(orderId, {
-          $unset: { riderId: "" }
-        });
-      }
+      // ✅ turant — purana rider clear karo, array bhi clear karo
+      await Order.findByIdAndUpdate(orderId, {
+        $set: {
+          riderId: null,
+          deliveryBoyId: null, // 🔥 ADDED SYNC FIX
+          availableDeliveryBoys: [],
+          deliveryStatus: "Finding Rider",
+        },
+        $push: {
+          rejectedRiders: deliveryBoyId
+        }
+      });
 
-      console.log("❌ Rejected:", orderId);
+      console.log("❌ Rejected by rider:", deliveryBoyId);
 
-      // ⏳ next rider after 30 sec
-      setTimeout(() => {
-        assignOrderToNextRider(orderId, deliveryBoyId);
-      }, 30000);
+      // ✅ turant next rider assign karo — NO setTimeout
+      await assignOrderToNextRider(orderId, deliveryBoyId);
+
+      console.log("✅ Next rider assignment done");
 
       return res.status(200).json({
         success: true,
-        message: "Rejected. Assigning new rider soon",
+        message: "Rejected. New rider assigned",
       });
     }
 
-    // ❌ invalid
+    // ❌ invalid status
     return res.status(400).json({
       success: false,
       message: "Invalid status",
@@ -3044,6 +3059,8 @@ exports.acceptOrderForRider = async (req, res) => {
     });
   }
 };
+
+
 exports.getOrdersForRider = async (req, res) => {
   try {
     const { deliveryBoyId } = req.params;
