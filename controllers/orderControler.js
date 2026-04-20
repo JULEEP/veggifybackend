@@ -1650,15 +1650,15 @@ if (latestOrder.orderStatus === "Rejected") {
   }
 }
 
-    // ✅ NEW LOGIC: Check if latest order is Delivered or Cancelled
-    if (["Delivered", "Cancelled"].includes(latestOrder.orderStatus)) {
-      console.log("❌ Latest order is Delivered/Cancelled. Status:", latestOrder.orderStatus);
-      return res.status(404).json({
-        success: false,
-        message: `Your latest order is already ${latestOrder.orderStatus}. No active orders found.`
-      });
-    }
+   if (["Delivered", "Cancelled"].includes(latestOrder.orderStatus)) {
+  console.log("❌ Latest order is Delivered/Cancelled. Status:", latestOrder.orderStatus);
 
+  return res.status(404).json({
+    success: false,
+    message: `Your latest order is already ${latestOrder.orderStatus}. No active orders found.`,
+    status: latestOrder.orderStatus // 🔥 ADDED
+  });
+}
     // ✅ Check if latest order has accepted status
     if (!["Accepted", "Rider Accepted"].includes(latestOrder.orderStatus)) {
       console.log("❌ Latest order is NOT accepted. Status:", latestOrder.orderStatus);
@@ -1784,13 +1784,13 @@ exports.getOrderByUserIdAndOrderId = async (req, res) => {
   }
 }
 
-    // If the order status is "Delivered", remove the order data from the response
-    if (order.orderStatus === "Delivered") {
-      return res.status(200).json({
-        success: true,
-        message: "Your order has been delivered. No further details are available."
-      });
-    }
+   if (order.orderStatus === "Delivered") {
+  return res.status(200).json({
+    success: true,
+    message: "Your order has been delivered. No further details are available.",
+    status: "Delivered"
+  });
+}
 
     // Check if the order status allows viewing
     if (!["Accepted", "Rider Accepted", "Picked"].includes(order.orderStatus)) {
