@@ -2867,7 +2867,7 @@ exports.createReel = async (req, res) => {
     }
 
     // 🔟 Generate URLs
-    const baseUrl = 'https://api.vegiffyy.com';
+    const baseUrl = 'https://api.vegiffy.in';
     const videoUrl = `${baseUrl}/uploads/reels/${videoFilename}`;
     thumbUrl = thumbFilename ? `${baseUrl}/uploads/reels/${thumbFilename}` : '';
 
@@ -2977,7 +2977,7 @@ exports.updateReel = async (req, res) => {
 
       await videoFile.mv(videoPath);
 
-      const baseUrl = "https://api.vegiffyy.com";
+      const baseUrl = "https://api.vegiffy.in";
       reel.videoUrl = `${baseUrl}/uploads/reels/${videoFilename}`;
     }
 
@@ -2995,7 +2995,7 @@ exports.updateReel = async (req, res) => {
 
         await thumbFile.mv(thumbPath);
 
-        const baseUrl = "https://api.vegiffyy.com";
+        const baseUrl = "https://api.vegiffy.in";
         reel.thumbUrl = `${baseUrl}/uploads/reels/${thumbFilename}`;
       }
     }
@@ -3120,7 +3120,7 @@ exports.createAdminReel = async (req, res) => {
     }
 
     // 🔟 Generate URLs
-    const baseUrl = 'https://api.vegiffyy.com';
+    const baseUrl = 'https://api.vegiffy.in';
     const videoUrl = `${baseUrl}/uploads/reels/${videoFilename}`;
     thumbUrl = thumbFilename ? `${baseUrl}/uploads/reels/${thumbFilename}` : '';
 
@@ -3298,7 +3298,7 @@ exports.updateReel = async (req, res) => {
           
           await thumbFile.mv(thumbPath);
           
-          const baseUrl = 'https://api.vegiffyy.com';
+          const baseUrl = 'https://api.vegiffy.in';
           reel.thumbUrl = `${baseUrl}/uploads/reels/${thumbFilename}`;
           console.log('✅ New thumbnail saved:', thumbFilename);
         }

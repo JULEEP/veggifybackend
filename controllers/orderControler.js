@@ -57,7 +57,7 @@ if (!fs.existsSync(GENERAL_UPLOADS_DIR)) {
 }
 
 // Base URL
-const BASE_URL = 'https://api.vegiffyy.com';
+const BASE_URL = 'https://api.vegiffy.in';
 
 // Helper to upload images locally (NO CLOUDINARY)
 async function uploadFilesToCloudinary(files) {
@@ -1478,7 +1478,7 @@ exports.getOrdersByUserId = async (req, res) => {
         await browser.close();
         
         // 4. URL banao
-        const baseUrl = 'https://api.vegiffyy.com';
+        const baseUrl = 'https://api.vegiffy.in';
         orderObj.invoiceUrl = `${baseUrl}/uploads/invoices/${invoiceFileName}`;
         
       } catch (pdfError) {
@@ -1529,7 +1529,7 @@ exports.getPreviousOrdersByUserId = async (req, res) => {
         
         if (existingInvoice) {
           // Agar invoice already hai to wahi URL do
-          const baseUrl = 'https://api.vegiffyy.com';
+          const baseUrl = 'https://api.vegiffy.in';
           orderObj.invoiceUrl = `${baseUrl}/uploads/invoices/${existingInvoice}`;
         } else {
           // Naya invoice banao
@@ -1572,7 +1572,7 @@ exports.getPreviousOrdersByUserId = async (req, res) => {
           await browser.close();
           
           // 4. URL banao
-          const baseUrl = 'https://api.vegiffyy.com';
+          const baseUrl = 'https://api.vegiffy.in';
           orderObj.invoiceUrl = `${baseUrl}/uploads/invoices/${invoiceFileName}`;
         }
         
@@ -1653,8 +1653,8 @@ if (latestOrder.orderStatus === "Rejected") {
    if (["Delivered", "Cancelled"].includes(latestOrder.orderStatus)) {
   console.log("❌ Latest order is Delivered/Cancelled. Status:", latestOrder.orderStatus);
 
-  return res.status(404).json({
-    success: false,
+  return res.status(200).json({
+    success: true,
     message: `Your latest order is already ${latestOrder.orderStatus}. No active orders found.`,
     status: latestOrder.orderStatus // 🔥 ADDED
   });
@@ -1662,8 +1662,8 @@ if (latestOrder.orderStatus === "Rejected") {
     // ✅ Check if latest order has accepted status
     if (!["Accepted", "Rider Accepted"].includes(latestOrder.orderStatus)) {
       console.log("❌ Latest order is NOT accepted. Status:", latestOrder.orderStatus);
-      return res.status(404).json({
-        success: false,
+      return res.status(200).json({
+        success: true,
         message: `Your latest order is ${latestOrder.orderStatus}. No accepted orders found.`
       });
     }
@@ -1792,14 +1792,34 @@ exports.getOrderByUserIdAndOrderId = async (req, res) => {
   });
 }
 
-    // Check if the order status allows viewing
-    if (!["Accepted", "Rider Accepted", "Picked"].includes(order.orderStatus)) {
-      return res.status(400).json({
-        success: false,
-        message: "Order has not been accepted, rider has not accepted, or the order has not been picked yet. Please wait for acceptance before viewing details."
-      });
-    }
+   // Check if the order status allows viewing
+if (!["Accepted", "Rider Accepted", "Picked"].includes(order.orderStatus)) {
+  
+  let message = "";
 
+  switch (order.orderStatus) {
+    case "Rejected":
+      message = "The rider is currently busy. A new rider will be assigned to your order shortly.";
+      break;
+
+    case "Pending":
+      message = "Your order is awaiting acceptance. Please wait while we assign a rider.";
+      break;
+
+    case "Cancelled":
+      message = "This order has been cancelled. Please place a new order if needed.";
+      break;
+
+    default:
+      message = "Your order is being processed. Please wait for further updates.";
+  }
+
+  return res.status(200).json({
+    success: true,
+    message: message,
+    status: order.orderStatus   // 👈 status also included
+  });
+}
     const pickupTime = order.acceptedAt ? new Date(order.acceptedAt) : null;
     const deliveryTime = pickupTime ? new Date(pickupTime.getTime() + 30 * 60000) : null;
 

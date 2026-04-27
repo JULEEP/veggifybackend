@@ -61,7 +61,7 @@ if (!fs.existsSync(RECOMMENDED_DIR)) {
 }
 
 // Base URL
-const BASE_URL = 'https://api.vegiffyy.com';
+const BASE_URL = 'https://api.vegiffy.in';
 
 // Helper function to upload image locally
 const uploadLocalImage = async (file, folder) => {

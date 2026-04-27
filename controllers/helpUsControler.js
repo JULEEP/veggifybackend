@@ -26,7 +26,7 @@ if (!fs.existsSync(HELP_ISSUES_DIR)) {
 }
 
 // Base URL
-const BASE_URL = 'https://api.vegiffyy.com';
+const BASE_URL = 'https://api.vegiffy.in';
 
 // Helper function to upload file locally
 const uploadLocalFile = async (file, folderPath) => {

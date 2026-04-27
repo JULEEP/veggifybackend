@@ -49,7 +49,7 @@ if (!fs.existsSync(SUBCATEGORIES_DIR)) {
 }
 
 // Base URL
-const BASE_URL = 'https://api.vegiffyy.com';
+const BASE_URL = 'https://api.vegiffy.in';
 
 // ✅ CREATE CATEGORY
 exports.createCategory = async (req, res) => {

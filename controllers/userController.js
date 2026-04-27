@@ -997,7 +997,7 @@ if (!fs.existsSync(BANNERS_DIR)) {
 }
 
 // Base URL
-const BASE_URL = 'https://api.vegiffyy.com';
+const BASE_URL = 'https://api.vegiffy.in';
 
 // Create Banner - FINAL WORKING VERSION
 const createBanner = async (req, res) => {
