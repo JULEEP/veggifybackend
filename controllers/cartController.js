@@ -218,7 +218,7 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
 // Helper function to fetch charges from API
 const fetchCharges = async () => {
   try {
-    const response = await axios.get('http://31.97.206.144:5051/api/admin/allcharge');
+    const response = await axios.get('https://api.vegiffy.in/api/admin/allcharge');
     if (response.data.success) {
       return response.data.data;
     }
