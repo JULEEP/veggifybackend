@@ -12,6 +12,7 @@ const AmbassadorPlan = require("../models/AmbassadorPlan");
 const AmbassadorAccount = require("../models/AmbassadorAccount");
 const nodemailer = require("nodemailer");
 const SubAdmin = require("../models/SubAdmin");
+
 dotenv.config();
 
 const path = require('path');
@@ -220,8 +221,8 @@ exports.createAmbassador = async (req, res) => {
     // ========================
     // Hash the password
     // ========================
-    const saltRounds = 10;
-    const hashedPassword = await bcrypt.hash(formData.password, saltRounds);
+
+    
 
     // ========================
     // Handle file uploads (LOCAL - NO CLOUDINARY)
@@ -310,7 +311,7 @@ exports.createAmbassador = async (req, res) => {
       alternateMobileNumber: formData.alternateMobileNumber ? formData.alternateMobileNumber.trim() : null,
       dateOfBirth: formData.dateOfBirth || null,
       gender: formData.gender || null,
-      password: hashedPassword,
+      password: formData.password,
       city: formData.city.trim(),
       area: formData.area.trim(),
       pincode: formData.pincode || "",
