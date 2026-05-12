@@ -1395,13 +1395,7 @@ exports.updateWithdrawalStatus = async (req, res) => {
         });
       }
 
-      if (deliveryBoy.walletBalance < withdrawal.amount) {
-        return res.status(400).json({
-          success: false,
-          message: "Insufficient wallet balance for the withdrawal.",
-        });
-      }
-
+    
       deliveryBoy.walletBalance -= withdrawal.amount;
       await deliveryBoy.save();
     }

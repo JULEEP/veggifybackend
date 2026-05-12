@@ -2511,13 +2511,7 @@ exports.deleteAccount = async (req, res) => {
       });
     }
 
-    // Check if it's the primary account
-    if (account.isPrimary) {
-      return res.status(400).json({
-        success: false,
-        message: 'Cannot delete primary account. Please set another account as primary first.'
-      });
-    }
+  
 
     await account.deleteOne();
 

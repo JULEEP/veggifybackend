@@ -119,8 +119,6 @@ router.delete("/deleteCommission/:id", adminController.deleteCommission);
 
 router.post('/addReferralReward', adminController.addReferralReward);
 
-router.get('/getReferralRewards', adminController.getReferralRewards);
-
 // Update charge
 router.put('/updateReferralReward/:id', adminController.updateReferralReward);
 

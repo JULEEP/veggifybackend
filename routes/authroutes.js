@@ -53,7 +53,7 @@ const {
   
 } = require('../controllers/userController');
 const upload = require('../utils/multer');
-const { getAllCredentials } = require('../controllers/adminController');
+const { getAllCredentials, getReferralRewards } = require('../controllers/adminController');
 
 
 // 🔐 Authentication Flow
@@ -169,11 +169,14 @@ router.get("/maintenance-status", getMaintenanceStatus);
 router.get('/userwallet/:userId', getUserWallet);
 
 router.get('/getallcredential', getAllCredentials);
+router.get("/getReferralRewards", getReferralRewards);
 router.get("/getallcoupons", getAllCoupons);
 router.get("/getallactivecoupons/:userId", getActiveCoupons);
 
 router.post('/apply-coupon', applyCoupon);
 router.post('/remove-coupon', removeCoupon);
+
+
 
 
 module.exports = router;
