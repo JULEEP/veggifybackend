@@ -66,7 +66,43 @@ const formatPhoneNumber = (phoneNumber) => {
 };
 
 
+// Helper function to send SMS via Way2Smart
+const sendSMSViaWay2Smart = async (phoneNumber, message, templateId) => {
+  try {
+    // Format phone number (remove +91 if present)
+    let formattedPhone = phoneNumber.replace(/\D/g, "");
+    if (formattedPhone.startsWith("91")) {
+      formattedPhone = formattedPhone.substring(2);
+    }
+    if (formattedPhone.length === 10) {
+      formattedPhone = `91${formattedPhone}`;
+    }
 
+    const apiUrl = `https://platform.way2smart.in/index.php/sms/urlsms?`;
+    const params = new URLSearchParams({
+      sender: 'VEGFFY',
+      numbers: formattedPhone,
+      message: message,
+      messagetype: 'TXT',
+      reponse: 'Y',
+      apikey: '292256-f8513a-4952e1-ff02c3-764a23',
+      dltentityid: '1701177875808653983',
+      dlttempid: templateId
+    });
+
+    const response = await fetch(`${apiUrl}${params.toString()}`);
+    const result = await response.text();
+    
+    console.log(`✅ SMS sent via Way2Smart to ${formattedPhone}:`, result);
+    return { success: true, result };
+  } catch (error) {
+    console.error('❌ Way2Smart SMS Error:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+
+// Updated Register Function
 const register = async (req, res) => {
   try {
     const { firstName, lastName, email, phoneNumber, referralCode } = req.body;
@@ -84,27 +120,25 @@ const register = async (req, res) => {
     }
 
     const generatedReferralCode = `VEGUSER${generateReferralCode()}`;
-    const otp = generateOTP();
+    const otp = generateOTP(); // This generates 4-digit OTP
 
-    // ✅ FORMAT NUMBER INSIDE CONTROLLER
-    const formattedPhone = formatPhoneNumber(phoneNumber);
+    // Format phone number for SMS
+    let formattedPhone = phoneNumber.replace(/\D/g, "");
+    if (formattedPhone.length === 10) {
+      formattedPhone = `91${formattedPhone}`;
+    }
 
-    // ✅ SET MESSAGE BODY IN EXACT REQUIRED FORMAT
-    const messageBody = `Welcome to Vegiffy – Pure Vegetarian Food Delivery App
-Your verification OTP is ${otp}.
-Valid for 5 minutes. Do not share this code.`;
+    // Create message in required format for Vegiffy New OTP
+    const messageBody = `Dear ${firstName}, your One Time Password (OTP) for Vegiffy App login is ${otp}. This OTP is valid for 10 minutes. Please do not share it with anyone. Thank you. - JAINITY EATS INDIA PRIVATE LIMITED.`;
 
-    await client.messages.create({
-      body: messageBody,
-      from: process.env.TWILIO_PHONE,
-      to: formattedPhone,
-    });
+    // Send SMS via Way2Smart
+    await sendSMSViaWay2Smart(formattedPhone, messageBody, '1707177916595853384');
 
     const payload = {
       firstName,
       lastName,
       email,
-      phoneNumber, // original saved
+      phoneNumber,
       referralCode: generatedReferralCode,
       referredBy: referralCode || null,
       otp,
@@ -118,7 +152,7 @@ Valid for 5 minutes. Do not share this code.`;
       message: "OTP sent successfully ✅",
       token: tempToken,
       referralCode: generatedReferralCode,
-      otp: otp
+      otp: otp  // Keep for testing
     });
 
   } catch (err) {
@@ -188,14 +222,12 @@ const verifyOtp = async (req, res) => {
     if (!otp || !token)
       return res.status(400).json({ message: "OTP and token are required" });
 
-    // Decode token to get user info
     const decoded = verifyTempToken(token);
 
     if (decoded.otp !== otp) {
       return res.status(400).json({ message: "Invalid OTP ❌" });
     }
 
-    // Create user in DB after OTP verification
     const newUser = new User({
       firstName: decoded.firstName,
       lastName: decoded.lastName,
@@ -203,13 +235,12 @@ const verifyOtp = async (req, res) => {
       phoneNumber: decoded.phoneNumber,
       referralCode: decoded.referralCode,
       referredBy: decoded.referredBy,
-      otp: null, // clear OTP
+      otp: null,
       isVerified: true
     });
 
     await newUser.save();
 
-    // Add to ambassador if referred
     if (decoded.referredBy && decoded.referredBy.startsWith("VEGAMB")) {
       const ambassador = await Ambassador.findOne({ referralCode: decoded.referredBy });
       if (ambassador) {
@@ -240,16 +271,25 @@ const resendOtp = async (req, res) => {
       return res.status(400).json({ message: "Token is required" });
     }
 
-    // 🔐 Decode existing token to get user info
     const decoded = verifyTempToken(token);
     if (!decoded) {
       return res.status(400).json({ message: "Invalid or expired token ❌" });
     }
 
-    // 🔁 Generate same static OTP again
-    const newOtp = "1234";
+    const newOtp = generateOTP(); // Generate new 4-digit OTP
 
-    // 🧩 Prepare new payload (same user info + updated OTP + new timestamp)
+    // Format phone number for SMS
+    let formattedPhone = decoded.phoneNumber.replace(/\D/g, "");
+    if (formattedPhone.length === 10) {
+      formattedPhone = `91${formattedPhone}`;
+    }
+
+    // Create message
+    const messageBody = `Dear ${decoded.firstName}, your One Time Password (OTP) for Vegiffy App login is ${newOtp}. This OTP is valid for 10 minutes. Please do not share it with anyone. Thank you. - JAINITY EATS INDIA PRIVATE LIMITED.`;
+
+    // Send SMS via Way2Smart
+    await sendSMSViaWay2Smart(formattedPhone, messageBody, '1707177916595853384');
+
     const newPayload = {
       firstName: decoded.firstName,
       lastName: decoded.lastName,
@@ -261,13 +301,11 @@ const resendOtp = async (req, res) => {
       createdAt: new Date().toISOString(),
     };
 
-    // 🪙 Generate new temp token
     const newToken = generateTempToken(newPayload);
 
-    // 📩 Response
     return res.status(200).json({
       message: "OTP resent successfully ✅",
-      otp: newOtp, // static OTP (for testing)
+      otp: newOtp,
       token: newToken,
     });
 
@@ -405,26 +443,22 @@ const sendForgotOtp = async (req, res) => {
       });
     }
 
-    // ✅ Generate random 4-digit OTP
+    // Generate random 4-digit OTP
     const otp = generateOTP();
 
-    // ✅ FORMAT PHONE NUMBER
-    const formattedPhone = `+91${phoneNumber}`; // ya agar formatPhoneNumber function hai use kar sakte ho
+    // Format phone number for SMS
+    let formattedPhone = phoneNumber.replace(/\D/g, "");
+    if (formattedPhone.length === 10) {
+      formattedPhone = `91${formattedPhone}`;
+    }
 
-    const messageBody = `Your Vegiffy password reset OTP is ${otp}.
-Do not share this code with anyone.
+    // Create message in required format for Forget Password
+    const messageBody = `Dear ${user.firstName} Your OTP to reset your password is ${otp}. This OTP is valid for 10 minutes. Do not share it with anyone. --JAINITY EATS INDIA PRIVATE LIMITED`;
 
-Vegiffy – Pure Vegetarian Food Delivery  
-Pure Veg, Hai Boss!`;
+    // Send SMS via Way2Smart
+    await sendSMSViaWay2Smart(formattedPhone, messageBody, '1707177908271930199');
 
-    // ✅ Send OTP via Twilio
-    await client.messages.create({
-      body: messageBody,
-      from: process.env.TWILIO_PHONE,
-      to: formattedPhone,
-    });
-
-    // ✅ Short-lived JWT token for OTP verification
+    // Short-lived JWT token for OTP verification
     const tempToken = jwt.sign(
       {
         userId: user._id,
@@ -460,7 +494,6 @@ const verifyForgotOtp = async (req, res) => {
       return res.status(400).json({ status: false, message: "OTP or token missing ❌" });
     }
 
-    // ✅ Decode the token
     let decoded;
     try {
       decoded = jwt.verify(token, process.env.JWT_SECRET);
@@ -468,12 +501,10 @@ const verifyForgotOtp = async (req, res) => {
       return res.status(400).json({ status: false, message: "Invalid or expired token ❌" });
     }
 
-    // ✅ Compare OTP
     if (decoded.otp !== otp) {
       return res.status(400).json({ status: false, message: "Invalid OTP ❌" });
     }
 
-    // ✅ OTP verified
     return res.status(200).json({
       status: true,
       message: "OTP verified successfully ✅",
@@ -521,24 +552,19 @@ const resetForgotPassword = async (req, res) => {
       });
     }
 
-    // ✅ hash password
     const hashedPassword = await bcrypt.hash(newPassword, 10);
-
-    // ✅ update password
     user.password = hashedPassword;
-
     await user.save();
 
     return res.status(200).json({
       status: true,
       message: "Password reset successful ✅",
-      updatedPassword: newPassword,     // testing ke liye
-      hashedPassword: hashedPassword    // db me store hua password
+      updatedPassword: newPassword,
+      hashedPassword: hashedPassword
     });
 
   } catch (err) {
     console.error("Reset Password Error:", err);
-
     return res.status(500).json({
       status: false,
       message: "Password reset failed ❌",

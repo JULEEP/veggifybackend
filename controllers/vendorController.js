@@ -216,6 +216,340 @@ exports.verifyOtp = async (req, res) => {
 
 
 
+// exports.getOrdersByVendorId = async (req, res) => {
+//   const { vendorId } = req.params;
+
+//   try {
+//     // Validate vendorId
+//     if (!vendorId || !mongoose.Types.ObjectId.isValid(vendorId)) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Valid Vendor ID is required",
+//       });
+//     }
+
+//     // Fetch vendor (restaurant)
+//     const vendor = await Restaurant.findById(vendorId);
+//     if (!vendor) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "Vendor not found",
+//       });
+//     }
+
+//     // ⏱️ Current time minus 30 seconds
+//     const thirtySecondsAgo = new Date(Date.now() - 30 * 1000);
+
+//     // Fetch orders created at least 30 sec ago
+//     const orders = await Order.find({
+//       restaurantId: vendor._id,
+//       createdAt: { $lte: thirtySecondsAgo },
+//     })
+//       .sort({ createdAt: -1 })
+//       .populate("restaurantId", "restaurantName location")
+//       .populate("userId", "firstName lastName email phoneNumber")
+//       .populate("riderId", "fullName mobileNumber vehicleType email isActive")
+//       .populate({
+//         path: "cartId",
+//         populate: {
+//           path: "products.restaurantProductId",
+//           model: "RestaurantProduct",
+//         },
+//       });
+
+//     // ========== FINANCIAL CALCULATIONS ==========
+    
+//     // 1️⃣ Total Orders Count
+//     const totalOrders = orders.length;
+    
+//     // 2️⃣ Completed Orders (Delivered)
+//     const completedOrders = orders.filter(order => order.orderStatus === "Delivered");
+//     const completedOrdersCount = completedOrders.length;
+    
+//     // 3️⃣ Total Subtotal (Sum of all order subtotals)
+//     const totalSubtotal = orders.reduce((sum, order) => sum + (order.subTotal || 0), 0);
+    
+//     // 4️⃣ Total Completed Subtotal (Only delivered orders)
+//     const totalCompletedSubtotal = completedOrders.reduce((sum, order) => sum + (order.subTotal || 0), 0);
+    
+//     // 5️⃣ Total Commission (Admin commission from delivered orders)
+//     const totalCommission = completedOrders.reduce((sum, order) => sum + (order.adminCommission || 0), 0);
+    
+//     // 6️⃣ Total GST (GST on food + GST on delivery from all orders)
+//     const totalGST = orders.reduce((sum, order) => sum + (order.gstCharges || 0) + (order.gstOnDelivery || 0), 0);
+    
+//     // 7️⃣ Total TDS (1% of vendor gross amount from delivered orders)
+//     // TDS is calculated on vendor's share (subtotal - commission)
+//     const totalVendorGrossFromCompleted = completedOrders.reduce((sum, order) => {
+//       const subtotal = order.subTotal || 0;
+//       const commission = order.adminCommission || 0;
+//       const vendorGross = subtotal - commission; // Vendor's share before TDS
+//       return sum + vendorGross;
+//     }, 0);
+    
+//     const tdsRate = 1; // 1% TDS
+//     const totalTDS = (totalVendorGrossFromCompleted * tdsRate) / 100;
+    
+//     // 8️⃣ Vendor Gross (Before TDS) - Only from delivered orders
+//     const vendorGrossBeforeTDS = totalVendorGrossFromCompleted;
+    
+//     // 9️⃣ Vendor Net (After TDS) - Only from delivered orders
+//     const vendorNetAfterTDS = vendorGrossBeforeTDS - totalTDS;
+    
+//     // 🔟 Wallet Balance (Current balance from vendor document)
+//     const walletBalance = vendor.walletBalance || 0;
+    
+//     // 1️⃣1️⃣ Total Withdrawn Amount (From vendor's withdrawal history)
+//     const totalWithdrawn = vendor.totalWithdrawn || 0;
+    
+//     // 1️⃣2️⃣ Available Wallet Balance (Balance - Withdrawn)
+//     const availableWalletBalance = (walletBalance || 0) - (totalWithdrawn || 0);
+    
+//     // 1️⃣3️⃣ Pending Amount (Orders that are Accepted/Preparing but not delivered yet)
+//     const pendingOrders = orders.filter(order => 
+//       ["Accepted", "Preparing", "Rider Accepted", "Picked", "Ready for Pickup"].includes(order.orderStatus)
+//     );
+//     const pendingAmount = pendingOrders.reduce((sum, order) => {
+//       const subtotal = order.subTotal || 0;
+//       const commission = order.adminCommission || 0;
+//       return sum + (subtotal - commission);
+//     }, 0);
+    
+//     // 1️⃣4️⃣ Order Status Breakdown
+//     const orderStatusBreakdown = {
+//       Pending: orders.filter(o => o.orderStatus === "Pending").length,
+//       Accepted: orders.filter(o => o.orderStatus === "Accepted").length,
+//       Preparing: orders.filter(o => o.orderStatus === "Preparing").length,
+//       "Rider Accepted": orders.filter(o => o.orderStatus === "Rider Accepted").length,
+//       "Ready for Pickup": orders.filter(o => o.orderStatus === "Ready for Pickup").length,
+//       Picked: orders.filter(o => o.orderStatus === "Picked").length,
+//       "Out for Delivery": orders.filter(o => o.orderStatus === "Out for Delivery").length,
+//       Delivered: orders.filter(o => o.orderStatus === "Delivered").length,
+//       Cancelled: orders.filter(o => o.orderStatus === "Cancelled").length,
+//       Rejected: orders.filter(o => o.orderStatus === "Rejected").length,
+//     };
+    
+//     // 1️⃣5️⃣ Payment Method Breakdown
+//     const paymentMethodBreakdown = {
+//       COD: orders.filter(o => o.paymentMethod === "COD").length,
+//       Online: orders.filter(o => o.paymentMethod === "Online").length,
+//     };
+    
+//     // 1️⃣6️⃣ Payment Status Breakdown
+//     const paymentStatusBreakdown = {
+//       Pending: orders.filter(o => o.paymentStatus === "Pending").length,
+//       Paid: orders.filter(o => o.paymentStatus === "Paid").length,
+//       Completed: orders.filter(o => o.paymentStatus === "Completed").length,
+//       Failed: orders.filter(o => o.paymentStatus === "Failed").length,
+//     };
+    
+//     // 1️⃣7️⃣ Monthly Earnings (Last 6 months)
+//     const monthlyEarnings = [];
+//     const today = new Date();
+    
+//     for (let i = 5; i >= 0; i--) {
+//       const monthDate = new Date(today.getFullYear(), today.getMonth() - i, 1);
+//       const monthStart = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
+//       const monthEnd = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0);
+      
+//       const monthOrders = completedOrders.filter(order => {
+//         const orderDate = new Date(order.createdAt);
+//         return orderDate >= monthStart && orderDate <= monthEnd;
+//       });
+      
+//       const monthEarnings = monthOrders.reduce((sum, order) => {
+//         const subtotal = order.subTotal || 0;
+//         const commission = order.adminCommission || 0;
+//         return sum + (subtotal - commission);
+//       }, 0);
+      
+//       monthlyEarnings.push({
+//         month: monthDate.toLocaleString('default', { month: 'short', year: 'numeric' }),
+//         year: monthDate.getFullYear(),
+//         monthNumber: monthDate.getMonth() + 1,
+//         earnings: Math.round(monthEarnings * 100) / 100,
+//         ordersCount: monthOrders.length,
+//       });
+//     }
+    
+//     // 1️⃣8️⃣ Daily Earnings (Last 7 days)
+//     const dailyEarnings = [];
+//     for (let i = 6; i >= 0; i--) {
+//       const dayDate = new Date();
+//       dayDate.setDate(dayDate.getDate() - i);
+//       dayDate.setHours(0, 0, 0, 0);
+      
+//       const dayEnd = new Date(dayDate);
+//       dayEnd.setHours(23, 59, 59, 999);
+      
+//       const dayOrders = completedOrders.filter(order => {
+//         const orderDate = new Date(order.createdAt);
+//         return orderDate >= dayDate && orderDate <= dayEnd;
+//       });
+      
+//       const dayEarnings = dayOrders.reduce((sum, order) => {
+//         const subtotal = order.subTotal || 0;
+//         const commission = order.adminCommission || 0;
+//         return sum + (subtotal - commission);
+//       }, 0);
+      
+//       dailyEarnings.push({
+//         date: dayDate.toISOString().split('T')[0],
+//         day: dayDate.toLocaleString('default', { weekday: 'short' }),
+//         earnings: Math.round(dayEarnings * 100) / 100,
+//         ordersCount: dayOrders.length,
+//       });
+//     }
+    
+//     // 1️⃣9️⃣ Recent Transactions (Last 10 orders with financial details)
+//     const recentTransactions = orders.slice(0, 10).map(order => ({
+//       orderId: order._id,
+//       orderNumber: order.orderNumber || order._id.toString().slice(-6),
+//       orderStatus: order.orderStatus,
+//       createdAt: order.createdAt,
+//       subTotal: order.subTotal || 0,
+//       adminCommission: order.adminCommission || 0,
+//       vendorEarning: (order.subTotal || 0) - (order.adminCommission || 0),
+//       tdsDeducted: ((order.subTotal || 0) - (order.adminCommission || 0)) * (tdsRate / 100),
+//       netEarning: ((order.subTotal || 0) - (order.adminCommission || 0)) * (1 - tdsRate / 100),
+//       customerName: order.userId?.firstName + ' ' + order.userId?.lastName,
+//       paymentMethod: order.paymentMethod,
+//     }));
+    
+//     // 2️⃣0️⃣ Wallet Transaction History (Last 10)
+//     let walletTransactions = [];
+//     if (vendor.walletTransactions && Array.isArray(vendor.walletTransactions)) {
+//       walletTransactions = vendor.walletTransactions.slice(-10).reverse().map(tx => {
+//         try {
+//           // Check if it's a string (JSON) or already an object
+//           const transaction = typeof tx === 'string' ? JSON.parse(tx) : tx;
+//           return {
+//             amount: transaction.amount,
+//             type: transaction.type,
+//             description: transaction.description,
+//             date: transaction.dateAdded || transaction.date,
+//             orderId: transaction.orderId,
+//           };
+//         } catch (e) {
+//           return {
+//             amount: 0,
+//             type: 'unknown',
+//             description: 'Transaction data unavailable',
+//             date: new Date(),
+//           };
+//         }
+//       });
+//     }
+    
+//     // 2️⃣1️⃣ Withdrawal History (Last 10)
+//     let withdrawalHistory = [];
+//     if (vendor.withdrawalHistory && Array.isArray(vendor.withdrawalHistory)) {
+//       withdrawalHistory = vendor.withdrawalHistory.slice(-10).reverse();
+//     }
+    
+//     // 2️⃣2️⃣ Summary Statistics
+//     const summaryStats = {
+//       lifetimeEarnings: Math.round(vendorGrossBeforeTDS * 100) / 100,
+//       lifetimeCommission: Math.round(totalCommission * 100) / 100,
+//       lifetimeTDS: Math.round(totalTDS * 100) / 100,
+//       lifetimeNetEarnings: Math.round(vendorNetAfterTDS * 100) / 100,
+//       lifetimeWithdrawn: Math.round(totalWithdrawn * 100) / 100,
+//       availableForWithdrawal: Math.round((vendorGrossBeforeTDS - totalWithdrawn - totalTDS) * 100) / 100,
+//     };
+    
+//     // 2️⃣3️⃣ Vendor Plan Information
+//     const vendorPlanInfo = {
+//       currentPlan: vendor.currentPlan,
+//       planStatus: vendor.planStatus,
+//       isPlanActive: vendor.isPlanActive,
+//       planExpiry: vendor.planExpiry,
+//       planPurchaseDate: vendor.planPurchaseDate,
+//       commissionRate: vendor.commission || 20, // Default 20%
+//     };
+
+//     return res.status(200).json({
+//       success: true,
+//       message: `Orders for ${vendor.restaurantName} fetched successfully`,
+      
+//       // ✅ Financial Summary (Main Data)
+//       financialSummary: {
+//         totalOrders,
+//         completedOrders: completedOrdersCount,
+//         pendingOrders: pendingOrders.length,
+//         cancelledOrders: orderStatusBreakdown.Cancelled,
+//         rejectedOrders: orderStatusBreakdown.Rejected,
+        
+//         totalSubtotal: Math.round(totalSubtotal * 100) / 100,
+//         totalCompletedSubtotal: Math.round(totalCompletedSubtotal * 100) / 100,
+        
+//         totalCommission: Math.round(totalCommission * 100) / 100,
+//         totalGST: Math.round(totalGST * 100) / 100,
+//         totalTDS: Math.round(totalTDS * 100) / 100,
+        
+//         vendorGrossBeforeTDS: Math.round(vendorGrossBeforeTDS * 100) / 100,
+//         vendorNetAfterTDS: Math.round(vendorNetAfterTDS * 100) / 100,
+        
+//         pendingAmount: Math.round(pendingAmount * 100) / 100,
+        
+//         walletBalance: Math.round(walletBalance * 100) / 100,
+//         totalWithdrawn: Math.round(totalWithdrawn * 100) / 100,
+//         availableWalletBalance: Math.round(availableWalletBalance * 100) / 100,
+        
+//         tdsRate: `${tdsRate}%`,
+//         commissionRate: `${vendorPlanInfo.commissionRate}%`,
+//       },
+      
+//       // ✅ Lifetime Statistics
+//       lifetimeStats: summaryStats,
+      
+//       // ✅ Order Breakdown
+//       orderBreakdown: {
+//         byStatus: orderStatusBreakdown,
+//         byPaymentMethod: paymentMethodBreakdown,
+//         byPaymentStatus: paymentStatusBreakdown,
+//       },
+      
+//       // ✅ Earnings Charts Data
+//       earningsChart: {
+//         monthlyEarnings,
+//         dailyEarnings,
+//       },
+      
+//       // ✅ Recent Data
+//       recentTransactions,
+//       walletTransactions,
+//       withdrawalHistory,
+      
+//       // ✅ Vendor Plan Info
+//       vendorPlan: vendorPlanInfo,
+      
+//       // ✅ Original Orders Data (तुम्हारा पुराना डेटा जैसा था)
+//       orders: orders,
+      
+//       // ✅ Vendor Profile (Quick Info)
+//       vendorProfile: {
+//         id: vendor._id,
+//         restaurantName: vendor.restaurantName,
+//         email: vendor.email,
+//         mobile: vendor.mobile,
+//         locationName: vendor.locationName,
+//         image: vendor.image?.url,
+//         joinedAt: vendor.createdAt,
+//       },
+      
+//     });
+
+//   } catch (error) {
+//     console.error("getOrdersByVendorId error:", error);
+//     return res.status(500).json({
+//       success: false,
+//       message: "Server error",
+//       error: error.message,
+//     });
+//   }
+// };
+
+
 exports.getOrdersByVendorId = async (req, res) => {
   const { vendorId } = req.params;
 
@@ -274,6 +608,193 @@ exports.getOrdersByVendorId = async (req, res) => {
 };
 
 
+
+// exports.updateOrderById = async (req, res) => {
+//   const { orderId } = req.params;
+//   const updateData = req.body;
+
+//   try {
+//     if (!orderId) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Order ID is required",
+//       });
+//     }
+
+//     const updatedOrder = await Order.findByIdAndUpdate(orderId, updateData, {
+//       new: true,
+//       runValidators: true,
+//     })
+//       .populate("restaurantId", "restaurantName locationName")
+//       .populate("userId", "firstName lastName email phoneNumber")
+//       .populate({
+//         path: "cartId",
+//         populate: {
+//           path: "products.restaurantProductId",
+//           model: "RestaurantProduct",
+//         },
+//       });
+
+//     if (!updatedOrder) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "Order not found",
+//       });
+//     }
+
+//     // ✅ Sirf Accepted aur Rejected ke liye notification
+//     try {
+//       let notificationTitle = "";
+//       let notificationMessage = "";
+
+//       // Agar orderStatus update ho raha hai
+//       if (updateData.orderStatus) {
+//         if (updateData.orderStatus === 'Accepted') {
+//           notificationTitle = "✅ Order Accepted";
+//           notificationMessage = `Your order #${updatedOrder.orderNumber || updatedOrder._id.toString().slice(-6)} has been accepted by the restaurant`;
+//         } 
+//         else if (updateData.orderStatus === 'Rejected') {
+//           notificationTitle = "❌ Order Rejected";
+//           notificationMessage = `Your order #${updatedOrder.orderNumber || updatedOrder._id.toString().slice(-6)} has been rejected by the restaurant`;
+//         }
+//       }
+
+//       // Sirf notification tab bhejo agar Accepted ya Rejected hai
+//       if (notificationTitle && notificationMessage) {
+//         const userNotification = {
+//           type: 'order_updated',
+//           title: notificationTitle,
+//           message: notificationMessage,
+//           timestamp: new Date(),
+//           status: 'unread'
+//         };
+
+//         await User.findByIdAndUpdate(
+//           updatedOrder.userId,
+//           {
+//             $push: {
+//               notifications: {
+//                 $each: [userNotification],
+//                 $position: 0,
+//                 $slice: 50
+//               }
+//             }
+//           }
+//         );
+        
+//         console.log(`User notification sent for order ${updateData.orderStatus}`);
+//       }
+//     } catch (userNotifError) {
+//       console.error('User notification failed:', userNotifError.message);
+//     }
+
+//     return res.status(200).json({
+//       success: true,
+//       message: "Order updated successfully",
+//       data: updatedOrder,
+//     });
+//   } catch (error) {
+//     console.error("updateOrderById error:", error);
+//     return res.status(500).json({
+//       success: false,
+//       message: "Server error",
+//       error: error.message,
+//     });
+//   }
+// };
+exports.updateOrderById = async (req, res) => {
+  const { orderId } = req.params;
+  const updateData = req.body;
+
+  try {
+    if (!orderId) {
+      return res.status(400).json({
+        success: false,
+        message: "Order ID is required",
+      });
+    }
+
+    const updatedOrder = await Order.findByIdAndUpdate(orderId, updateData, {
+      new: true,
+      runValidators: true,
+    })
+      .populate("restaurantId", "restaurantName locationName")
+      .populate("userId", "firstName lastName email phoneNumber")
+      .populate({
+        path: "cartId",
+        populate: {
+          path: "products.restaurantProductId",
+          model: "RestaurantProduct",
+        },
+      });
+
+    if (!updatedOrder) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found",
+      });
+    }
+
+    // ✅ Sirf Accepted aur Rejected ke liye notification
+    try {
+      let notificationTitle = "";
+      let notificationMessage = "";
+
+      // Agar orderStatus update ho raha hai
+      if (updateData.orderStatus) {
+        if (updateData.orderStatus === 'Accepted') {
+          notificationTitle = "✅ Order Accepted";
+          notificationMessage = `Your order #${updatedOrder.orderNumber || updatedOrder._id.toString().slice(-6)} has been accepted by the restaurant`;
+        } 
+        else if (updateData.orderStatus === 'Rejected') {
+          notificationTitle = "❌ Order Rejected";
+          notificationMessage = `Your order #${updatedOrder.orderNumber || updatedOrder._id.toString().slice(-6)} has been rejected by the restaurant`;
+        }
+      }
+
+      // Sirf notification tab bhejo agar Accepted ya Rejected hai
+      if (notificationTitle && notificationMessage) {
+        const userNotification = {
+          type: 'order_updated',
+          title: notificationTitle,
+          message: notificationMessage,
+          timestamp: new Date(),
+          status: 'unread'
+        };
+
+        await User.findByIdAndUpdate(
+          updatedOrder.userId,
+          {
+            $push: {
+              notifications: {
+                $each: [userNotification],
+                $position: 0,
+                $slice: 50
+              }
+            }
+          }
+        );
+        
+        console.log(`User notification sent for order ${updateData.orderStatus}`);
+      }
+    } catch (userNotifError) {
+      console.error('User notification failed:', userNotifError.message);
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Order updated successfully",
+      data: updatedOrder,
+    });
+  } catch (error) {
+    console.error("updateOrderById error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
+  }
+};
 
 exports.updateOrderById = async (req, res) => {
   const { orderId } = req.params;
@@ -1960,7 +2481,7 @@ exports.getVendorPaymentDetails = async (req, res) => {
       vendorId,
       status: "completed",
       isPurchased: true
-    });
+    }).sort({ createdAt: -1 });
 
     if (!paymentDetails) {
       return res.status(404).json({
@@ -1992,6 +2513,7 @@ exports.getAllVendorPayments = async (req, res) => {
   try {
     // Fetch all payment records from the VendorPayment model and populate vendorId and planId
     const payments = await VendorPayment.find()
+      .sort({ createdAt: -1 })
       .populate('vendorId', 'restaurantName email mobile locationName') // Populate vendorId with selected fields
       .populate('planId', 'name price validity benefits'); // Populate planId with selected fields
 
@@ -3357,14 +3879,50 @@ exports.getAllReelsAdmin = async function (req, res) {
     const reels = await Reel.find()
       .populate({
         path: 'vendorId',
-        select: 'restaurantName' // ✅ sirf ye field (id by default aata hai)
+        select: 'restaurantName logo' // ✅ Added logo field
       })
       .sort({ createdAt: -1 });
+
+    // ✅ Process each reel to ensure proper thumbnail URL
+    const formattedReels = reels.map(reel => {
+      const reelObj = reel.toObject();
+      
+      // ✅ Fix thumbnail URL - ensure it has the full URL
+      let thumbUrl = reelObj.thumbUrl || '';
+      
+      // If thumbUrl is relative, convert to absolute
+      if (thumbUrl && !thumbUrl.startsWith('http') && !thumbUrl.startsWith('https')) {
+        thumbUrl = `https://api.vegiffy.in${thumbUrl}`;
+      }
+      
+      // If no thumbnail exists, use video thumbnail or placeholder
+      if (!thumbUrl) {
+        // You can generate a thumbnail from video URL if needed
+        // Or use a default placeholder
+        thumbUrl = 'https://api.vegiffy.in/uploads/reels/default-thumbnail.jpg';
+      }
+      
+      return {
+        _id: reelObj._id,
+        videoUrl: reelObj.videoUrl?.startsWith('http') ? reelObj.videoUrl : `https://api.vegiffy.in${reelObj.videoUrl}`,
+        thumbUrl: thumbUrl,
+        title: reelObj.title || '',
+        description: reelObj.description || '',
+        deepLink: reelObj.deepLink || '',
+        status: reelObj.status,
+        isHot: reelObj.isHot,
+        vendorId: reelObj.vendorId?._id || reelObj.vendorId,
+        restaurantName: reelObj.vendorId?.restaurantName || 'Admin Reel',
+        restaurantLogo: reelObj.vendorId?.logo || null,
+        createdAt: reelObj.createdAt,
+        updatedAt: reelObj.updatedAt
+      };
+    });
 
     res.status(200).json({
       success: true,
       message: "All reels fetched (Admin)",
-      data: reels, // ✅ full reels + limited vendor
+      data: formattedReels, // ✅ Send formatted data
     });
 
   } catch (error) {

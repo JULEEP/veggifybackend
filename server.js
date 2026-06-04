@@ -38,7 +38,7 @@ app.use(fileUpload({
   useTempFiles: true,
   tempFileDir: "/tmp/",
   createParentPath: true,
-  limits: { 
+  limits: {
     fileSize: 200 * 1024 * 1024
   },
   abortOnLimit: true,
@@ -60,33 +60,71 @@ app.use((req, res, next) => {
 // CORS - FIXED (Duplicate HATAYA)
 // ========================
 app.use(cors({
-  origin: [
-    'https://veegify-web.web.app', 
-    'http://localhost:3000', 
-    'https://vegiffyvendordelete.vercel.app', 
-    'https://vegiffydeliveryboydeleteurl.vercel.app',
-    'https://vegiffy-web.vercel.app',
-    'https://vendor.vegiffy.in',
-    'https://panel.vegiffy.in'
-  ],
+  origin: (origin, callback) => {
+    // allow requests with no origin (mobile apps, postman, server-to-server)
+    if (!origin) return callback(null, true);
+
+    const allowedOrigins = [
+      'https://veegify-web.web.app',
+      'http://localhost:3000',
+      'https://vegiffyvendordelete.vercel.app',
+      'https://vegiffydeliveryboydeleteurl.vercel.app',
+      'https://vegiffy-web.vercel.app',
+      'https://vendor.vegiffy.in',
+      'https://panel.vegiffy.in',
+      'https://api.vegiffy.in',
+      'http://localhost:59169'
+    ];
+
+    // ✅ allow exact matches
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    // ✅ allow ANY localhost (all ports)
+    const localhostRegex = /^http:\/\/localhost(:\d+)?$/;
+
+    if (localhostRegex.test(origin)) {
+      return callback(null, true);
+    }
+
+    // reject others
+    return callback(new Error('Not allowed by CORS'));
+  },
+
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'subAdminId'],
   credentials: true,
   optionsSuccessStatus: 200
 }));
 
+
 // Socket.IO setup
 const io = socketIo(server, {
   cors: {
-    origin: [
-      'https://veegify-web.web.app', 
-      'http://localhost:3000', 
-      'https://panel.vegiffyy.com', 
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+
+      const allowedOrigins = [
+      'https://veegify-web.web.app',
+      'http://localhost:3000',
+      'https://panel.vegiffyy.com',
       'https://vendor.vegiffyy.com',
       'https://vendor.vegiffy.in',
       'https://vegiffypanel.vegiffy.in',
-      'https://panel.vegiffy.in'
-    ],
+      'https://panel.vegiffy.in',
+      'https://api.vegiffy.in',
+      'http://localhost:59169'
+      ];
+
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+
+      if (/^http:\/\/localhost(:\d+)?$/.test(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error('Socket.IO CORS blocked'));
+    },
     methods: ["GET", "POST"],
     credentials: true
   },
@@ -137,14 +175,14 @@ app.use((err, req, res, next) => {
       message: 'Request entity too large. Maximum 200MB allowed.'
     });
   }
-  
+
   if (err.code === 'LIMIT_FILE_SIZE') {
     return res.status(413).json({
       success: false,
       message: 'File too large. Maximum 200MB total allowed.'
     });
   }
-  
+
   console.error('Server Error:', err);
   res.status(500).json({
     success: false,

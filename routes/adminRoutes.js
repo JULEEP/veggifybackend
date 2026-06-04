@@ -91,7 +91,7 @@ router.delete('/vendorplans/:id', adminController.deleteVendorPlan);
 router.get('/allcharge', adminController.getAllCharges);
 
 // Get single charge
-router.get('/:id', adminController.getCharge);
+router.get('/charge/:id', adminController.getCharge);
 
 // Create new charge
 router.post('/createcharge', adminController.createCharge);
