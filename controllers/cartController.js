@@ -4,6 +4,7 @@ const RestaurantProduct = require('../models/restaurantProductModel');
 const Restaurant = require('../models/restaurantModel');
 const User = require('../models/userModel'); // <-- make sure this is here
 const Coupon = require('../models/Coupon'); // <-- ADD THIS
+const checkShadowfaxServiceability =require("../helper/serviceability")
     
 // Haversine formula to calculate distance in km (with meters in decimal)
 // function calculateDistanceKm(lat1, lon1, lat2, lon2) {
@@ -2555,5 +2556,195 @@ exports.applyCouponToCart = async (req, res) => {
 };
 
 
+// Check delivery serviceability using Shadowfax API
+exports.checkDeliveryServiceability = async (req, res) => {
+  try {
+    const { userId, addressId, cartId } = req.params;
 
+    // Validate inputs
+    if (!userId || !mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid userId is required"
+      });
+    }
+
+    if (!addressId || !mongoose.Types.ObjectId.isValid(addressId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid addressId is required"
+      });
+    }
+
+    if (!cartId || !mongoose.Types.ObjectId.isValid(cartId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid cartId is required"
+      });
+    }
+
+    // 1️⃣ Get user with address
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    // Find the specific address
+    const selectedAddress = user.addresses.find(
+      addr => addr._id.toString() === addressId
+    );
+    
+    if (!selectedAddress) {
+      return res.status(404).json({
+        success: false,
+        message: "Address not found for this user"
+      });
+    }
+
+    // Check if address has location coordinates
+    if (!selectedAddress.location || 
+        !selectedAddress.location.coordinates || 
+        selectedAddress.location.coordinates.length < 2) {
+      return res.status(400).json({
+        success: false,
+        message: "Selected address does not have valid coordinates. Please update your address with location."
+      });
+    }
+
+    // Get drop location from address (longitude, latitude format)
+    const [dropLon, dropLat] = selectedAddress.location.coordinates;
+
+    // 2️⃣ Get cart and restaurant
+    const cart = await Cart.findById(cartId);
+    if (!cart) {
+      return res.status(404).json({
+        success: false,
+        message: "Cart not found"
+      });
+    }
+
+    if (!cart.products || cart.products.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Cart is empty. Please add items to cart first."
+      });
+    }
+
+    if (!cart.restaurantId) {
+      return res.status(400).json({
+        success: false,
+        message: "No restaurant associated with this cart"
+      });
+    }
+
+    // 3️⃣ Get restaurant location
+    const restaurant = await Restaurant.findById(cart.restaurantId);
+    if (!restaurant) {
+      return res.status(404).json({
+        success: false,
+        message: "Restaurant not found"
+      });
+    }
+
+    if (!restaurant.location || 
+        !restaurant.location.coordinates || 
+        restaurant.location.coordinates.length < 2) {
+      return res.status(400).json({
+        success: false,
+        message: "Restaurant does not have valid location coordinates"
+      });
+    }
+
+    // Get pickup location from restaurant (longitude, latitude format)
+    const [pickupLon, pickupLat] = restaurant.location.coordinates;
+
+    // 4️⃣ Check serviceability with Shadowfax API
+    const serviceabilityResult = await checkShadowfaxServiceability(
+      pickupLat, pickupLon, dropLat, dropLon
+    );
+
+    // 5️⃣ Emit socket event for real-time updates
+    const io = req.app.get('io') || global.io;
+    const roomId = `serviceability_${userId}`;
+    
+    if (io) {
+      io.to(roomId).emit('serviceability_check_result', {
+        timestamp: new Date(),
+        userId,
+        addressId,
+        cartId,
+        ...serviceabilityResult,
+        pickupLocation: {
+          restaurantId: restaurant._id,
+          restaurantName: restaurant.restaurantName,
+          latitude: pickupLat,
+          longitude: pickupLon
+        },
+        dropLocation: {
+          addressId: selectedAddress._id,
+          street: selectedAddress.street,
+          city: selectedAddress.city,
+          latitude: dropLat,
+          longitude: dropLon
+        }
+      });
+    }
+
+    // 6️⃣ Prepare response based on different conditions
+    let responseMessage = '';
+    let canProceedToCheckout = false;
+    let suggestedAction = '';
+
+    if (!serviceabilityResult.success && serviceabilityResult.error) {
+      // API error case
+      responseMessage = serviceabilityResult.message;
+      canProceedToCheckout = false;
+      suggestedAction = 'retry';
+    } 
+    else if (serviceabilityResult.serviceable === false) {
+      // Not serviceable
+      responseMessage = serviceabilityResult.message || 'Delivery not available for this address';
+      canProceedToCheckout = false;
+      suggestedAction = 'change_address';
+    }
+    else {
+      // Serviceable
+      responseMessage = 'Delivery available for this address';
+      canProceedToCheckout = true;
+      suggestedAction = 'proceed_to_checkout';
+    }
+
+    // 7️⃣ Return response
+    return res.status(200).json({
+      success: true,
+      message: responseMessage,
+      data: {
+        serviceable: serviceabilityResult.serviceable,
+        shadowfaxResponse: serviceabilityResult.data || null,
+        apiStatus: serviceabilityResult.success ? 'success' : 'failed'
+      }
+    });
+
+  } catch (error) {
+    console.error("checkDeliveryServiceability Error:", error);
+    
+    // Emit error via socket
+    const io = req.app.get('io') || global.io;
+    if (io && req.params.userId) {
+      io.to(`serviceability_${req.params.userId}`).emit('serviceability_check_error', {
+        timestamp: new Date(),
+        error: error.message
+      });
+    }
+    
+    return res.status(500).json({
+      success: false,
+      message: "Failed to check delivery serviceability",
+      error: error.message
+    });
+  }
+};
 

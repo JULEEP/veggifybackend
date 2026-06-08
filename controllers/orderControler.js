@@ -817,9 +817,6 @@ const fetchCharges = async () => {
 
 
 
-
-
-
 exports.createOrder = async (req, res) => {
   try {
     const { userId, paymentMethod, addressId, transactionId } = req.body;
@@ -839,34 +836,42 @@ exports.createOrder = async (req, res) => {
 
     // ✅ Fetch cart with all charge calculations
     const cart = await Cart.findOne({ userId })
-      .populate('products.restaurantProductId')
-      .populate('restaurantId', 'restaurantName locationName');
+      .populate('products.restaurantProductId');
     
-    if (!cart || !cart.products.length)
-      return res.status(404).json({ success: false, message: "Cart is empty." });
+    if (!cart) {
+      return res.status(404).json({ 
+        success: false, 
+        message: "Cart not found for this user." 
+      });
+    }
+    
+    if (!cart.products || cart.products.length === 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Cart is empty. Please add items to cart first." 
+      });
+    }
 
-    console.log('Cart data for order:', {
-      subTotal: cart.subTotal,
-      deliveryCharge: cart.deliveryCharge,
-      gstCharges: cart.gstCharges,
-      platformCharge: cart.platformCharge,
-      gstOnDelivery: cart.gstOnDelivery,
-      finalAmount: cart.finalAmount,
-      amountSavedOnOrder: cart.amountSavedOnOrder,
-      isDeliveryFree: cart.isDeliveryFree,
-      distance: cart.distance,
-      perKmRate: cart.perKmRate,
-      freeDeliveryThreshold: cart.freeDeliveryThreshold,
-      chargeCalculations: cart.chargeCalculations
-    });
+    // ✅ Check if cart has restaurantId
+    if (!cart.restaurantId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Restaurant not found in cart. Please add items to cart first." 
+      });
+    }
+
+    console.log('Cart restaurantId:', cart.restaurantId);
 
     // ✅ Fetch user & address
     const user = await User.findOne(
       { _id: userId, "addresses._id": addressId },
       { 
-        name: 1, 
+        firstName: 1,
+        lastName: 1,
+        name: 1,
         email: 1, 
         mobile: 1, 
+        phoneNumber: 1,
         location: 1, 
         addresses: { $elemMatch: { _id: addressId } } 
       }
@@ -877,14 +882,42 @@ exports.createOrder = async (req, res) => {
 
     const selectedAddress = user.addresses[0];
 
-    // ✅ Restaurant info
-    const restaurant = await Restaurant.findById(
-      cart.restaurantId, 
-      "restaurantName locationName location phoneNumber notifications"
-    ); 
+    // ✅ Restaurant info - Check if restaurant exists
+    let restaurant = await Restaurant.findById(cart.restaurantId);
     
-    if (!restaurant)
-      return res.status(404).json({ success: false, message: "Restaurant not found." });
+    if (!restaurant) {
+      // Clear the invalid cart
+      await Cart.findOneAndUpdate(
+        { userId },
+        { 
+          products: [],
+          subTotal: 0,
+          totalItems: 0,
+          totalDiscount: 0,
+          deliveryCharge: 0,
+          gstCharges: 0,
+          gstOnDelivery: 0,
+          platformCharge: 0,
+          finalAmount: 0,
+          amountSavedOnOrder: 0,
+          distance: 0,
+          perKmRate: 0,
+          freeDeliveryThreshold: 399,
+          isDeliveryFree: false,
+          restaurantId: null,
+          chargeCalculations: {},
+          appliedCouponId: null,
+          couponDiscount: 0
+        }
+      );
+      
+      return res.status(404).json({ 
+        success: false, 
+        message: `Restaurant with ID ${cart.restaurantId} not found. Your cart has been cleared because the restaurant no longer exists. Please add items from an available restaurant.` 
+      });
+    }
+
+    console.log('Restaurant found:', restaurant.restaurantName);
 
     // ✅ Get current charges from API for snapshot ONLY
     let appliedChargesSnapshot = {};
@@ -892,7 +925,6 @@ exports.createOrder = async (req, res) => {
       const allCharges = await fetchCharges();
       const activeCharges = allCharges.filter(charge => charge.isActive === true);
       
-      // Extract specific charges
       const deliveryChargeObj = activeCharges.find(c => c.type === 'delivery_charge');
       const gstChargesObj = activeCharges.find(c => c.type === 'gst_charges');
       const platformChargeObj = activeCharges.find(c => c.type === 'platform_charge');
@@ -906,7 +938,6 @@ exports.createOrder = async (req, res) => {
       };
     } catch (error) {
       console.log('Charges API error (using cart data only):', error.message);
-      // API fail hua to bhi chalega, cart se hi data hai
     }
 
     // ✅ Clean products from cart
@@ -960,7 +991,7 @@ exports.createOrder = async (req, res) => {
       }
     }
 
-    // ✅ Create order with all charge details (DIRECT from cart)
+    // ✅ Create order with all charge details
     const orderData = {
       userId,
       cartId: cart._id,
@@ -974,7 +1005,6 @@ exports.createOrder = async (req, res) => {
       razorpayPaymentDetails,
       orderStatus: "Pending",
       
-      // ✅ All charge fields DIRECT from cart
       subTotal: cart.subTotal,
       totalItems: cart.totalItems,
       totalDiscount: cart.totalDiscount,
@@ -988,28 +1018,12 @@ exports.createOrder = async (req, res) => {
       isDeliveryFree: cart.isDeliveryFree,
       freeDeliveryThreshold: cart.freeDeliveryThreshold,
       perKmRate: cart.perKmRate,
-
-        // ✅ Coupon related
-  appliedCouponId: cart.appliedCouponId || null,
-      
-      // ✅ नया field: amountSavedOnOrder
+      appliedCouponId: cart.appliedCouponId || null,
       amountSavedOnOrder: cart.amountSavedOnOrder || 0,
-      
-      // ✅ Charge calculations DIRECT from cart
       chargeCalculations: cart.chargeCalculations || {},
-      
-      // ✅ Applied charges snapshot
       appliedCharges: appliedChargesSnapshot,
-      
-      // ✅ Products
       products: cleanProducts,
-
-        // ✅ Applied coupon details from cart
-  appliedCoupon: cart.chargeCalculations?.couponDiscount || null,
-      
-     
-      
-      // ✅ Delivery status
+      appliedCoupon: cart.chargeCalculations?.couponDiscount || null,
       deliveryStatus: "Pending"
     };
 
@@ -1027,8 +1041,8 @@ exports.createOrder = async (req, res) => {
         data: {
           orderId: order._id,
           orderNumber: order.orderNumber || order._id.toString().slice(-6),
-          customerName: user.name || 'Customer',
-          customerPhone: user.mobile || 'N/A',
+          customerName: user.firstName || user.name || 'Customer',
+          customerPhone: user.mobile || user.phoneNumber || 'N/A',
           totalAmount: order.totalPayable,
           paymentMethod: order.paymentMethod,
           paymentStatus: order.paymentStatus,
@@ -1045,7 +1059,6 @@ exports.createOrder = async (req, res) => {
         }
       };
 
-      // Add notification to restaurant
       await Restaurant.findByIdAndUpdate(
         cart.restaurantId,
         {
@@ -1063,104 +1076,35 @@ exports.createOrder = async (req, res) => {
       console.error('Notification sending failed:', notifError.message);
     }
 
-
     // ✅ Send Notification to User
-try {
-  const userNotification = {
-    type: 'order_placed',
-    title: '🎉 Order Placed Successfully!',
-    message: `Your order #${order.orderNumber || order._id.toString().slice(-6)} has been placed successfully`,
-    timestamp: new Date(),
-    status: 'unread'
-  };
+    try {
+      const userNotification = {
+        type: 'order_placed',
+        title: '🎉 Order Placed Successfully!',
+        message: `Your order #${order.orderNumber || order._id.toString().slice(-6)} has been placed successfully`,
+        timestamp: new Date(),
+        status: 'unread'
+      };
 
-  await User.findByIdAndUpdate(
-    userId,
-    {
-      $push: {
-        notifications: {
-          $each: [userNotification],
-          $position: 0,  // Naya notification sabse upar
-          $slice: 50      // Sirf 50 notifications store karo
+      await User.findByIdAndUpdate(
+        userId,
+        {
+          $push: {
+            notifications: {
+              $each: [userNotification],
+              $position: 0,
+              $slice: 50
+            }
+          }
         }
-      }
-    }
-  );
-  
-  console.log('User notification sent successfully');
-} catch (userNotifError) {
-  console.error('User notification failed:', userNotifError.message);
-  // Notification fail hone se order create hona band nahi hoga
-}
-
-    // ✅ Prepare charge breakdown for response (DIRECT from cart)
-    const gstRate = cart.chargeCalculations?.gstOnFood?.rate || 5;
-    const platformRate = cart.chargeCalculations?.platformCharge?.rate || 10;
-    const gstOnDeliveryRate = cart.chargeCalculations?.gstOnDelivery?.rate || 18;
-    const baseDeliveryAmount = cart.chargeCalculations?.deliveryCharge?.baseAmount || 40;
-    
-    // ✅ FIX: Platform charge calculation - check if it's percentage or fixed
-    let platformChargeInfo;
-    if (appliedChargesSnapshot.platformCharge?.chargeType === 'percentage') {
-      platformChargeInfo = {
-        rate: `${platformRate}%`,
-        amount: order.platformCharge,
-        calculation: `${order.subTotal} × ${platformRate}% = ${order.platformCharge}`
-      };
-    } else {
-      platformChargeInfo = {
-        rate: `Fixed`,
-        amount: order.platformCharge,
-        calculation: `Fixed amount: ₹${order.platformCharge}`
-      };
+      );
+      
+      console.log('User notification sent successfully');
+    } catch (userNotifError) {
+      console.error('User notification failed:', userNotifError.message);
     }
 
-    const chargeBreakdown = {
-      subTotal: order.subTotal,
-      itemDiscount: order.totalDiscount,
-      savings: {
-        amountSavedOnOrder: order.amountSavedOnOrder,
-        description: `You saved ₹${order.amountSavedOnOrder} on this order`
-      },
-      gstOnFood: {
-        rate: `${gstRate}%`,
-        amount: order.gstCharges,
-        calculation: `${order.subTotal} × ${gstRate}% = ${order.gstCharges}`
-      },
-      platformCharge: platformChargeInfo,
-      deliveryCharge: {
-        baseAmount: baseDeliveryAmount,
-        distance: order.distanceKm,
-        perKmRate: order.perKmRate,
-        distanceCharge: cart.chargeCalculations?.deliveryCharge?.distanceCharge || 0,
-        totalDeliveryCharge: order.deliveryCharge,
-        isFreeDelivery: order.isDeliveryFree,
-        freeDeliveryThreshold: order.freeDeliveryThreshold,
-        freeDeliveryApplied: cart.chargeCalculations?.deliveryCharge?.freeDeliveryApplied || false,
-        calculation: cart.chargeCalculations?.deliveryCharge?.freeDeliveryApplied ? 
-          `Free delivery (Order > ₹${order.freeDeliveryThreshold})` : 
-          order.distanceKm > 0 && order.perKmRate > 0 ? 
-            `${order.distanceKm}km × ₹${order.perKmRate} = ₹${order.deliveryCharge}` :
-            `Flat charge: ₹${order.deliveryCharge}`
-      },
-      gstOnDelivery: {
-        rate: `${gstOnDeliveryRate}%`,
-        amount: order.gstOnDelivery,
-        calculation: order.deliveryCharge > 0 ? 
-          `₹${order.deliveryCharge} × ${gstOnDeliveryRate}% = ₹${order.gstOnDelivery}` :
-          `Not applicable (Free delivery)`
-      },
-      couponDiscount: {
-        amount: order.couponDiscount,
-        applied: order.couponDiscount > 0
-      },
-      grandTotal: {
-        amount: order.totalPayable,
-        calculation: `${order.subTotal} + ${order.gstCharges} + ${order.platformCharge} + ${order.deliveryCharge} + ${order.gstOnDelivery} - ${order.couponDiscount} = ${order.totalPayable}`
-      }
-    };
-
-    // ✅ Clear cart (simple reset)
+    // ✅ Clear cart
     await Cart.findOneAndUpdate(
       { userId },
       { 
@@ -1176,57 +1120,27 @@ try {
         amountSavedOnOrder: 0,
         distance: 0,
         perKmRate: 0,
-        freeDeliveryThreshold: 399, // Changed to 399
+        freeDeliveryThreshold: 399,
         isDeliveryFree: false,
         restaurantId: null,
         chargeCalculations: {},
-        appliedCoupon: null,
+        appliedCouponId: null,
         couponDiscount: 0
       }
     );
 
-    // ✅ Populate order for response
-    const populatedOrder = await Order.findById(order._id)
-      .populate("restaurantId", "restaurantName locationName")
-      .populate("userId", "name email");
-
     return res.status(201).json({
       success: true,
       message: "Order created successfully",
-      data: {
-        ...populatedOrder.toObject(),
-        chargeBreakdown
-      },
-      razorpayPaymentDetails,
+      data: order,
+      orderId: order._id,
       summary: {
         itemsTotal: order.subTotal,
         totalDiscount: order.totalDiscount,
         amountSavedOnOrder: order.amountSavedOnOrder,
-        charges: {
-          gstOnFood: order.gstCharges,
-          platformCharge: order.platformCharge,
-          deliveryCharge: order.deliveryCharge,
-          gstOnDelivery: order.gstOnDelivery
-        },
-        couponDiscount: order.couponDiscount,
         grandTotal: order.totalPayable,
         itemsCount: order.totalItems,
-        isDeliveryFree: order.isDeliveryFree,
-        distanceKm: order.distanceKm,
-        perKmRate: order.perKmRate
-      },
-      appliedCharges: appliedChargesSnapshot,
-      savingsInfo: {
-        amountSavedOnOrder: order.amountSavedOnOrder,
-        totalOriginalAmount: order.subTotal + order.amountSavedOnOrder,
-        savingsPercentage: order.amountSavedOnOrder > 0 ? 
-          Number(((order.amountSavedOnOrder / (order.subTotal + order.amountSavedOnOrder)) * 100).toFixed(1)) : 0
-      },
-      notificationSent: true,
-      restaurantNotified: {
-        restaurantId: restaurant._id,
-        restaurantName: restaurant.restaurantName,
-        notificationType: 'order_placed'
+        isDeliveryFree: order.isDeliveryFree
       }
     });
 
@@ -1240,6 +1154,428 @@ try {
     });
   }
 };
+
+
+// exports.createOrder = async (req, res) => {
+//   try {
+//     const { userId, paymentMethod, addressId, transactionId } = req.body;
+
+//     // ✅ Validate input
+//     if (!mongoose.Types.ObjectId.isValid(userId))
+//       return res.status(400).json({ success: false, message: "Valid userId is required." });
+
+//     if (!mongoose.Types.ObjectId.isValid(addressId))
+//       return res.status(400).json({ success: false, message: "Valid addressId is required." });
+
+//     if (!["COD", "Online"].includes(paymentMethod))
+//       return res.status(400).json({ success: false, message: "Invalid payment method." });
+
+//     if (paymentMethod === "Online" && !transactionId)
+//       return res.status(400).json({ success: false, message: "transactionId is required for Online payment." });
+
+//     // ✅ Fetch cart with all charge calculations
+//     const cart = await Cart.findOne({ userId })
+//       .populate('products.restaurantProductId')
+//       .populate('restaurantId', 'restaurantName locationName');
+    
+//     if (!cart || !cart.products.length)
+//       return res.status(404).json({ success: false, message: "Cart is empty." });
+
+//     console.log('Cart data for order:', {
+//       subTotal: cart.subTotal,
+//       deliveryCharge: cart.deliveryCharge,
+//       gstCharges: cart.gstCharges,
+//       platformCharge: cart.platformCharge,
+//       gstOnDelivery: cart.gstOnDelivery,
+//       finalAmount: cart.finalAmount,
+//       amountSavedOnOrder: cart.amountSavedOnOrder,
+//       isDeliveryFree: cart.isDeliveryFree,
+//       distance: cart.distance,
+//       perKmRate: cart.perKmRate,
+//       freeDeliveryThreshold: cart.freeDeliveryThreshold,
+//       chargeCalculations: cart.chargeCalculations
+//     });
+
+//     // ✅ Fetch user & address
+//     const user = await User.findOne(
+//       { _id: userId, "addresses._id": addressId },
+//       { 
+//         name: 1, 
+//         email: 1, 
+//         mobile: 1, 
+//         location: 1, 
+//         addresses: { $elemMatch: { _id: addressId } } 
+//       }
+//     );
+    
+//     if (!user)
+//       return res.status(404).json({ success: false, message: "User or address not found." });
+
+//     const selectedAddress = user.addresses[0];
+
+//     // ✅ Restaurant info
+//     const restaurant = await Restaurant.findById(
+//       cart.restaurantId, 
+//       "restaurantName locationName location phoneNumber notifications"
+//     ); 
+    
+//     if (!restaurant)
+//       return res.status(404).json({ success: false, message: "Restaurant not found." });
+
+//     // ✅ Get current charges from API for snapshot ONLY
+//     let appliedChargesSnapshot = {};
+//     try {
+//       const allCharges = await fetchCharges();
+//       const activeCharges = allCharges.filter(charge => charge.isActive === true);
+      
+//       // Extract specific charges
+//       const deliveryChargeObj = activeCharges.find(c => c.type === 'delivery_charge');
+//       const gstChargesObj = activeCharges.find(c => c.type === 'gst_charges');
+//       const platformChargeObj = activeCharges.find(c => c.type === 'platform_charge');
+//       const gstOnDeliveryObj = activeCharges.find(c => c.type === 'gst_on_delivery');
+
+//       appliedChargesSnapshot = {
+//         gstCharges: gstChargesObj || null,
+//         platformCharge: platformChargeObj || null,
+//         deliveryCharge: deliveryChargeObj || null,
+//         gstOnDelivery: gstOnDeliveryObj || null
+//       };
+//     } catch (error) {
+//       console.log('Charges API error (using cart data only):', error.message);
+//       // API fail hua to bhi chalega, cart se hi data hai
+//     }
+
+//     // ✅ Clean products from cart
+//     const cleanProducts = cart.products.map(product => ({
+//       restaurantProductId: product.restaurantProductId,
+//       recommendedId: product.recommendedId,
+//       quantity: product.quantity,
+//       isHalfPlate: product.isHalfPlate,
+//       isFullPlate: product.isFullPlate,
+//       name: product.name,
+//       price: product.price,
+//       originalPrice: product.originalPrice || product.price,
+//       image: product.image,
+//       discountPercent: product.discountPercent,
+//       discountAmount: product.discountAmount
+//     }));
+
+//     // ✅ Prepare product summary for notification
+//     const productSummary = cart.products.map(product => ({
+//       name: product.name,
+//       quantity: product.quantity,
+//       price: product.price,
+//       total: product.price * product.quantity
+//     }));
+
+//     const totalItemsCount = cart.totalItems;
+
+//     // ✅ Payment status logic
+//     let paymentStatus = paymentMethod === "COD" ? "Pending" : "Paid";
+//     let razorpayPaymentDetails = null;
+//     let finalTransactionId = transactionId || null;
+
+//     if (paymentMethod === "Online") {
+//       try {
+//         const payment = await razorpay.payments.fetch(transactionId);
+//         razorpayPaymentDetails = payment;
+
+//         if (payment.status === "authorized") {
+//           const captured = await razorpay.payments.capture(transactionId, payment.amount, payment.currency);
+//           razorpayPaymentDetails = captured;
+//           finalTransactionId = captured.id;
+//         }
+
+//         paymentStatus = "Paid";
+//       } catch (err) {
+//         return res.status(500).json({
+//           success: false,
+//           message: "Razorpay payment verification failed.",
+//           error: err.message
+//         });
+//       }
+//     }
+
+//     // ✅ Create order with all charge details (DIRECT from cart)
+//     const orderData = {
+//       userId,
+//       cartId: cart._id,
+//       restaurantId: cart.restaurantId,
+//       restaurantName: restaurant.restaurantName,
+//       restaurantLocation: restaurant.location,
+//       deliveryAddress: selectedAddress,
+//       paymentMethod,
+//       paymentStatus,
+//       transactionId: finalTransactionId,
+//       razorpayPaymentDetails,
+//       orderStatus: "Pending",
+      
+//       // ✅ All charge fields DIRECT from cart
+//       subTotal: cart.subTotal,
+//       totalItems: cart.totalItems,
+//       totalDiscount: cart.totalDiscount,
+//       gstCharges: cart.gstCharges,
+//       platformCharge: cart.platformCharge,
+//       deliveryCharge: cart.deliveryCharge,
+//       gstOnDelivery: cart.gstOnDelivery,
+//       couponDiscount: cart.couponDiscount || 0,
+//       totalPayable: cart.finalAmount,
+//       distanceKm: cart.distance,
+//       isDeliveryFree: cart.isDeliveryFree,
+//       freeDeliveryThreshold: cart.freeDeliveryThreshold,
+//       perKmRate: cart.perKmRate,
+
+//         // ✅ Coupon related
+//   appliedCouponId: cart.appliedCouponId || null,
+      
+//       // ✅ नया field: amountSavedOnOrder
+//       amountSavedOnOrder: cart.amountSavedOnOrder || 0,
+      
+//       // ✅ Charge calculations DIRECT from cart
+//       chargeCalculations: cart.chargeCalculations || {},
+      
+//       // ✅ Applied charges snapshot
+//       appliedCharges: appliedChargesSnapshot,
+      
+//       // ✅ Products
+//       products: cleanProducts,
+
+//         // ✅ Applied coupon details from cart
+//   appliedCoupon: cart.chargeCalculations?.couponDiscount || null,
+      
+     
+      
+//       // ✅ Delivery status
+//       deliveryStatus: "Pending"
+//     };
+
+//     const order = await Order.create(orderData);
+
+//     // ✅ Send Notification to Restaurant
+//     try {
+//       const notification = {
+//         type: 'order_placed',
+//         title: '🎉 New Order Received!',
+//         message: `New order #${order.orderNumber || order._id.toString().slice(-6)} has been placed`,
+//         orderId: order._id,
+//         userId: user._id,
+//         isRead: false,
+//         data: {
+//           orderId: order._id,
+//           orderNumber: order.orderNumber || order._id.toString().slice(-6),
+//           customerName: user.name || 'Customer',
+//           customerPhone: user.mobile || 'N/A',
+//           totalAmount: order.totalPayable,
+//           paymentMethod: order.paymentMethod,
+//           paymentStatus: order.paymentStatus,
+//           itemCount: totalItemsCount,
+//           products: productSummary,
+//           deliveryAddress: {
+//             street: selectedAddress.street,
+//             city: selectedAddress.city,
+//             state: selectedAddress.state,
+//             country: selectedAddress.country,
+//             postalCode: selectedAddress.postalCode
+//           },
+//           timestamp: new Date().toISOString()
+//         }
+//       };
+
+//       // Add notification to restaurant
+//       await Restaurant.findByIdAndUpdate(
+//         cart.restaurantId,
+//         {
+//           $push: {
+//             notifications: {
+//               $each: [notification],
+//               $position: 0,
+//               $slice: 50
+//             }
+//           }
+//         }
+//       );
+      
+//     } catch (notifError) {
+//       console.error('Notification sending failed:', notifError.message);
+//     }
+
+
+//     // ✅ Send Notification to User
+// try {
+//   const userNotification = {
+//     type: 'order_placed',
+//     title: '🎉 Order Placed Successfully!',
+//     message: `Your order #${order.orderNumber || order._id.toString().slice(-6)} has been placed successfully`,
+//     timestamp: new Date(),
+//     status: 'unread'
+//   };
+
+//   await User.findByIdAndUpdate(
+//     userId,
+//     {
+//       $push: {
+//         notifications: {
+//           $each: [userNotification],
+//           $position: 0,  // Naya notification sabse upar
+//           $slice: 50      // Sirf 50 notifications store karo
+//         }
+//       }
+//     }
+//   );
+  
+//   console.log('User notification sent successfully');
+// } catch (userNotifError) {
+//   console.error('User notification failed:', userNotifError.message);
+//   // Notification fail hone se order create hona band nahi hoga
+// }
+
+//     // ✅ Prepare charge breakdown for response (DIRECT from cart)
+//     const gstRate = cart.chargeCalculations?.gstOnFood?.rate || 5;
+//     const platformRate = cart.chargeCalculations?.platformCharge?.rate || 10;
+//     const gstOnDeliveryRate = cart.chargeCalculations?.gstOnDelivery?.rate || 18;
+//     const baseDeliveryAmount = cart.chargeCalculations?.deliveryCharge?.baseAmount || 40;
+    
+//     // ✅ FIX: Platform charge calculation - check if it's percentage or fixed
+//     let platformChargeInfo;
+//     if (appliedChargesSnapshot.platformCharge?.chargeType === 'percentage') {
+//       platformChargeInfo = {
+//         rate: `${platformRate}%`,
+//         amount: order.platformCharge,
+//         calculation: `${order.subTotal} × ${platformRate}% = ${order.platformCharge}`
+//       };
+//     } else {
+//       platformChargeInfo = {
+//         rate: `Fixed`,
+//         amount: order.platformCharge,
+//         calculation: `Fixed amount: ₹${order.platformCharge}`
+//       };
+//     }
+
+//     const chargeBreakdown = {
+//       subTotal: order.subTotal,
+//       itemDiscount: order.totalDiscount,
+//       savings: {
+//         amountSavedOnOrder: order.amountSavedOnOrder,
+//         description: `You saved ₹${order.amountSavedOnOrder} on this order`
+//       },
+//       gstOnFood: {
+//         rate: `${gstRate}%`,
+//         amount: order.gstCharges,
+//         calculation: `${order.subTotal} × ${gstRate}% = ${order.gstCharges}`
+//       },
+//       platformCharge: platformChargeInfo,
+//       deliveryCharge: {
+//         baseAmount: baseDeliveryAmount,
+//         distance: order.distanceKm,
+//         perKmRate: order.perKmRate,
+//         distanceCharge: cart.chargeCalculations?.deliveryCharge?.distanceCharge || 0,
+//         totalDeliveryCharge: order.deliveryCharge,
+//         isFreeDelivery: order.isDeliveryFree,
+//         freeDeliveryThreshold: order.freeDeliveryThreshold,
+//         freeDeliveryApplied: cart.chargeCalculations?.deliveryCharge?.freeDeliveryApplied || false,
+//         calculation: cart.chargeCalculations?.deliveryCharge?.freeDeliveryApplied ? 
+//           `Free delivery (Order > ₹${order.freeDeliveryThreshold})` : 
+//           order.distanceKm > 0 && order.perKmRate > 0 ? 
+//             `${order.distanceKm}km × ₹${order.perKmRate} = ₹${order.deliveryCharge}` :
+//             `Flat charge: ₹${order.deliveryCharge}`
+//       },
+//       gstOnDelivery: {
+//         rate: `${gstOnDeliveryRate}%`,
+//         amount: order.gstOnDelivery,
+//         calculation: order.deliveryCharge > 0 ? 
+//           `₹${order.deliveryCharge} × ${gstOnDeliveryRate}% = ₹${order.gstOnDelivery}` :
+//           `Not applicable (Free delivery)`
+//       },
+//       couponDiscount: {
+//         amount: order.couponDiscount,
+//         applied: order.couponDiscount > 0
+//       },
+//       grandTotal: {
+//         amount: order.totalPayable,
+//         calculation: `${order.subTotal} + ${order.gstCharges} + ${order.platformCharge} + ${order.deliveryCharge} + ${order.gstOnDelivery} - ${order.couponDiscount} = ${order.totalPayable}`
+//       }
+//     };
+
+//     // ✅ Clear cart (simple reset)
+//     await Cart.findOneAndUpdate(
+//       { userId },
+//       { 
+//         products: [],
+//         subTotal: 0,
+//         totalItems: 0,
+//         totalDiscount: 0,
+//         deliveryCharge: 0,
+//         gstCharges: 0,
+//         gstOnDelivery: 0,
+//         platformCharge: 0,
+//         finalAmount: 0,
+//         amountSavedOnOrder: 0,
+//         distance: 0,
+//         perKmRate: 0,
+//         freeDeliveryThreshold: 399, // Changed to 399
+//         isDeliveryFree: false,
+//         restaurantId: null,
+//         chargeCalculations: {},
+//         appliedCoupon: null,
+//         couponDiscount: 0
+//       }
+//     );
+
+//     // ✅ Populate order for response
+//     const populatedOrder = await Order.findById(order._id)
+//       .populate("restaurantId", "restaurantName locationName")
+//       .populate("userId", "name email");
+
+//     return res.status(201).json({
+//       success: true,
+//       message: "Order created successfully",
+//       data: {
+//         ...populatedOrder.toObject(),
+//         chargeBreakdown
+//       },
+//       razorpayPaymentDetails,
+//       summary: {
+//         itemsTotal: order.subTotal,
+//         totalDiscount: order.totalDiscount,
+//         amountSavedOnOrder: order.amountSavedOnOrder,
+//         charges: {
+//           gstOnFood: order.gstCharges,
+//           platformCharge: order.platformCharge,
+//           deliveryCharge: order.deliveryCharge,
+//           gstOnDelivery: order.gstOnDelivery
+//         },
+//         couponDiscount: order.couponDiscount,
+//         grandTotal: order.totalPayable,
+//         itemsCount: order.totalItems,
+//         isDeliveryFree: order.isDeliveryFree,
+//         distanceKm: order.distanceKm,
+//         perKmRate: order.perKmRate
+//       },
+//       appliedCharges: appliedChargesSnapshot,
+//       savingsInfo: {
+//         amountSavedOnOrder: order.amountSavedOnOrder,
+//         totalOriginalAmount: order.subTotal + order.amountSavedOnOrder,
+//         savingsPercentage: order.amountSavedOnOrder > 0 ? 
+//           Number(((order.amountSavedOnOrder / (order.subTotal + order.amountSavedOnOrder)) * 100).toFixed(1)) : 0
+//       },
+//       notificationSent: true,
+//       restaurantNotified: {
+//         restaurantId: restaurant._id,
+//         restaurantName: restaurant.restaurantName,
+//         notificationType: 'order_placed'
+//       }
+//     });
+
+//   } catch (error) {
+//     console.error("createOrder Error:", error);
+    
+//     return res.status(500).json({
+//       success: false,
+//       message: error.message,
+//       error: error.stack
+//     });
+//   }
+// };
 // -------------------------
 // GET ALL ORDERS
 // -------------------------
@@ -2116,161 +2452,664 @@ const haversineDistance = (coords1, coords2) => {
 
 // Assign delivery partner
 
+// exports.vendorAcceptOrder = async (req, res) => {
+//   try {
+//     const { orderId, vendorId } = req.params;
+//     const { orderStatus } = req.body;
+
+//     // Step 1: Find the order by orderId
+//     const order = await Order.findById(orderId);
+//     if (!order) {
+//       return res.status(404).json({ success: false, message: "Order not found" });
+//     }
+
+//     // Step 2: Verify vendor ownership
+//     if (order.restaurantId.toString() !== vendorId) {
+//       return res.status(403).json({
+//         success: false,
+//         message: "Unauthorized action: Vendor ID does not match the order's restaurant"
+//       });
+//     }
+
+//     // Step 3: Get the restaurant location from the order
+//     const restaurantCoords = order.restaurantLocation?.coordinates || [0, 0];
+//     if (restaurantCoords.length === 0) {
+//       return res.status(400).json({ success: false, message: "Restaurant location not available" });
+//     }
+
+//     // Step 4: Handle different order statuses
+//     if (orderStatus === "Preparing") {
+//       // ✅ Just update status, don't look for riders
+//       order.orderStatus = "Preparing";
+//       order.deliveryStatus = "Preparing";
+//       order.acceptedAt = new Date();
+//       await order.save();
+      
+//       return res.status(200).json({
+//         success: true,
+//         message: "Order status updated to Preparing",
+//         order,
+//         availableDeliveryBoys: [],
+//         count: 0
+//       });
+//     }
+    
+//     if (orderStatus === "Out for Delivery") {
+//       // ✅ Just update status, riders already assigned
+//       order.orderStatus = "Out for Delivery";
+//       order.deliveryStatus = "Out for Delivery";
+//       await order.save();
+      
+//       return res.status(200).json({
+//         success: true,
+//         message: "Order status updated to Out for Delivery",
+//         order,
+//         availableDeliveryBoys: [],
+//         count: 0
+//       });
+//     }
+    
+//     if (orderStatus === "Ready for Pickup") {
+//       // ✅ Update status
+//       order.orderStatus = "Ready for Pickup";
+//       order.deliveryStatus = "Ready for Pickup";
+//       await order.save();
+      
+//       return res.status(200).json({
+//         success: true,
+//         message: "Order is ready for pickup",
+//         order,
+//         availableDeliveryBoys: [],
+//         count: 0
+//       });
+//     }
+
+//     // Step 5: Only for "Accepted" status - find delivery boys
+//     if (orderStatus === "Accepted" || !orderStatus) {
+//       // Find active delivery boys within 10 km
+//       const nearbyDeliveryBoys = await DeliveryBoy.find({
+//         location: {
+//           $nearSphere: {
+//             $geometry: {
+//               type: "Point",
+//               coordinates: restaurantCoords,
+//             },
+//             $maxDistance: 10000 // 10 km in meters
+//           }
+//         },
+//         isActive: true,
+//         currentOrder: false
+//       });
+
+//       if (!nearbyDeliveryBoys.length) {
+//         return res.status(404).json({
+//           success: false,
+//           message: "No delivery boys found within 10 km or all are busy"
+//         });
+//       }
+
+//       // Collect delivery boy info
+//       let deliveryBoysInfo = [];
+
+//       for (let i = 0; i < nearbyDeliveryBoys.length; i++) {
+//         const deliveryBoy = nearbyDeliveryBoys[i];
+//         deliveryBoysInfo.push({
+//           deliveryBoyId: deliveryBoy._id,
+//           fullName: deliveryBoy.fullName,
+//           mobileNumber: deliveryBoy.mobileNumber,
+//           vehicleType: deliveryBoy.vehicleType,
+//           walletBalance: deliveryBoy.walletBalance,
+//           status: deliveryBoy.deliveryBoyStatus,
+//         });
+//       }
+
+//       // Update order status
+//       order.orderStatus = "Accepted";
+//       order.deliveryStatus = "Pending";
+//       order.acceptedAt = new Date();
+//       order.distanceKm = 0;
+//       order.availableDeliveryBoys = deliveryBoysInfo;
+
+//       // Store first available rider id
+//       if (deliveryBoysInfo.length > 0) {
+//         order.riderId = deliveryBoysInfo[0].deliveryBoyId;
+//       }
+
+//       await order.save();
+
+//       return res.status(200).json({
+//         success: true,
+//         message: "Order accepted, delivery boys available for this order",
+//         order,
+//         availableDeliveryBoys: deliveryBoysInfo,
+//         deliveryCharge: order.deliveryCharge || 0,
+//         count: deliveryBoysInfo.length,
+//       });
+//     }
+
+//     // Default: just update status
+//     order.orderStatus = orderStatus;
+//     await order.save();
+
+//     return res.status(200).json({
+//       success: true,
+//       message: `Order status updated to ${orderStatus}`,
+//       order
+//     });
+
+//   } catch (err) {
+//     console.error("Error accepting order:", err);
+//     res.status(500).json({
+//       success: false,
+//       message: "Error accepting order",
+//       error: err.message
+//     });
+//   }
+// };
+// exports.vendorAcceptOrder = async (req, res) => {
+//   try {
+//     const { orderId, vendorId } = req.params;
+//     const { orderStatus } = req.body;
+
+//     // Step 1: Find the order by orderId
+//     const order = await Order.findById(orderId);
+//     console.log("jjjjjjjjjjjjjjjjj",orderId)
+//     if (!order) {
+//       return res.status(404).json({ success: false, message: "Order not found" });
+//     }
+
+//     // Step 2: Verify vendor ownership
+//     if (order.restaurantId.toString() !== vendorId) {
+//       return res.status(403).json({
+//         success: false,
+//         message: "Unauthorized action: Vendor ID does not match the order's restaurant"
+//       });
+//     }
+
+//     // Step 3: Get the restaurant location from the order
+//     const restaurantCoords = order.restaurantLocation?.coordinates || [0, 0];
+//     if (restaurantCoords.length === 0) {
+//       return res.status(400).json({ success: false, message: "Restaurant location not available" });
+//     }
+
+//     // Step 4: Handle different order statuses
+//     if (orderStatus === "Preparing") {
+//       order.orderStatus = "Preparing";
+//       order.deliveryStatus = "Preparing";
+//       order.acceptedAt = new Date();
+//       await order.save();
+      
+//       return res.status(200).json({
+//         success: true,
+//         message: "Order status updated to Preparing",
+//         order,
+//         availableDeliveryBoys: [],
+//         count: 0
+//       });
+//     }
+    
+//     if (orderStatus === "Out for Delivery") {
+//       order.orderStatus = "Out for Delivery";
+//       order.deliveryStatus = "Out for Delivery";
+//       await order.save();
+      
+//       return res.status(200).json({
+//         success: true,
+//         message: "Order status updated to Out for Delivery",
+//         order,
+//         availableDeliveryBoys: [],
+//         count: 0
+//       });
+//     }
+    
+//     if (orderStatus === "Ready for Pickup") {
+//       order.orderStatus = "Ready for Pickup";
+//       order.deliveryStatus = "Ready for Pickup";
+//       await order.save();
+      
+//       return res.status(200).json({
+//         success: true,
+//         message: "Order is ready for pickup",
+//         order,
+//         availableDeliveryBoys: [],
+//         count: 0
+//       });
+//     }
+
+//     // Step 5: Only for "Accepted" status - call Shadowfax API
+//     if (orderStatus === "Accepted" || !orderStatus) {
+      
+//       // Prepare Shadowfax API request body
+//       const shadowfaxRequestBody = {
+//         client_code: "janityeats_mkt",
+//         order_details: {
+//           order_value: Math.round(order.totalPayable || order.totalAmount || 0),
+//           paid: order.paymentMethod === "Online" ? "true" : "false",
+//           client_order_id: order._id.toString()
+//         },
+//         pickup_details: {
+//           city: order.restaurantLocation?.city || "Delhi",
+//           contact_number: order.restaurantContact || "9876543210",
+//           name: order.restaurantName || "Store name",
+//           longitude: restaurantCoords[0],
+//           address: order.restaurantAddress || "Store address",
+//           latitude: restaurantCoords[1]
+//         },
+//         order_items: order.products.map(product => ({
+//           name: product.name,
+//           price: Math.round(product.price),
+//           quantity: product.quantity,
+//           id: product.restaurantProductId?.toString() || product.recommendedId?.toString() || "item_id"
+//         })),
+//         drop_details: {
+//           name: order.deliveryAddress?.name || "Customer name",
+//           longitude: order.deliveryAddress?.location.coordinates[0] || order.deliveryAddress?.longitude || 0,
+          
+//           address: order.deliveryAddress?.address || "Customer address",
+//           latitude: order.deliveryAddress?.location.coordinates[1] || order.deliveryAddress?.latitude || 0,
+//           contact_number: order.deliveryAddress?.phone || "9987654321",
+//           city: order.deliveryAddress?.city || "Delhi"
+//         }
+//       };
+
+//       // ✅ PRINT SHADOWFAX PAYLOAD TO CONSOLE
+//       console.log("================== SHADOWFAX API CALL ==================");
+//       console.log("📤 REQUEST PAYLOAD:");
+//       console.log(JSON.stringify(shadowfaxRequestBody, null, 2));
+//       console.log("========================================================");
+
+//       // Call Shadowfax API
+//       const shadowfaxResponse = await fetch('https://hlbackend.staging.shadowfax.in/api/v2/orders/', {
+//         method: 'POST',
+//         headers: {
+//           'Authorization': 'Token 437220fb96af5e9f0fce7d370d3f37ad9f7c017a',
+//           'Content-Type': 'application/json',
+//           'Client-Code': 'janityeats_mkt'
+//         },
+//         body: JSON.stringify(shadowfaxRequestBody)
+//       });
+
+//       const shadowfaxData = await shadowfaxResponse.json();
+
+//       // ✅ PRINT SHADOWFAX RESPONSE TO CONSOLE
+//       console.log("================== SHADOWFAX API RESPONSE ==================");
+//       console.log("📥 RESPONSE STATUS:", shadowfaxResponse.status);
+//       console.log("📥 RESPONSE DATA:");
+//       console.log(JSON.stringify(shadowfaxData, null, 2));
+//       console.log("============================================================");
+
+//       // Check if Shadowfax API call was successful
+//       if (!shadowfaxResponse.ok || shadowfaxData.message !== "Success") {
+//         console.error("❌ Shadowfax API Error:", shadowfaxData);
+//         return res.status(500).json({
+//           success: false,
+//           message: "Failed to create delivery order with Shadowfax",
+//           error: shadowfaxData
+//         });
+//       }
+
+//       console.log("✅ Shadowfax API call successful!");
+//       console.log("📦 SFX Order ID:", shadowfaxData.data?.sfx_order_id);
+//       console.log("💰 Delivery Cost:", shadowfaxData.data?.delivery_cost);
+//       console.log("🔗 Tracking URL:", shadowfaxData.data?.track_url);
+
+//       // Store Shadowfax response in order
+//       order.shadowfaxResponse = shadowfaxData.data;
+//       order.sfx_order_id = shadowfaxData.data.sfx_order_id;
+//       order.delivery_cost = shadowfaxData.data.delivery_cost;
+      
+//       // Update order status
+//       order.orderStatus = "Accepted";
+//       order.deliveryStatus = "Pending";
+//       order.acceptedAt = new Date();
+//       order.distanceKm = 0;
+
+//       // Add tracking URL if available
+//       if (shadowfaxData.data.track_url && shadowfaxData.data.track_url !== "NA") {
+//         order.trackingUrl = shadowfaxData.data.track_url;
+//       }
+
+//       await order.save();
+
+//       return res.status(200).json({
+//         success: true,
+//         message: "Order accepted and delivery partner assigned via Shadowfax",
+//         order,
+//         shadowfaxResponse: shadowfaxData.data,
+//         deliveryCharge: shadowfaxData.data.delivery_cost,
+//       });
+//     }
+
+//     // Default: just update status
+//     order.orderStatus = orderStatus;
+//     await order.save();
+
+//     return res.status(200).json({
+//       success: true,
+//       message: `Order status updated to ${orderStatus}`,
+//       order
+//     });
+
+//   } catch (err) {
+//     console.error("❌ Error accepting order:", err);
+//     res.status(500).json({
+//       success: false,
+//       message: "Error accepting order",
+//       error: err.message
+//     });
+//   }
+// };
 exports.vendorAcceptOrder = async (req, res) => {
   try {
     const { orderId, vendorId } = req.params;
     const { orderStatus } = req.body;
+  
 
-    // Step 1: Find the order by orderId
+    // ─── Step 1: Find the order ───────────────────────────────────────────────
     const order = await Order.findById(orderId);
     if (!order) {
       return res.status(404).json({ success: false, message: "Order not found" });
     }
 
-    // Step 2: Verify vendor ownership
+    // ─── Step 2: Verify vendor ownership ─────────────────────────────────────
     if (order.restaurantId.toString() !== vendorId) {
       return res.status(403).json({
         success: false,
-        message: "Unauthorized action: Vendor ID does not match the order's restaurant"
+        message: "Unauthorized: Vendor ID does not match this order's restaurant",
       });
     }
 
-    // Step 3: Get the restaurant location from the order
-    const restaurantCoords = order.restaurantLocation?.coordinates || [0, 0];
-    if (restaurantCoords.length === 0) {
-      return res.status(400).json({ success: false, message: "Restaurant location not available" });
+    // ─── Step 3: Validate restaurant coordinates ──────────────────────────────
+    const restaurantCoords = order.restaurantLocation?.coordinates;
+    if (
+      !restaurantCoords ||
+      restaurantCoords.length < 2 ||
+      (restaurantCoords[0] === 0 && restaurantCoords[1] === 0)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Restaurant location coordinates not available on this order",
+      });
     }
 
-    // Step 4: Handle different order statuses
+    // ─── Step 4: Handle non-Accepted status shortcuts ─────────────────────────
     if (orderStatus === "Preparing") {
-      // ✅ Just update status, don't look for riders
       order.orderStatus = "Preparing";
       order.deliveryStatus = "Preparing";
       order.acceptedAt = new Date();
       await order.save();
-      
       return res.status(200).json({
         success: true,
         message: "Order status updated to Preparing",
         order,
         availableDeliveryBoys: [],
-        count: 0
+        count: 0,
       });
     }
-    
-    if (orderStatus === "Out for Delivery") {
-      // ✅ Just update status, riders already assigned
-      order.orderStatus = "Out for Delivery";
-      order.deliveryStatus = "Out for Delivery";
-      await order.save();
-      
-      return res.status(200).json({
-        success: true,
-        message: "Order status updated to Out for Delivery",
-        order,
-        availableDeliveryBoys: [],
-        count: 0
-      });
-    }
-    
+
     if (orderStatus === "Ready for Pickup") {
-      // ✅ Update status
       order.orderStatus = "Ready for Pickup";
       order.deliveryStatus = "Ready for Pickup";
       await order.save();
-      
       return res.status(200).json({
         success: true,
         message: "Order is ready for pickup",
         order,
         availableDeliveryBoys: [],
-        count: 0
+        count: 0,
       });
     }
 
-    // Step 5: Only for "Accepted" status - find delivery boys
-    if (orderStatus === "Accepted" || !orderStatus) {
-      // Find active delivery boys within 10 km
-      const nearbyDeliveryBoys = await DeliveryBoy.find({
-        location: {
-          $nearSphere: {
-            $geometry: {
-              type: "Point",
-              coordinates: restaurantCoords,
-            },
-            $maxDistance: 10000 // 10 km in meters
-          }
-        },
-        isActive: true,
-        currentOrder: false
+    if (orderStatus === "Out for Delivery") {
+      order.orderStatus = "Out for Delivery";
+      order.deliveryStatus = "Out for Delivery";
+      await order.save();
+      return res.status(200).json({
+        success: true,
+        message: "Order status updated to Out for Delivery",
+        order,
+        availableDeliveryBoys: [],
+        count: 0,
       });
+    }
 
-      if (!nearbyDeliveryBoys.length) {
-        return res.status(404).json({
-          success: false,
-          message: "No delivery boys found within 10 km or all are busy"
-        });
+    // ─── Step 5: "Accepted" – call Shadowfax ─────────────────────────────────
+    if (orderStatus === "Accepted" || !orderStatus) {
+
+      // ── Fetch restaurant ──────────────────────────────────────────────────
+      const restaurant = await Restaurant.findById(order.restaurantId);
+      if (!restaurant) {
+        return res.status(404).json({ success: false, message: "Restaurant not found" });
       }
 
-      // Collect delivery boy info
-      let deliveryBoysInfo = [];
-
-      for (let i = 0; i < nearbyDeliveryBoys.length; i++) {
-        const deliveryBoy = nearbyDeliveryBoys[i];
-        deliveryBoysInfo.push({
-          deliveryBoyId: deliveryBoy._id,
-          fullName: deliveryBoy.fullName,
-          mobileNumber: deliveryBoy.mobileNumber,
-          vehicleType: deliveryBoy.vehicleType,
-          walletBalance: deliveryBoy.walletBalance,
-          status: deliveryBoy.deliveryBoyStatus,
-        });
+      // ── Fetch user — full document, no .select() ──────────────────────────
+      const user = await User.findById(order.userId);
+      if (!user) {
+        return res.status(404).json({ success: false, message: "User not found" });
       }
 
-      // Update order status
-      order.orderStatus = "Accepted";
+      // ── Print every field in user to find the right field names ───────────
+      const userObj = user.toObject();
+      console.log("====== FULL USER OBJECT ======");
+      console.log(JSON.stringify(userObj, null, 2));
+      console.log("==============================");
+
+      const deliveryAddress = order.deliveryAddress || {};
+
+      // ── Drop coordinates ──────────────────────────────────────────────────
+      let dropLat = 0;
+      let dropLon = 0;
+      if (deliveryAddress.location?.coordinates?.length === 2) {
+        dropLon = deliveryAddress.location.coordinates[0];
+        dropLat = deliveryAddress.location.coordinates[1];
+      }
+
+      // ── Build name — check ALL possible name fields ───────────────────────
+      let dropName = "Customer";
+      if (userObj.firstName && userObj.lastName) {
+        dropName = `${userObj.firstName} ${userObj.lastName}`.trim();
+      } else if (userObj.firstName) {
+        dropName = userObj.firstName.trim();
+      } else if (userObj.name) {
+        dropName = userObj.name.trim();
+      } else if (userObj.fullName) {
+        dropName = userObj.fullName.trim();
+      }
+
+      // ── Build phone — check ALL possible phone fields ─────────────────────
+      let dropPhone = "9999999999";
+      if (userObj.phoneNumber) {
+        dropPhone = userObj.phoneNumber;
+      } else if (userObj.mobile) {
+        dropPhone = userObj.mobile;
+      } else if (userObj.phone) {
+        dropPhone = userObj.phone;
+      } else if (userObj.mobileNumber) {
+        dropPhone = userObj.mobileNumber;
+      } else if (userObj.contactNumber) {
+        dropPhone = userObj.contactNumber;
+      }
+
+      console.log("====== DROP DETAILS ======");
+      console.log("dropName :", dropName);
+      console.log("dropPhone:", dropPhone);
+      console.log("dropLat  :", dropLat);
+      console.log("dropLon  :", dropLon);
+      console.log("==========================");
+
+      // ── Drop address ──────────────────────────────────────────────────────
+      const dropAddress = deliveryAddress.street || deliveryAddress.address || "";
+      const dropCity    = deliveryAddress.city || "Hyderabad";
+
+      // ── Pickup details ────────────────────────────────────────────────────
+      const pickupLon     = restaurantCoords[0];
+      const pickupLat     = restaurantCoords[1];
+      const pickupName    = restaurant.restaurantName || "Restaurant";
+      const pickupPhone   = restaurant.phoneNumber || restaurant.phone || "9876543210";
+      const pickupAddress = restaurant.locationName || restaurant.address || "";
+      const pickupCity    =
+        restaurant.city ||
+        (restaurant.locationName || "").split(",").pop()?.trim() ||
+        "Hyderabad";
+
+      // ── IMPORTANT: use unique client_order_id to avoid duplicate COID ─────
+      // Append timestamp so each accept attempt has a unique ID
+      const clientOrderId = `${order._id.toString()}_${Date.now()}`;
+
+      // ── Build Shadowfax payload ───────────────────────────────────────────
+      const shadowfaxBody = {
+        client_code: "janityeats_mkt",
+        order_details: {
+          order_value: Math.round(order.totalPayable || order.subTotal || 0),
+          paid: order.paymentMethod === "Online" ? "true" : "false",
+          client_order_id: clientOrderId,
+        },
+        pickup_details: {
+          name: pickupName,
+          contact_number: pickupPhone,
+          latitude: pickupLat,
+          longitude: pickupLon,
+          city: pickupCity,
+          address: pickupAddress,
+        },
+        order_items: order.products.map((p) => ({
+          name: p.name || "Item",
+          price: Math.round(p.price || 0),
+          quantity: p.quantity || 1,
+          id: (p.restaurantProductId || p.recommendedId || "").toString(),
+        })),
+        drop_details: {
+          name: dropName,
+          contact_number: dropPhone,
+          address: dropAddress,
+          city: dropCity,
+          latitude: dropLat,
+          longitude: dropLon,
+        },
+      };
+
+      console.log("====== SHADOWFAX PAYLOAD ======");
+      console.log(JSON.stringify(shadowfaxBody, null, 2));
+      console.log("===============================");
+
+      // ── Call Shadowfax ────────────────────────────────────────────────────
+      let sfxData = null;
+      let sfxSuccess = false;
+
+      try {
+        const sfxResponse = await fetch(
+          "https://hlbackend.staging.shadowfax.in/api/v2/orders/",
+          {
+            method: "POST",
+            headers: {
+              Authorization: "Token 437220fb96af5e9f0fce7d370d3f37ad9f7c017a",
+              "Content-Type": "application/json",
+              "Client-Code": "janityeats_mkt",
+            },
+            body: JSON.stringify(shadowfaxBody),
+          }
+        );
+
+        sfxData = await sfxResponse.json();
+
+        console.log("====== SHADOWFAX RESPONSE ======");
+        console.log("HTTP STATUS:", sfxResponse.status);
+        console.log(JSON.stringify(sfxData, null, 2));
+        console.log("================================");
+
+        // ── Check if Shadowfax returned an error inside the response body ──
+        // Shadowfax returns 200 even for errors like "duplicate COID"
+        if (sfxData.error || sfxData.message === "duplicate COID detected") {
+          console.error("❌ Shadowfax business error:", sfxData);
+          // Still accept the order even if Shadowfax has issue
+          sfxSuccess = false;
+        } else if (sfxData.status === "ACCEPTED" || sfxData.sfx_order_id) {
+          sfxSuccess = true;
+        }
+
+      } catch (fetchError) {
+        console.error("❌ Shadowfax fetch error:", fetchError.message);
+        sfxData = { error: fetchError.message };
+        sfxSuccess = false;
+      }
+
+      // ── Update order regardless of Shadowfax result ───────────────────────
+      order.orderStatus    = "Accepted";
       order.deliveryStatus = "Pending";
-      order.acceptedAt = new Date();
-      order.distanceKm = 0;
-      order.availableDeliveryBoys = deliveryBoysInfo;
+      order.acceptedAt     = new Date();
+      order.distanceKm     = 0;
 
-      // Store first available rider id
-      if (deliveryBoysInfo.length > 0) {
-        order.riderId = deliveryBoysInfo[0].deliveryBoyId;
+      if (sfxSuccess && sfxData) {
+        order.shadowfaxResponse = sfxData;
+        order.sfx_order_id      = sfxData.sfx_order_id || null;
+        order.delivery_cost     = sfxData.delivery_cost || null;
+        if (sfxData.track_url && sfxData.track_url !== "NA") {
+          order.trackingUrl = sfxData.track_url;
+        }
       }
 
       await order.save();
 
-      return res.status(200).json({
-        success: true,
-        message: "Order accepted, delivery boys available for this order",
-        order,
-        availableDeliveryBoys: deliveryBoysInfo,
-        deliveryCharge: order.deliveryCharge || 0,
-        count: deliveryBoysInfo.length,
-      });
+      if (sfxSuccess) {
+        return res.status(200).json({
+          success: true,
+          message: "Order accepted and delivery assigned via Shadowfax",
+          order,
+          shadowfaxResponse: sfxData,
+          deliveryCharge: sfxData.delivery_cost || order.deliveryCharge,
+          // Debug: what we actually sent
+          debug_sentToShadowfax: {
+            dropName,
+            dropPhone,
+            dropLat,
+            dropLon,
+            clientOrderId,
+          },
+          availableDeliveryBoys: [],
+          count: 0,
+        });
+      } else {
+        return res.status(200).json({
+          success: true,
+          message: "Order accepted. Shadowfax issue: " + (sfxData?.message || sfxData?.error || "unknown"),
+          order,
+          shadowfaxError: sfxData,
+          // Debug: what we actually sent
+          debug_sentToShadowfax: {
+            dropName,
+            dropPhone,
+            dropLat,
+            dropLon,
+            clientOrderId,
+          },
+          availableDeliveryBoys: [],
+          count: 0,
+          deliveryCharge: order.deliveryCharge || 0,
+        });
+      }
     }
 
-    // Default: just update status
+    // ─── Step 6: Any other status – plain update ──────────────────────────────
     order.orderStatus = orderStatus;
     await order.save();
 
     return res.status(200).json({
       success: true,
       message: `Order status updated to ${orderStatus}`,
-      order
+      order,
+      availableDeliveryBoys: [],
+      count: 0,
     });
 
   } catch (err) {
-    console.error("Error accepting order:", err);
-    res.status(500).json({
+    console.error("❌ vendorAcceptOrder error:", err);
+    return res.status(500).json({
       success: false,
-      message: "Error accepting order",
-      error: err.message
+      message: "Server error",
+      error: err.message,
     });
   }
 };
-
 exports.assignDeliveryAndTrack = async (req, res) => {
   try {
     const { deliveryUserId, eta } = req.body;

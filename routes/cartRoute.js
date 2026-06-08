@@ -23,7 +23,11 @@ router.put("/update-quantity/:userId", cartController.updateCartItemQuantity);
 router.delete('/deletecartproduct/:userId/:productId/:recommendedId', cartController.deleteProductFromCart);
 router.post("/apply-coupon/:userId", cartController.applyCouponToCart);
 
-
+// In your cart routes file (e.g., cartRoutes.js)
+router.get(
+  '/serviceability/:userId/:addressId/:cartId',
+  cartController.checkDeliveryServiceability
+);
 
 
 
